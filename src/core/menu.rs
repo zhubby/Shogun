@@ -1,5 +1,7 @@
 use bevy_egui::egui;
 
+use crate::build_info::menu_build_label;
+
 use super::actions::{enter_game, refresh_saves, start_history_game, start_json_game};
 use super::settings::settings_modal;
 use super::state::{refresh_history_factions, refresh_history_menu, GameUiState};
@@ -32,6 +34,11 @@ pub(super) fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) -> bool
                         ui.label(
                             egui::RichText::new("Shogun")
                                 .size(18.0)
+                                .color(war_text_muted()),
+                        );
+                        ui.label(
+                            egui::RichText::new(menu_build_label())
+                                .size(12.0)
                                 .color(war_text_muted()),
                         );
                     });
