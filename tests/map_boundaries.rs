@@ -18,6 +18,10 @@ fn boundary_asset_loads_with_non_empty_provinces_and_commanderies() {
     assert_eq!(province_count, 13);
     assert_eq!(commandery_count, 66);
     assert!(boundaries.iter().all(|boundary| boundary.points.len() >= 3));
+
+    let cells = catalog.territory_cells_for_year(190);
+    assert_eq!(cells.len(), commandery_count);
+    assert!(cells.iter().all(|cell| cell.points.len() >= 3));
 }
 
 #[test]

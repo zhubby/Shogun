@@ -34,6 +34,62 @@ impl MapBoundaryCatalog {
             .filter(move |boundary| boundary.includes_year(year))
     }
 
+    pub fn territory_cells_for_year(&self, year: i32) -> Vec<TerritoryCell> {
+        let commanderies: Vec<_> = self
+            .boundaries_for_year(year)
+            .filter(|boundary| boundary.level == MapBoundaryLevel::Commandery)
+            .collect();
+        let Some(outer_polygon) = self.outer_partition_polygon(year) else {
+            return Vec::new();
+        };
+        let seeds: Vec<_> = commanderies
+            .iter()
+            .map(|boundary| polygon_centroid(&boundary.points))
+            .collect();
+
+        commanderies
+            .iter()
+            .enumerate()
+            .filter_map(|(index, boundary)| {
+                let mut points = outer_polygon.clone();
+                for (other_index, other_seed) in seeds.iter().copied().enumerate() {
+                    if index == other_index {
+                        continue;
+                    }
+                    points = clip_polygon_to_nearest_seed(&points, seeds[index], other_seed);
+                    if points.len() < 3 {
+                        return None;
+                    }
+                }
+
+                Some(TerritoryCell {
+                    boundary_id: boundary.id.clone(),
+                    name: boundary.name.clone(),
+                    parent_id: boundary.parent_id.clone(),
+                    city_ids: boundary.city_ids.clone(),
+                    seed: seeds[index],
+                    points,
+                })
+            })
+            .collect()
+    }
+
+    fn outer_partition_polygon(&self, year: i32) -> Option<Vec<MapPosition>> {
+        let mut points: Vec<_> = self
+            .boundaries_for_year(year)
+            .filter(|boundary| boundary.level == MapBoundaryLevel::Province)
+            .flat_map(|boundary| boundary.points.iter().copied())
+            .collect();
+        if points.len() < 3 {
+            points = self
+                .boundaries_for_year(year)
+                .flat_map(|boundary| boundary.points.iter().copied())
+                .collect();
+        }
+        let hull = convex_hull(points);
+        (hull.len() >= 3).then(|| expand_polygon(&hull, 1.04, 28.0))
+    }
+
     pub fn validate(&self) -> Result<(), MapBoundaryError> {
         let mut ids = BTreeSet::new();
         let mut levels = BTreeMap::new();
@@ -138,6 +194,16 @@ impl MapBoundary {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerritoryCell {
+    pub boundary_id: String,
+    pub name: String,
+    pub parent_id: Option<String>,
+    pub city_ids: Vec<CityId>,
+    pub seed: MapPosition,
+    pub points: Vec<MapPosition>,
+}
+
 #[derive(Debug)]
 pub enum MapBoundaryError {
     Io(std::io::Error),
@@ -176,6 +242,139 @@ where
             BoundaryPointSeed::Tuple([x, y]) => MapPosition { x, y },
         })
         .collect())
+}
+
+fn polygon_centroid(points: &[MapPosition]) -> MapPosition {
+    let mut x = 0.0;
+    let mut y = 0.0;
+    for point in points {
+        x += point.x;
+        y += point.y;
+    }
+    let count = points.len().max(1) as f32;
+    MapPosition {
+        x: x / count,
+        y: y / count,
+    }
+}
+
+fn expand_polygon(points: &[MapPosition], scale: f32, padding: f32) -> Vec<MapPosition> {
+    let center = polygon_centroid(points);
+    points
+        .iter()
+        .map(|point| {
+            let dx = point.x - center.x;
+            let dy = point.y - center.y;
+            let length = (dx * dx + dy * dy).sqrt();
+            let padding_scale = if length <= f32::EPSILON {
+                0.0
+            } else {
+                padding / length
+            };
+            MapPosition {
+                x: center.x + dx * (scale + padding_scale),
+                y: center.y + dy * (scale + padding_scale),
+            }
+        })
+        .collect()
+}
+
+fn convex_hull(mut points: Vec<MapPosition>) -> Vec<MapPosition> {
+    points.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+    points.dedup_by(|a, b| (a.x - b.x).abs() < 0.001 && (a.y - b.y).abs() < 0.001);
+    if points.len() <= 3 {
+        return points;
+    }
+
+    let mut lower = Vec::new();
+    for point in &points {
+        while lower.len() >= 2
+            && cross(lower[lower.len() - 2], lower[lower.len() - 1], *point) <= 0.0
+        {
+            lower.pop();
+        }
+        lower.push(*point);
+    }
+
+    let mut upper = Vec::new();
+    for point in points.iter().rev() {
+        while upper.len() >= 2
+            && cross(upper[upper.len() - 2], upper[upper.len() - 1], *point) <= 0.0
+        {
+            upper.pop();
+        }
+        upper.push(*point);
+    }
+
+    lower.pop();
+    upper.pop();
+    lower.extend(upper);
+    lower
+}
+
+fn cross(a: MapPosition, b: MapPosition, c: MapPosition) -> f32 {
+    (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+}
+
+fn clip_polygon_to_nearest_seed(
+    polygon: &[MapPosition],
+    seed: MapPosition,
+    other_seed: MapPosition,
+) -> Vec<MapPosition> {
+    if polygon.is_empty() {
+        return Vec::new();
+    }
+
+    let mut clipped = Vec::new();
+    for index in 0..polygon.len() {
+        let current = polygon[index];
+        let next = polygon[(index + 1) % polygon.len()];
+        let current_inside = seed_side(current, seed, other_seed) >= -0.001;
+        let next_inside = seed_side(next, seed, other_seed) >= -0.001;
+
+        match (current_inside, next_inside) {
+            (true, true) => clipped.push(next),
+            (true, false) => {
+                clipped.push(seed_bisector_intersection(current, next, seed, other_seed))
+            }
+            (false, true) => {
+                clipped.push(seed_bisector_intersection(current, next, seed, other_seed));
+                clipped.push(next);
+            }
+            (false, false) => {}
+        }
+    }
+
+    clipped
+}
+
+fn seed_side(point: MapPosition, seed: MapPosition, other_seed: MapPosition) -> f32 {
+    let dx = other_seed.x - seed.x;
+    let dy = other_seed.y - seed.y;
+    let rhs = (other_seed.x * other_seed.x + other_seed.y * other_seed.y
+        - seed.x * seed.x
+        - seed.y * seed.y)
+        * 0.5;
+    rhs - (point.x * dx + point.y * dy)
+}
+
+fn seed_bisector_intersection(
+    start: MapPosition,
+    end: MapPosition,
+    seed: MapPosition,
+    other_seed: MapPosition,
+) -> MapPosition {
+    let start_side = seed_side(start, seed, other_seed);
+    let end_side = seed_side(end, seed, other_seed);
+    let denominator = start_side - end_side;
+    if denominator.abs() <= f32::EPSILON {
+        return start;
+    }
+    let t = (start_side / denominator).clamp(0.0, 1.0);
+    MapPosition {
+        x: start.x + (end.x - start.x) * t,
+        y: start.y + (end.y - start.y) * t,
+    }
 }
 
 #[cfg(test)]
@@ -264,5 +463,15 @@ mod tests {
 
         let error = MapBoundaryCatalog::from_json_str(&input).unwrap_err();
         assert!(error.to_string().contains("缺少父级州"));
+    }
+
+    #[test]
+    fn territory_cells_partition_active_commanderies() {
+        let catalog = MapBoundaryCatalog::from_json_str(VALID_JSON).unwrap();
+        let cells = catalog.territory_cells_for_year(190);
+
+        assert_eq!(cells.len(), 1);
+        assert_eq!(cells[0].boundary_id, "commandery_henan");
+        assert!(cells[0].points.len() >= 3);
     }
 }

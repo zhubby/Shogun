@@ -1881,67 +1881,74 @@ fn draw_map_boundaries(
     rect: egui::Rect,
     ui_state: &GameUiState,
 ) {
-    let boundaries: Vec<_> = catalog.boundaries_for_year(game.year).collect();
-
-    for level in [MapBoundaryLevel::Province, MapBoundaryLevel::Commandery] {
-        for boundary in boundaries
-            .iter()
-            .copied()
-            .filter(|boundary| boundary.level == level)
-        {
-            let fill = boundary_fill_color(boundary, game, ui_state);
-            let points = boundary_screen_points(boundary, bounds, rect, ui_state);
-            paint_boundary_polygon(painter, points, fill, egui::Stroke::NONE);
-        }
+    let cells = catalog.territory_cells_for_year(game.year);
+    if cells.is_empty() {
+        return;
     }
 
-    for boundary in boundaries
-        .iter()
-        .copied()
-        .filter(|boundary| boundary.level == MapBoundaryLevel::Province)
-    {
-        let points = boundary_screen_points(boundary, bounds, rect, ui_state);
-        paint_boundary_polygon(
-            painter,
-            points,
-            egui::Color32::TRANSPARENT,
-            egui::Stroke::new(
-                2.2,
-                egui::Color32::from_rgba_unmultiplied(190, 141, 78, 126),
-            ),
-        );
+    for cell in &cells {
+        let fill = territory_cell_fill_color(cell, game, ui_state);
+        let points = territory_cell_screen_points(cell, bounds, rect, ui_state);
+        paint_boundary_polygon(painter, points, fill, egui::Stroke::NONE);
     }
 
-    for boundary in boundaries
-        .iter()
-        .copied()
-        .filter(|boundary| boundary.level == MapBoundaryLevel::Commandery)
-    {
-        let selected = selected_city_in_boundary(boundary, game, ui_state);
-        let points = boundary_screen_points(boundary, bounds, rect, ui_state);
-        let stroke = if selected {
-            egui::Stroke::new(
-                2.0,
-                egui::Color32::from_rgba_unmultiplied(238, 181, 82, 205),
+    for cell in &cells {
+        let selected = selected_city_in_cell(cell, game, ui_state);
+        let points = territory_cell_screen_points(cell, bounds, rect, ui_state);
+        let (stroke, dash, gap) = if selected {
+            (
+                egui::Stroke::new(
+                    2.0,
+                    egui::Color32::from_rgba_unmultiplied(174, 221, 210, 230),
+                ),
+                8.0,
+                4.0,
             )
         } else {
-            egui::Stroke::new(
-                1.0,
-                egui::Color32::from_rgba_unmultiplied(118, 103, 70, 112),
+            (
+                egui::Stroke::new(
+                    0.9,
+                    egui::Color32::from_rgba_unmultiplied(112, 136, 124, 98),
+                ),
+                6.0,
+                8.0,
             )
         };
-        paint_boundary_polygon(painter, points, egui::Color32::TRANSPARENT, stroke);
+        draw_dashed_closed_polyline(painter, &points, stroke, dash, gap);
+    }
+
+    for (start, end) in province_border_segments(&cells) {
+        let start = map_to_screen(start, bounds, rect, ui_state);
+        let end = map_to_screen(end, bounds, rect, ui_state);
+        draw_dashed_segment(
+            painter,
+            start,
+            end,
+            egui::Stroke::new(3.5, egui::Color32::from_rgba_unmultiplied(6, 14, 15, 150)),
+            15.0,
+            7.0,
+        );
+        draw_dashed_segment(
+            painter,
+            start,
+            end,
+            egui::Stroke::new(
+                1.8,
+                egui::Color32::from_rgba_unmultiplied(116, 171, 170, 190),
+            ),
+            15.0,
+            7.0,
+        );
     }
 }
 
-fn boundary_screen_points(
-    boundary: &MapBoundary,
+fn territory_cell_screen_points(
+    cell: &TerritoryCell,
     bounds: MapBounds,
     rect: egui::Rect,
     ui_state: &GameUiState,
 ) -> Vec<egui::Pos2> {
-    boundary
-        .points
+    cell.points
         .iter()
         .map(|point| map_to_screen(*point, bounds, rect, ui_state))
         .collect()
@@ -1964,33 +1971,151 @@ fn paint_boundary_polygon(
     }));
 }
 
-fn boundary_fill_color(
-    boundary: &MapBoundary,
+fn draw_dashed_closed_polyline(
+    painter: &egui::Painter,
+    points: &[egui::Pos2],
+    stroke: egui::Stroke,
+    dash: f32,
+    gap: f32,
+) {
+    if points.len() < 2 {
+        return;
+    }
+
+    let cycle = dash + gap;
+    if cycle <= f32::EPSILON {
+        return;
+    }
+
+    for index in 0..points.len() {
+        draw_dashed_segment(
+            painter,
+            points[index],
+            points[(index + 1) % points.len()],
+            stroke,
+            dash,
+            gap,
+        );
+    }
+}
+
+fn draw_dashed_segment(
+    painter: &egui::Painter,
+    start: egui::Pos2,
+    end: egui::Pos2,
+    stroke: egui::Stroke,
+    dash: f32,
+    gap: f32,
+) {
+    let cycle = dash + gap;
+    if cycle <= f32::EPSILON {
+        return;
+    }
+
+    let delta = end - start;
+    let length = delta.length();
+    if length <= f32::EPSILON {
+        return;
+    }
+
+    let direction = delta / length;
+    let mut offset = 0.0;
+    while offset < length {
+        let dash_end = (offset + dash).min(length);
+        painter.line_segment(
+            [start + direction * offset, start + direction * dash_end],
+            stroke,
+        );
+        offset += cycle;
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct TerritoryEdgeKey {
+    start_x: i64,
+    start_y: i64,
+    end_x: i64,
+    end_y: i64,
+}
+
+struct TerritoryEdge {
+    start: MapPosition,
+    end: MapPosition,
+    parent_id: Option<String>,
+}
+
+fn province_border_segments(cells: &[TerritoryCell]) -> Vec<(MapPosition, MapPosition)> {
+    let mut edges: BTreeMap<TerritoryEdgeKey, Vec<TerritoryEdge>> = BTreeMap::new();
+    for cell in cells {
+        for index in 0..cell.points.len() {
+            let start = cell.points[index];
+            let end = cell.points[(index + 1) % cell.points.len()];
+            edges
+                .entry(territory_edge_key(start, end))
+                .or_default()
+                .push(TerritoryEdge {
+                    start,
+                    end,
+                    parent_id: cell.parent_id.clone(),
+                });
+        }
+    }
+
+    edges
+        .into_values()
+        .filter_map(|edge_group| {
+            let first = edge_group.first()?;
+            let crosses_parent = edge_group
+                .iter()
+                .any(|edge| edge.parent_id != first.parent_id);
+            (edge_group.len() == 1 || crosses_parent).then_some((first.start, first.end))
+        })
+        .collect()
+}
+
+fn territory_edge_key(start: MapPosition, end: MapPosition) -> TerritoryEdgeKey {
+    let start = quantized_map_position(start);
+    let end = quantized_map_position(end);
+    let (start, end) = if start <= end {
+        (start, end)
+    } else {
+        (end, start)
+    };
+    TerritoryEdgeKey {
+        start_x: start.0,
+        start_y: start.1,
+        end_x: end.0,
+        end_y: end.1,
+    }
+}
+
+fn quantized_map_position(position: MapPosition) -> (i64, i64) {
+    (
+        (position.x * 1_000.0).round() as i64,
+        (position.y * 1_000.0).round() as i64,
+    )
+}
+
+fn territory_cell_fill_color(
+    cell: &TerritoryCell,
     game: &GameState,
     ui_state: &GameUiState,
 ) -> egui::Color32 {
-    let selected = selected_city_in_boundary(boundary, game, ui_state);
-    let alpha = match boundary.level {
-        MapBoundaryLevel::Province => 10,
-        MapBoundaryLevel::Commandery if selected => 58,
-        MapBoundaryLevel::Commandery => 30,
-    };
+    let selected = selected_city_in_cell(cell, game, ui_state);
+    let alpha = if selected { 44 } else { 18 };
 
-    dominant_boundary_faction(boundary, game)
+    dominant_cell_faction(cell, game)
         .map(faction_color)
         .map(|color| egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha))
         .unwrap_or_else(|| egui::Color32::from_rgba_unmultiplied(92, 96, 67, alpha))
 }
 
-fn dominant_boundary_faction<'a>(
-    boundary: &MapBoundary,
-    game: &'a GameState,
-) -> Option<&'a Faction> {
+fn dominant_cell_faction<'a>(cell: &TerritoryCell, game: &'a GameState) -> Option<&'a Faction> {
     let mut counts: BTreeMap<&str, (usize, u32)> = BTreeMap::new();
     for city in game
         .cities
         .values()
-        .filter(|city| city_matches_boundary(boundary, city))
+        .filter(|city| city_matches_cell(cell, city))
     {
         let entry = counts.entry(city.faction_id.as_str()).or_insert((0, 0));
         entry.0 += 1;
@@ -2003,31 +2128,24 @@ fn dominant_boundary_faction<'a>(
     game.factions.get(faction_id)
 }
 
-fn selected_city_in_boundary(
-    boundary: &MapBoundary,
-    game: &GameState,
-    ui_state: &GameUiState,
-) -> bool {
+fn selected_city_in_cell(cell: &TerritoryCell, game: &GameState, ui_state: &GameUiState) -> bool {
     let Some(selected_city_id) = ui_state.selected_city_id.as_deref() else {
         return false;
     };
     game.cities
         .get(selected_city_id)
-        .is_some_and(|city| city_matches_boundary(boundary, city))
+        .is_some_and(|city| city_matches_cell(cell, city))
 }
 
-fn city_matches_boundary(boundary: &MapBoundary, city: &City) -> bool {
-    if boundary.city_ids.iter().any(|city_id| city_id == &city.id) {
+fn city_matches_cell(cell: &TerritoryCell, city: &City) -> bool {
+    if cell.city_ids.iter().any(|city_id| city_id == &city.id) {
         return true;
     }
 
     let Some(profile) = &city.profile else {
         return false;
     };
-    match boundary.level {
-        MapBoundaryLevel::Province => profile.province == boundary.name,
-        MapBoundaryLevel::Commandery => profile.commandery == boundary.name,
-    }
+    profile.commandery == cell.name
 }
 
 fn draw_city_marker(
