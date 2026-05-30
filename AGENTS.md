@@ -39,7 +39,7 @@ This repository is a single-crate Rust 2021 Bevy strategy game prototype.
 - `src/game/scenario.rs`: JSON scenario loading and fallback scenario construction.
 - `src/game/save.rs`: save-slot persistence and metadata.
 - `src/bin/build_history_db.rs`: helper binary that rebuilds a local `database.sqlite`.
-- `assets/data/`: SQLite schema, seed SQL, migration sources, and data notes.
+- `migrations/`: SQLx migrations that define historical database schema and data. `assets/data/`: map boundary assets and data notes.
 - `assets/scenarios/`: JSON fallback scenarios loaded by `ScenarioData`.
 - `assets/fonts/`: bundled fonts used by the UI.
 - `tests/`: integration tests for gameplay and historical database integrity.
@@ -53,13 +53,13 @@ All shell commands should be prefixed with `rtk`.
 - `rtk cargo check`: fast compile verification.
 - `rtk cargo test`: run all tests.
 - `rtk cargo test --test gameplay`: run gameplay rule, AI, and save tests.
-- `rtk cargo test --test history_db`: run SQLite seed/schema integrity tests.
+- `rtk cargo test --test history_db`: run SQLite migration/data integrity tests.
 - `rtk cargo run`: launch the Bevy app.
 - `rtk cargo run --bin build_history_db`: rebuild the local runtime `database.sqlite` from migrations.
 - `rtk cargo fmt`: format Rust code.
 - `rtk cargo clippy --all-targets -- -D warnings`: lint strictly before larger changes.
 
-When changing schema, seed SQL, or migrations, rebuild a test database and run `rtk cargo test --test history_db`. When changing command rules or save behavior, run `rtk cargo test --test gameplay` at minimum.
+When changing historical database migrations, rebuild a test database and run `rtk cargo test --test history_db`. When changing command rules or save behavior, run `rtk cargo test --test gameplay` at minimum.
 
 ## Rust Style and Idioms
 
@@ -95,8 +95,8 @@ When changing schema, seed SQL, or migrations, rebuild a test database and run `
 
 ## Historical Data and Assets
 
-- Treat `assets/data/schema.sql` and `assets/data/seeds/*.sql` as the source of truth for historical data.
-- Runtime `database.sqlite` lives in the game data directory and is not tracked. Update versioned migrations after schema or seed changes.
+- Treat root `migrations/*.sql` as the source of truth for historical data.
+- Runtime `database.sqlite` lives in the game data directory and is not tracked. Add versioned SQLx migrations under root `migrations/` after historical data changes.
 - Keep SQLite foreign keys valid and maintain indexes needed by `tests/history_db.rs`.
 - Use stable ASCII identifiers for `id` fields; display names may use Chinese text.
 - Prefer adding historically uncertain information with explicit confidence/notes fields rather than pretending precision.

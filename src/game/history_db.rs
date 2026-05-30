@@ -9,19 +9,16 @@ use super::officer::{
     OfficerRelationshipKind, OfficerStats, OfficerStatus,
 };
 use directories::ProjectDirs;
-use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use sqlx::migrate::Migration;
-use sqlx::sqlite::SqliteConnectOptions;
-use sqlx::ConnectOptions;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
+use sqlx::Row;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 
 const HISTORY_DB_FILE_NAME: &str = "database.sqlite";
-pub const HISTORY_DB_SCHEMA_VERSION: u32 = 3;
-const LEGACY_UNVERSIONED_DB_VERSION: u32 = 1;
-static HISTORY_DB_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("assets/data/migrations");
+static HISTORY_DB_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 const REQUIRED_HISTORY_TABLES: &[&str] = &[
     "cities",
     "factions",
@@ -35,18 +32,6 @@ const REQUIRED_HISTORY_TABLES: &[&str] = &[
     "officer_life_events",
     "scenario_diplomacy",
 ];
-const REQUIRED_LEGACY_HISTORY_TABLES: &[&str] = &[
-    "cities",
-    "factions",
-    "officers",
-    "roads",
-    "scenarios",
-    "scenario_faction_states",
-    "scenario_city_states",
-    "officer_life_events",
-    "scenario_diplomacy",
-];
-
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HistoricalScenario {
     pub id: ScenarioId,
@@ -91,15 +76,19 @@ pub trait HistoricalCatalog:
 }
 
 pub struct SqliteHistoricalCatalog {
-    conn: Connection,
+    pool: SqlitePool,
+    runtime: tokio::runtime::Runtime,
 }
 
 impl SqliteHistoricalCatalog {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, HistoryDbError> {
-        let conn = Connection::open(path).map_err(HistoryDbError::Sql)?;
-        conn.pragma_update(None, "foreign_keys", "ON")
-            .map_err(HistoryDbError::Sql)?;
-        Ok(Self { conn })
+        let runtime = history_db_runtime()?;
+        let pool = runtime.block_on(async {
+            let pool = open_history_pool(path.as_ref(), false).await?;
+            validate_history_database(&pool).await?;
+            Ok::<_, HistoryDbError>(pool)
+        })?;
+        Ok(Self { pool, runtime })
     }
 
     pub fn open_or_create(path: impl AsRef<Path>) -> Result<Self, HistoryDbError> {
@@ -107,12 +96,14 @@ impl SqliteHistoricalCatalog {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(HistoryDbError::Io)?;
         }
-        migrate_history_database(path)?;
-        let conn = Connection::open(path).map_err(HistoryDbError::Sql)?;
-        conn.pragma_update(None, "foreign_keys", "ON")
-            .map_err(HistoryDbError::Sql)?;
-        validate_history_database(&conn)?;
-        Ok(Self { conn })
+        let runtime = history_db_runtime()?;
+        let pool = runtime.block_on(async {
+            let pool = open_history_pool(path, true).await?;
+            run_history_migrations(&pool).await?;
+            validate_history_database(&pool).await?;
+            Ok::<_, HistoryDbError>(pool)
+        })?;
+        Ok(Self { pool, runtime })
     }
 
     pub fn open_default() -> Result<Self, HistoryDbError> {
@@ -142,41 +133,25 @@ impl SqliteHistoricalCatalog {
     }
 
     pub fn in_memory_from_seed() -> Result<Self, HistoryDbError> {
-        let mut conn = Connection::open_in_memory().map_err(HistoryDbError::Sql)?;
-        conn.pragma_update(None, "foreign_keys", "ON")
-            .map_err(HistoryDbError::Sql)?;
-        initialize_history_database(&mut conn)?;
-        Ok(Self { conn })
+        let runtime = history_db_runtime()?;
+        let pool = runtime.block_on(async {
+            let pool = open_memory_history_pool().await?;
+            run_history_migrations(&pool).await?;
+            validate_history_database(&pool).await?;
+            Ok::<_, HistoryDbError>(pool)
+        })?;
+        Ok(Self { pool, runtime })
+    }
+
+    fn block_on<F: Future>(&self, future: F) -> F::Output {
+        self.runtime.block_on(future)
     }
 
     pub fn officer_relationships(
         &self,
         officer_id: &str,
     ) -> Result<Vec<OfficerRelationship>, HistoryDbError> {
-        let mut stmt = self
-            .conn
-            .prepare(
-                "SELECT r.target_officer_id, target.name, r.relationship_kind,
-                        r.confidence, r.notes, r.source
-                 FROM officer_relationships r
-                 JOIN officers target ON target.id = r.target_officer_id
-                 WHERE r.source_officer_id = ?1
-                 ORDER BY r.relationship_kind, target.name",
-            )
-            .map_err(HistoryDbError::Sql)?;
-        let rows = stmt
-            .query_map(params![officer_id], |row| {
-                Ok(OfficerRelationship {
-                    target_id: row.get(0)?,
-                    target_name: row.get(1)?,
-                    kind: parse_relationship_kind(&row.get::<_, String>(2)?),
-                    confidence: parse_confidence(&row.get::<_, String>(3)?),
-                    notes: row.get(4)?,
-                    source: row.get(5)?,
-                })
-            })
-            .map_err(HistoryDbError::Sql)?;
-        collect_rows(rows)
+        self.block_on(async { officer_relationships(&self.pool, officer_id).await })
     }
 }
 
@@ -188,167 +163,74 @@ pub fn build_history_database(path: impl AsRef<Path>) -> Result<(), HistoryDbErr
     if path.exists() {
         fs::remove_file(path).map_err(HistoryDbError::Io)?;
     }
-    migrate_history_database(path)?;
-    Ok(())
-}
 
-fn migrate_history_database(path: &Path) -> Result<(), HistoryDbError> {
-    {
-        let conn = Connection::open(path).map_err(HistoryDbError::Sql)?;
-        conn.pragma_update(None, "foreign_keys", "ON")
-            .map_err(HistoryDbError::Sql)?;
-        prepare_history_database_for_sqlx_migrations(&conn)?;
-    }
-
-    sqlx::test_block_on(async {
-        let mut conn = SqliteConnectOptions::new()
-            .filename(path)
-            .create_if_missing(true)
-            .foreign_keys(false)
-            .connect()
-            .await?;
-        HISTORY_DB_MIGRATOR.run_direct(&mut conn).await
+    let runtime = history_db_runtime()?;
+    runtime.block_on(async {
+        let pool = open_history_pool(path, true).await?;
+        run_history_migrations(&pool).await?;
+        validate_history_database(&pool).await?;
+        pool.close().await;
+        Ok(())
     })
-    .map_err(HistoryDbError::Migrate)?;
-
-    let conn = Connection::open(path).map_err(HistoryDbError::Sql)?;
-    conn.pragma_update(None, "foreign_keys", "ON")
-        .map_err(HistoryDbError::Sql)?;
-    update_history_database_user_version(&conn)?;
-    validate_history_database(&conn)
 }
 
-fn prepare_history_database_for_sqlx_migrations(conn: &Connection) -> Result<(), HistoryDbError> {
-    let mut current_version = database_user_version(conn)?;
-    if current_version > HISTORY_DB_SCHEMA_VERSION {
-        return Err(HistoryDbError::Invalid(format!(
-            "历史资料库版本 {current_version} 高于当前程序支持版本 {HISTORY_DB_SCHEMA_VERSION}"
-        )));
-    }
-
-    if current_version == 0 && database_is_empty(conn)? {
-        return Ok(());
-    }
-
-    if current_version == 0 && !database_is_empty(conn)? {
-        adopt_legacy_v1_database(conn)?;
-        current_version = database_user_version(conn)?;
-    }
-
-    record_applied_user_version_migrations(conn, current_version)
+fn history_db_runtime() -> Result<tokio::runtime::Runtime, HistoryDbError> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(HistoryDbError::Runtime)
 }
 
-fn initialize_history_database(conn: &mut Connection) -> Result<(), HistoryDbError> {
-    conn.pragma_update(None, "foreign_keys", "OFF")
-        .map_err(HistoryDbError::Sql)?;
-    let transaction = conn.transaction().map_err(HistoryDbError::Sql)?;
-    for migration in HISTORY_DB_MIGRATOR.iter() {
-        transaction
-            .execute_batch(&migration.sql)
-            .map_err(HistoryDbError::Sql)?;
-    }
-    transaction.commit().map_err(HistoryDbError::Sql)?;
-    conn.pragma_update(None, "foreign_keys", "ON")
-        .map_err(HistoryDbError::Sql)?;
-    update_history_database_user_version(conn)?;
-    validate_history_database(conn)
+async fn open_history_pool(
+    path: &Path,
+    create_if_missing: bool,
+) -> Result<SqlitePool, HistoryDbError> {
+    let options = SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(create_if_missing)
+        .foreign_keys(true);
+    open_pool_with_options(options).await
 }
 
-fn record_applied_user_version_migrations(
-    conn: &Connection,
-    current_version: u32,
+async fn open_memory_history_pool() -> Result<SqlitePool, HistoryDbError> {
+    let options = SqliteConnectOptions::new()
+        .in_memory(true)
+        .shared_cache(true)
+        .foreign_keys(true);
+    open_pool_with_options(options).await
+}
+
+async fn open_pool_with_options(
+    options: SqliteConnectOptions,
+) -> Result<SqlitePool, HistoryDbError> {
+    SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+        .map_err(HistoryDbError::Sqlx)
+}
+
+async fn run_history_migrations(pool: &SqlitePool) -> Result<(), HistoryDbError> {
+    HISTORY_DB_MIGRATOR
+        .run(pool)
+        .await
+        .map_err(HistoryDbError::Migrate)
+}
+
+async fn validate_history_database(pool: &SqlitePool) -> Result<(), HistoryDbError> {
+    validate_required_tables(pool).await?;
+    validate_foreign_keys(pool).await
+}
+
+async fn validate_required_tables(pool: &SqlitePool) -> Result<(), HistoryDbError> {
+    validate_tables(pool, REQUIRED_HISTORY_TABLES).await
+}
+
+async fn validate_tables(
+    pool: &SqlitePool,
+    required_tables: &[&str],
 ) -> Result<(), HistoryDbError> {
-    if current_version == 0 {
-        return Ok(());
-    }
-
-    create_sqlx_migrations_table(conn)?;
-    for migration in HISTORY_DB_MIGRATOR
-        .iter()
-        .filter(|migration| migration.version <= i64::from(current_version))
-    {
-        record_applied_migration(conn, migration)?;
-    }
-    Ok(())
-}
-
-fn create_sqlx_migrations_table(conn: &Connection) -> Result<(), HistoryDbError> {
-    conn.execute_batch(
-        r#"
-        CREATE TABLE IF NOT EXISTS _sqlx_migrations (
-            version BIGINT PRIMARY KEY,
-            description TEXT NOT NULL,
-            installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            success BOOLEAN NOT NULL,
-            checksum BLOB NOT NULL,
-            execution_time BIGINT NOT NULL
-        );
-        "#,
-    )
-    .map_err(HistoryDbError::Sql)
-}
-
-fn record_applied_migration(
-    conn: &Connection,
-    migration: &Migration,
-) -> Result<(), HistoryDbError> {
-    conn.execute(
-        "INSERT OR IGNORE INTO _sqlx_migrations
-         (version, description, success, checksum, execution_time)
-         VALUES (?1, ?2, TRUE, ?3, 0)",
-        (
-            migration.version,
-            migration.description.as_ref(),
-            migration.checksum.as_ref(),
-        ),
-    )
-    .map_err(HistoryDbError::Sql)?;
-    Ok(())
-}
-
-fn update_history_database_user_version(conn: &Connection) -> Result<(), HistoryDbError> {
-    conn.pragma_update(None, "user_version", HISTORY_DB_SCHEMA_VERSION)
-        .map_err(HistoryDbError::Sql)
-}
-
-fn validate_history_database(conn: &Connection) -> Result<(), HistoryDbError> {
-    validate_required_tables(conn)?;
-    validate_foreign_keys(conn)
-}
-
-fn adopt_legacy_v1_database(conn: &Connection) -> Result<(), HistoryDbError> {
-    validate_tables(conn, REQUIRED_LEGACY_HISTORY_TABLES)?;
-    validate_foreign_keys(conn)?;
-    conn.pragma_update(None, "user_version", LEGACY_UNVERSIONED_DB_VERSION)
-        .map_err(HistoryDbError::Sql)
-}
-
-fn database_user_version(conn: &Connection) -> Result<u32, HistoryDbError> {
-    let version = conn
-        .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
-        .map_err(HistoryDbError::Sql)?;
-    Ok(version as u32)
-}
-
-fn database_is_empty(conn: &Connection) -> Result<bool, HistoryDbError> {
-    let table_count = conn
-        .query_row(
-            "SELECT count(*)
-             FROM sqlite_master
-             WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .map_err(HistoryDbError::Sql)?;
-    Ok(table_count == 0)
-}
-
-fn validate_required_tables(conn: &Connection) -> Result<(), HistoryDbError> {
-    validate_tables(conn, REQUIRED_HISTORY_TABLES)
-}
-
-fn validate_tables(conn: &Connection, required_tables: &[&str]) -> Result<(), HistoryDbError> {
-    let tables = history_table_names(conn)?;
+    let tables = history_table_names(pool).await?;
     let missing = required_tables
         .iter()
         .copied()
@@ -364,32 +246,29 @@ fn validate_tables(conn: &Connection, required_tables: &[&str]) -> Result<(), Hi
     }
 }
 
-fn history_table_names(conn: &Connection) -> Result<BTreeSet<String>, HistoryDbError> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT name
-             FROM sqlite_master
-             WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
-        )
-        .map_err(HistoryDbError::Sql)?;
-    let rows = stmt
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(HistoryDbError::Sql)?;
-    rows.collect::<Result<BTreeSet<_>, _>>()
-        .map_err(HistoryDbError::Sql)
+async fn history_table_names(pool: &SqlitePool) -> Result<BTreeSet<String>, HistoryDbError> {
+    let rows = sqlx::query(
+        "SELECT name
+         FROM sqlite_master
+         WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(HistoryDbError::Sqlx)?;
+    Ok(rows.into_iter().map(|row| row.get("name")).collect())
 }
 
-fn validate_foreign_keys(conn: &Connection) -> Result<(), HistoryDbError> {
-    let mut stmt = conn
-        .prepare("PRAGMA foreign_key_check")
-        .map_err(HistoryDbError::Sql)?;
-    let mut rows = stmt.query([]).map_err(HistoryDbError::Sql)?;
-    if rows.next().map_err(HistoryDbError::Sql)?.is_some() {
+async fn validate_foreign_keys(pool: &SqlitePool) -> Result<(), HistoryDbError> {
+    let rows = sqlx::query("PRAGMA foreign_key_check")
+        .fetch_all(pool)
+        .await
+        .map_err(HistoryDbError::Sqlx)?;
+    if rows.is_empty() {
+        Ok(())
+    } else {
         Err(HistoryDbError::Invalid(
             "历史资料库外键校验失败".to_string(),
         ))
-    } else {
-        Ok(())
     }
 }
 
@@ -397,35 +276,36 @@ impl CityCatalog for SqliteHistoricalCatalog {
     type Error = HistoryDbError;
 
     fn city_profiles(&self) -> Result<Vec<CityProfile>, Self::Error> {
-        let mut stmt = self
-            .conn
-            .prepare(
+        self.block_on(async {
+            let rows = sqlx::query(
                 "SELECT id, name, province, commandery, x, y, scale, strategic_rank,
                         agriculture_base, commerce_base, defense_base, population_min,
                         population_max, confidence, notes
                  FROM cities
                  ORDER BY province, commandery, name",
             )
-            .map_err(HistoryDbError::Sql)?;
-        let rows = stmt
-            .query_map([], city_profile_from_row)
-            .map_err(HistoryDbError::Sql)?;
-        collect_rows(rows)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
+            rows.into_iter().map(city_profile_from_row).collect()
+        })
     }
 
     fn city_profile(&self, city_id: &str) -> Result<Option<CityProfile>, Self::Error> {
-        self.conn
-            .query_row(
+        self.block_on(async {
+            let row = sqlx::query(
                 "SELECT id, name, province, commandery, x, y, scale, strategic_rank,
                         agriculture_base, commerce_base, defense_base, population_min,
                         population_max, confidence, notes
                  FROM cities
                  WHERE id = ?1",
-                params![city_id],
-                city_profile_from_row,
             )
-            .optional()
-            .map_err(HistoryDbError::Sql)
+            .bind(city_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
+            row.map(city_profile_from_row).transpose()
+        })
     }
 }
 
@@ -433,90 +313,96 @@ impl OfficerCatalog for SqliteHistoricalCatalog {
     type Error = HistoryDbError;
 
     fn officer_profiles(&self) -> Result<Vec<OfficerProfile>, Self::Error> {
-        let mut stmt = self
-            .conn
-            .prepare(
+        self.block_on(async {
+            let rows = sqlx::query(
                 "SELECT id, name, courtesy_name, native_place, birth_year, death_year,
                         gender, leadership, strength, intelligence, politics, charm, tags,
                         confidence, biography, notes
                  FROM officers
                  ORDER BY id",
             )
-            .map_err(HistoryDbError::Sql)?;
-        let rows = stmt
-            .query_map([], officer_profile_from_row)
-            .map_err(HistoryDbError::Sql)?;
-        let mut profiles = collect_rows(rows)?;
-        for profile in &mut profiles {
-            profile.relationships = self.officer_relationships(&profile.id)?;
-        }
-        Ok(profiles)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
+            let mut profiles = rows
+                .into_iter()
+                .map(officer_profile_from_row)
+                .collect::<Result<Vec<_>, _>>()?;
+            for profile in &mut profiles {
+                profile.relationships = officer_relationships(&self.pool, &profile.id).await?;
+            }
+            Ok(profiles)
+        })
     }
 
     fn officer_profile(&self, officer_id: &str) -> Result<Option<OfficerProfile>, Self::Error> {
-        let mut profile = self
-            .conn
-            .query_row(
+        self.block_on(async {
+            let row = sqlx::query(
                 "SELECT id, name, courtesy_name, native_place, birth_year, death_year,
                         gender, leadership, strength, intelligence, politics, charm, tags,
                         confidence, biography, notes
                  FROM officers
                  WHERE id = ?1",
-                params![officer_id],
-                officer_profile_from_row,
             )
-            .optional()
-            .map_err(HistoryDbError::Sql)?;
-        if let Some(profile) = &mut profile {
-            profile.relationships = self.officer_relationships(&profile.id)?;
-        }
-        Ok(profile)
+            .bind(officer_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
+            let Some(row) = row else {
+                return Ok(None);
+            };
+            let mut profile = officer_profile_from_row(row)?;
+            profile.relationships = officer_relationships(&self.pool, &profile.id).await?;
+            Ok(Some(profile))
+        })
     }
 }
 
 impl HistoricalCatalog for SqliteHistoricalCatalog {
     fn scenarios(&self) -> Result<Vec<HistoricalScenario>, HistoryDbError> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT id, name, year, month FROM scenarios ORDER BY year, month")
-            .map_err(HistoryDbError::Sql)?;
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(HistoricalScenario {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    year: row.get(2)?,
-                    month: row.get(3)?,
+        self.block_on(async {
+            let rows =
+                sqlx::query("SELECT id, name, year, month FROM scenarios ORDER BY year, month")
+                    .fetch_all(&self.pool)
+                    .await
+                    .map_err(HistoryDbError::Sqlx)?;
+            Ok(rows
+                .into_iter()
+                .map(|row| HistoricalScenario {
+                    id: row.get("id"),
+                    name: row.get("name"),
+                    year: row.get("year"),
+                    month: row.get::<i64, _>("month") as u8,
                 })
-            })
-            .map_err(HistoryDbError::Sql)?;
-        collect_rows(rows)
+                .collect())
+        })
     }
 
     fn selectable_factions(&self, scenario_id: &str) -> Result<Vec<Faction>, HistoryDbError> {
-        let mut stmt = self
-            .conn
-            .prepare(
+        self.block_on(async {
+            let rows = sqlx::query(
                 "SELECT f.id, f.name, s.ruler_id, f.color_r, f.color_g, f.color_b, s.selectable
                  FROM scenario_faction_states s
                  JOIN factions f ON f.id = s.faction_id
                  WHERE s.scenario_id = ?1 AND s.exists_in_scenario = 1
                  ORDER BY f.id",
             )
-            .map_err(HistoryDbError::Sql)?;
-        let rows = stmt
-            .query_map(params![scenario_id], |row| {
-                Ok(Faction {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    ruler_id: row.get(2)?,
-                    color: [row.get(3)?, row.get(4)?, row.get(5)?],
-                    selectable: row.get::<_, i64>(6)? != 0,
+            .bind(scenario_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
+            Ok(rows
+                .into_iter()
+                .map(|row| Faction {
+                    id: row.get("id"),
+                    name: row.get("name"),
+                    ruler_id: row.get("ruler_id"),
+                    color: [row.get("color_r"), row.get("color_g"), row.get("color_b")],
+                    selectable: row.get::<bool, _>("selectable"),
                     controlled_by: Controller::RuleAi,
                 })
-            })
-            .map_err(HistoryDbError::Sql)?;
-        collect_rows(rows)
+                .collect())
+        })
     }
 
     fn build_game(
@@ -549,9 +435,8 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
         }
 
         let mut cities = BTreeMap::new();
-        let mut stmt = self
-            .conn
-            .prepare(
+        let city_rows = self.block_on(async {
+            sqlx::query(
                 "SELECT c.id, c.name, c.province, c.commandery, c.x, c.y, c.scale,
                         c.strategic_rank, c.agriculture_base, c.commerce_base,
                         c.defense_base, c.population_min, c.population_max, c.confidence,
@@ -562,90 +447,91 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
                  JOIN cities c ON c.id = s.city_id
                  WHERE s.scenario_id = ?1",
             )
-            .map_err(HistoryDbError::Sql)?;
-        let rows = stmt
-            .query_map(params![scenario_id], |row| {
-                let profile = CityProfile {
-                    id: row.get(0)?,
-                    name: row.get(1)?,
-                    province: row.get(2)?,
-                    commandery: row.get(3)?,
-                    position: MapPosition {
-                        x: row.get(4)?,
-                        y: row.get(5)?,
-                    },
-                    scale: parse_city_scale(&row.get::<_, String>(6)?),
-                    strategic_rank: row.get::<_, i64>(7)? as u8,
-                    agriculture_base: row.get::<_, i64>(8)? as u16,
-                    commerce_base: row.get::<_, i64>(9)? as u16,
-                    defense_base: row.get::<_, i64>(10)? as u16,
-                    population_min: row.get::<_, i64>(11)? as u32,
-                    population_max: row.get::<_, i64>(12)? as u32,
-                    confidence: parse_confidence(&row.get::<_, String>(13)?),
-                    notes: row.get(14)?,
-                };
-                Ok(City {
-                    id: profile.id.clone(),
-                    name: profile.name.clone(),
-                    faction_id: row.get(15)?,
-                    position: profile.position,
-                    population: row.get::<_, i64>(16)? as u32,
-                    gold: row.get::<_, i64>(17)? as i32,
-                    food: row.get::<_, i64>(18)? as i32,
-                    troops: row.get::<_, i64>(19)? as u32,
-                    training: row.get::<_, i64>(20)? as u8,
-                    agriculture: row.get::<_, i64>(21)? as u16,
-                    commerce: row.get::<_, i64>(22)? as u16,
-                    defense: row.get::<_, i64>(23)? as u16,
-                    order: row.get::<_, i64>(24)? as u8,
-                    governor_id: row.get(25)?,
-                    profile: Some(profile),
-                })
-            })
-            .map_err(HistoryDbError::Sql)?;
-        for city in collect_rows(rows)? {
+            .bind(scenario_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)
+        })?;
+        for row in city_rows {
+            let profile = CityProfile {
+                id: row.get("id"),
+                name: row.get("name"),
+                province: row.get("province"),
+                commandery: row.get("commandery"),
+                position: MapPosition {
+                    x: row.get("x"),
+                    y: row.get("y"),
+                },
+                scale: parse_city_scale(row.get::<String, _>("scale").as_str()),
+                strategic_rank: row.get::<i64, _>("strategic_rank") as u8,
+                agriculture_base: row.get::<i64, _>("agriculture_base") as u16,
+                commerce_base: row.get::<i64, _>("commerce_base") as u16,
+                defense_base: row.get::<i64, _>("defense_base") as u16,
+                population_min: row.get::<i64, _>("population_min") as u32,
+                population_max: row.get::<i64, _>("population_max") as u32,
+                confidence: parse_confidence(row.get::<String, _>("confidence").as_str()),
+                notes: row.get("notes"),
+            };
+            let city = City {
+                id: profile.id.clone(),
+                name: profile.name.clone(),
+                faction_id: row.get("faction_id"),
+                position: profile.position,
+                population: row.get::<i64, _>("population") as u32,
+                gold: row.get::<i64, _>("gold") as i32,
+                food: row.get::<i64, _>("food") as i32,
+                troops: row.get::<i64, _>("troops") as u32,
+                training: row.get::<i64, _>("training") as u8,
+                agriculture: row.get::<i64, _>("agriculture") as u16,
+                commerce: row.get::<i64, _>("commerce") as u16,
+                defense: row.get::<i64, _>("defense") as u16,
+                order: row.get::<i64, _>("city_order") as u8,
+                governor_id: row.get("governor_id"),
+                profile: Some(profile),
+            };
             cities.insert(city.id.clone(), city);
         }
 
         let mut roads = Vec::new();
-        let mut road_stmt = self
-            .conn
-            .prepare("SELECT from_city_id, to_city_id FROM roads ORDER BY from_city_id, to_city_id")
-            .map_err(HistoryDbError::Sql)?;
-        let road_rows = road_stmt
-            .query_map([], |row| {
-                Ok(Road {
-                    from: row.get(0)?,
-                    to: row.get(1)?,
-                })
-            })
-            .map_err(HistoryDbError::Sql)?;
-        for road in collect_rows(road_rows)? {
+        let road_rows = self.block_on(async {
+            sqlx::query(
+                "SELECT from_city_id, to_city_id FROM roads ORDER BY from_city_id, to_city_id",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)
+        })?;
+        for row in road_rows {
+            let road = Road {
+                from: row.get("from_city_id"),
+                to: row.get("to_city_id"),
+            };
             if cities.contains_key(&road.from) && cities.contains_key(&road.to) {
                 roads.push(road);
             }
         }
 
         let mut diplomacy = BTreeMap::new();
-        let mut dip_stmt = self
-            .conn
-            .prepare(
+        let dip_rows = self.block_on(async {
+            sqlx::query(
                 "SELECT faction_a, faction_b, score, truce_until_turn
                  FROM scenario_diplomacy
                  WHERE scenario_id = ?1",
             )
-            .map_err(HistoryDbError::Sql)?;
-        let dip_rows = dip_stmt
-            .query_map(params![scenario_id], |row| {
-                Ok(DiplomaticRelation {
-                    faction_a: row.get(0)?,
-                    faction_b: row.get(1)?,
-                    score: row.get::<_, i64>(2)? as i16,
-                    truce_until_turn: row.get::<_, Option<i64>>(3)?.map(|value| value as u32),
-                })
-            })
-            .map_err(HistoryDbError::Sql)?;
-        for relation in collect_rows(dip_rows)? {
+            .bind(scenario_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)
+        })?;
+        for row in dip_rows {
+            let relation = DiplomaticRelation {
+                faction_a: row.get("faction_a"),
+                faction_b: row.get("faction_b"),
+                score: row.get::<i64, _>("score") as i16,
+                truce_until_turn: row
+                    .get::<Option<i64>, _>("truce_until_turn")
+                    .map(|value| value as u32),
+            };
             diplomacy.insert(
                 diplomacy_key(&relation.faction_a, &relation.faction_b),
                 relation,
@@ -685,20 +571,21 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
     }
 
     fn life_events_until(&self, year: i32, month: u8) -> Result<Vec<LifeEvent>, HistoryDbError> {
-        let mut stmt = self
-            .conn
-            .prepare(
+        self.block_on(async {
+            let rows = sqlx::query(
                 "SELECT id, officer_id, event_year, event_month, event_kind,
                         faction_id, city_id, loyalty, notes
                  FROM officer_life_events
                  WHERE event_year < ?1 OR (event_year = ?1 AND event_month <= ?2)
                  ORDER BY event_year, event_month, id",
             )
-            .map_err(HistoryDbError::Sql)?;
-        let rows = stmt
-            .query_map(params![year, month], life_event_from_row)
-            .map_err(HistoryDbError::Sql)?;
-        collect_rows(rows)
+            .bind(year)
+            .bind(month)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
+            rows.into_iter().map(life_event_from_row).collect()
+        })
     }
 }
 
@@ -777,76 +664,101 @@ fn clean_invalid_governors(
     }
 }
 
-fn city_profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CityProfile> {
+async fn officer_relationships(
+    pool: &SqlitePool,
+    officer_id: &str,
+) -> Result<Vec<OfficerRelationship>, HistoryDbError> {
+    let rows = sqlx::query(
+        "SELECT r.target_officer_id, target.name AS target_name, r.relationship_kind,
+                r.confidence, r.notes, r.source
+         FROM officer_relationships r
+         JOIN officers target ON target.id = r.target_officer_id
+         WHERE r.source_officer_id = ?1
+         ORDER BY r.relationship_kind, target.name",
+    )
+    .bind(officer_id)
+    .fetch_all(pool)
+    .await
+    .map_err(HistoryDbError::Sqlx)?;
+    rows.into_iter().map(relationship_from_row).collect()
+}
+
+fn city_profile_from_row(row: SqliteRow) -> Result<CityProfile, HistoryDbError> {
     Ok(CityProfile {
-        id: row.get(0)?,
-        name: row.get(1)?,
-        province: row.get(2)?,
-        commandery: row.get(3)?,
+        id: row.get("id"),
+        name: row.get("name"),
+        province: row.get("province"),
+        commandery: row.get("commandery"),
         position: MapPosition {
-            x: row.get(4)?,
-            y: row.get(5)?,
+            x: row.get("x"),
+            y: row.get("y"),
         },
-        scale: parse_city_scale(&row.get::<_, String>(6)?),
-        strategic_rank: row.get::<_, i64>(7)? as u8,
-        agriculture_base: row.get::<_, i64>(8)? as u16,
-        commerce_base: row.get::<_, i64>(9)? as u16,
-        defense_base: row.get::<_, i64>(10)? as u16,
-        population_min: row.get::<_, i64>(11)? as u32,
-        population_max: row.get::<_, i64>(12)? as u32,
-        confidence: parse_confidence(&row.get::<_, String>(13)?),
-        notes: row.get(14)?,
+        scale: parse_city_scale(row.get::<String, _>("scale").as_str()),
+        strategic_rank: row.get::<i64, _>("strategic_rank") as u8,
+        agriculture_base: row.get::<i64, _>("agriculture_base") as u16,
+        commerce_base: row.get::<i64, _>("commerce_base") as u16,
+        defense_base: row.get::<i64, _>("defense_base") as u16,
+        population_min: row.get::<i64, _>("population_min") as u32,
+        population_max: row.get::<i64, _>("population_max") as u32,
+        confidence: parse_confidence(row.get::<String, _>("confidence").as_str()),
+        notes: row.get("notes"),
     })
 }
 
-fn officer_profile_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OfficerProfile> {
+fn officer_profile_from_row(row: SqliteRow) -> Result<OfficerProfile, HistoryDbError> {
     Ok(OfficerProfile {
-        id: row.get(0)?,
-        name: row.get(1)?,
-        courtesy_name: row.get(2)?,
-        native_place: row.get(3)?,
-        birth_year: row.get(4)?,
-        death_year: row.get(5)?,
-        gender: parse_gender(&row.get::<_, String>(6)?),
+        id: row.get("id"),
+        name: row.get("name"),
+        courtesy_name: row.get("courtesy_name"),
+        native_place: row.get("native_place"),
+        birth_year: row.get("birth_year"),
+        death_year: row.get("death_year"),
+        gender: parse_gender(row.get::<String, _>("gender").as_str()),
         stats: OfficerStats {
-            leadership: row.get::<_, i64>(7)? as u8,
-            strength: row.get::<_, i64>(8)? as u8,
-            intelligence: row.get::<_, i64>(9)? as u8,
-            politics: row.get::<_, i64>(10)? as u8,
-            charm: row.get::<_, i64>(11)? as u8,
+            leadership: row.get::<i64, _>("leadership") as u8,
+            strength: row.get::<i64, _>("strength") as u8,
+            intelligence: row.get::<i64, _>("intelligence") as u8,
+            politics: row.get::<i64, _>("politics") as u8,
+            charm: row.get::<i64, _>("charm") as u8,
         },
         tags: row
-            .get::<_, String>(12)?
+            .get::<String, _>("tags")
             .split(',')
             .filter(|tag| !tag.is_empty())
             .map(str::to_string)
             .collect(),
-        confidence: parse_confidence(&row.get::<_, String>(13)?),
-        biography: row.get(14)?,
+        confidence: parse_confidence(row.get::<String, _>("confidence").as_str()),
+        biography: row.get("biography"),
         relationships: Vec::new(),
-        notes: row.get(15)?,
+        notes: row.get("notes"),
     })
 }
 
-fn life_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LifeEvent> {
+fn relationship_from_row(row: SqliteRow) -> Result<OfficerRelationship, HistoryDbError> {
+    Ok(OfficerRelationship {
+        target_id: row.get("target_officer_id"),
+        target_name: row.get("target_name"),
+        kind: parse_relationship_kind(row.get::<String, _>("relationship_kind").as_str()),
+        confidence: parse_confidence(row.get::<String, _>("confidence").as_str()),
+        notes: row.get("notes"),
+        source: row.get("source"),
+    })
+}
+
+fn life_event_from_row(row: SqliteRow) -> Result<LifeEvent, HistoryDbError> {
     Ok(LifeEvent {
-        id: row.get(0)?,
-        officer_id: row.get(1)?,
-        year: row.get(2)?,
-        month: row.get::<_, i64>(3)? as u8,
-        kind: parse_life_event_kind(&row.get::<_, String>(4)?),
-        faction_id: row.get(5)?,
-        city_id: row.get(6)?,
-        loyalty: row.get::<_, Option<i64>>(7)?.map(|value| value as u8),
-        notes: row.get(8)?,
+        id: row.get("id"),
+        officer_id: row.get("officer_id"),
+        year: row.get("event_year"),
+        month: row.get::<i64, _>("event_month") as u8,
+        kind: parse_life_event_kind(row.get::<String, _>("event_kind").as_str()),
+        faction_id: row.get("faction_id"),
+        city_id: row.get("city_id"),
+        loyalty: row
+            .get::<Option<i64>, _>("loyalty")
+            .map(|value| value as u8),
+        notes: row.get("notes"),
     })
-}
-
-fn collect_rows<T>(
-    rows: rusqlite::MappedRows<'_, impl FnMut(&rusqlite::Row<'_>) -> rusqlite::Result<T>>,
-) -> Result<Vec<T>, HistoryDbError> {
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(HistoryDbError::Sql)
 }
 
 fn parse_city_scale(value: &str) -> CityScale {
@@ -900,7 +812,8 @@ fn parse_life_event_kind(value: &str) -> LifeEventKind {
 #[derive(Debug)]
 pub enum HistoryDbError {
     Io(std::io::Error),
-    Sql(rusqlite::Error),
+    Runtime(std::io::Error),
+    Sqlx(sqlx::Error),
     Migrate(sqlx::migrate::MigrateError),
     Invalid(String),
 }
@@ -909,7 +822,8 @@ impl std::fmt::Display for HistoryDbError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HistoryDbError::Io(error) => write!(f, "历史资料库 IO 失败: {error}"),
-            HistoryDbError::Sql(error) => write!(f, "历史资料库 SQL 失败: {error}"),
+            HistoryDbError::Runtime(error) => write!(f, "历史资料库运行时初始化失败: {error}"),
+            HistoryDbError::Sqlx(error) => write!(f, "历史资料库 SQLx 失败: {error}"),
             HistoryDbError::Migrate(error) => write!(f, "历史资料库迁移失败: {error}"),
             HistoryDbError::Invalid(message) => write!(f, "历史资料库数据无效: {message}"),
         }

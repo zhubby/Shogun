@@ -53,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("usage: import_three_kingdoms <characters-json-dir> <output-sql-path>")?;
 
     let officers = load_officers(&source_dir)?;
-    let sql = render_seed(&officers);
+    let sql = render_migration_fragment(&officers);
     fs::write(&output_path, sql)?;
     println!(
         "generated {} from {} imported officers",
@@ -167,13 +167,13 @@ fn load_officers(source_dir: &Path) -> Result<Vec<ImportedOfficer>, Box<dyn std:
     Ok(officers)
 }
 
-fn render_seed(officers: &[ImportedOfficer]) -> String {
+fn render_migration_fragment(officers: &[ImportedOfficer]) -> String {
     let mut output = String::new();
-    output.push_str("-- Source-backed import seed generated from the MIT-licensed\n");
+    output.push_str("-- Source-backed import migration fragment generated from the MIT-licensed\n");
     output.push_str("-- fthux/Characters_of_the_Three_Kingdoms character JSON corpus.\n");
     output.push_str("--\n");
     output.push_str("-- Rebuild with:\n");
-    output.push_str("--   rtk cargo run --bin import_three_kingdoms -- <source-characters-dir> assets/data/seeds/002_three_kingdoms_import.sql\n\n");
+    output.push_str("--   rtk cargo run --bin import_three_kingdoms -- <source-characters-dir> /tmp/ctk_import_fragment.sql\n\n");
 
     let core_ids = core_officer_ids();
     for officer in officers {
