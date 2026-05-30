@@ -295,6 +295,26 @@ fn player_can_play_several_months_with_ai() {
 }
 
 #[test]
+fn turn_report_includes_monthly_and_state_summaries() {
+    let mut game = sample_game();
+
+    let report = resolve_command_batch(&mut game, Vec::new());
+
+    assert!(report
+        .entries
+        .iter()
+        .any(|entry| entry.message.contains("本月处理军令 0 条")));
+    assert!(report
+        .entries
+        .iter()
+        .any(|entry| entry.message.contains("月度税粮结算")));
+    assert!(report
+        .entries
+        .iter()
+        .any(|entry| entry.message.contains("玩家控制")));
+}
+
+#[test]
 fn owning_all_cities_triggers_victory() {
     let mut game = sample_game();
     for city in game.cities.values_mut() {

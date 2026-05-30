@@ -46,13 +46,25 @@ fn resolve_command_batch_inner(
 ) -> TurnReport {
     let mut report = TurnReport::new(state);
     let mut reservations = CommandReservations::default();
+    let command_count = commands.len();
+    let mut executed_commands = 0;
+    let mut rejected_commands = 0;
 
     for command in commands {
         match validate_command(state, &command, &mut reservations) {
-            Ok(()) => apply_command(state, &command, &mut report),
-            Err(error) => report.warning(format!("命令被拒绝: {} ({error})", command.summary())),
+            Ok(()) => {
+                executed_commands += 1;
+                apply_command(state, &command, &mut report);
+            }
+            Err(error) => {
+                rejected_commands += 1;
+                report.warning(format!("命令被拒绝: {} ({error})", command.summary()));
+            }
         }
     }
+    report.info(format!(
+        "本月处理军令 {command_count} 条，执行 {executed_commands} 条，拒绝 {rejected_commands} 条"
+    ));
 
     apply_monthly_income(state, &mut report);
     state.pending_commands.clear();
@@ -64,6 +76,7 @@ fn resolve_command_batch_inner(
             state.refresh_status();
         }
     }
+    append_turn_summary(state, &mut report);
     state.reports.push(report.clone());
     report
 }
@@ -534,6 +547,13 @@ fn retreat_defenders(state: &mut GameState, captured_city_id: &str, old_faction_
 }
 
 fn apply_monthly_income(state: &mut GameState, report: &mut TurnReport) {
+    let player_faction_id = state.player_faction_id.clone();
+    let mut total_gold_income = 0;
+    let mut total_food_income = 0;
+    let mut player_gold_income = 0;
+    let mut player_food_income = 0;
+    let mut player_city_count = 0;
+
     for city in state.cities.values_mut() {
         let gold_income = i32::from(city.commerce) / 4 + (city.population / 20_000) as i32;
         let food_income = i32::from(city.agriculture) / 3 + (city.population / 18_000) as i32;
@@ -541,8 +561,59 @@ fn apply_monthly_income(state: &mut GameState, report: &mut TurnReport) {
         city.food += food_income;
         city.order = city.order.saturating_add(1).min(100);
         city.clamp_fields();
+
+        total_gold_income += gold_income;
+        total_food_income += food_income;
+        if city.faction_id == player_faction_id {
+            player_city_count += 1;
+            player_gold_income += gold_income;
+            player_food_income += food_income;
+        }
     }
-    report.info("各城完成月度税粮结算");
+    report.info(format!(
+        "各城完成月度税粮结算：全图金 +{total_gold_income}、粮 +{total_food_income}；玩家 {player_city_count} 城收入金 +{player_gold_income}、粮 +{player_food_income}"
+    ));
+}
+
+fn append_turn_summary(state: &GameState, report: &mut TurnReport) {
+    let mut player_city_count = 0;
+    let mut player_troops = 0;
+    let mut player_gold = 0;
+    let mut player_food = 0;
+
+    for city in state
+        .cities
+        .values()
+        .filter(|city| city.faction_id == state.player_faction_id)
+    {
+        player_city_count += 1;
+        player_troops += city.troops;
+        player_gold += city.gold;
+        player_food += city.food;
+    }
+
+    let alive_factions = state
+        .factions
+        .keys()
+        .filter(|faction_id| state.faction_alive(faction_id))
+        .count();
+
+    report.info(format!(
+        "进入 {}年{}月，存续势力 {} 个；玩家控制 {} 城，兵力 {}，金 {}，粮 {}",
+        state.year,
+        state.month,
+        alive_factions,
+        player_city_count,
+        player_troops,
+        player_gold,
+        player_food
+    ));
+
+    match &state.status {
+        GameStatus::Running => {}
+        GameStatus::Victory { reason } => report.info(format!("胜利：{reason}")),
+        GameStatus::Defeat { reason } => report.warning(format!("失败：{reason}")),
+    }
 }
 
 fn apply_due_life_events(
