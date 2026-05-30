@@ -1,3 +1,6 @@
 /target/
 .shogun_saves/
+.shogun_data/
+assets/data/*.sqlite
+assets/data/*.sqlite-*
 materials/
