@@ -1,7 +1,12 @@
-use shogun::game::build_history_database;
+use shogun::game::{build_history_database, SqliteHistoricalCatalog};
+use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    build_history_database("assets/data/history.sqlite")?;
-    println!("generated assets/data/history.sqlite");
+    let path = std::env::args_os()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(SqliteHistoricalCatalog::default_path);
+    build_history_database(&path)?;
+    println!("generated {}", path.display());
     Ok(())
 }

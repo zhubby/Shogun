@@ -8,7 +8,7 @@ pub(super) fn start_history_game(ui_state: &mut GameUiState) {
         ui_state.message = "没有可用的 SQLite 历史剧本".to_string();
         return;
     }
-    match SqliteHistoricalCatalog::open_asset().and_then(|catalog| {
+    match SqliteHistoricalCatalog::open_default().and_then(|catalog| {
         catalog.build_game(
             &ui_state.selected_scenario_id,
             &ui_state.selected_faction_id,
@@ -77,7 +77,7 @@ pub(super) fn open_city(ui_state: &mut GameUiState, city_id: CityId) {
 
 pub(super) fn finish_turn(game: &mut GameState, provider: &RuleBasedAiProvider) -> TurnReport {
     if is_history_scenario(&game.scenario_id) {
-        if let Ok(catalog) = SqliteHistoricalCatalog::open_asset() {
+        if let Ok(catalog) = SqliteHistoricalCatalog::open_default() {
             return finish_turn_with_ai_with_history(game, provider, &catalog);
         }
     }

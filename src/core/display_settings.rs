@@ -154,7 +154,7 @@ impl DisplaySettingsStore {
     }
 
     pub(super) fn default_path() -> PathBuf {
-        ProjectDirs::from("dev", "zhubby", "Shogun")
+        ProjectDirs::from("", "", "Shogun")
             .map(|dirs| dirs.config_dir().join("settings.json"))
             .unwrap_or_else(|| PathBuf::from(".shogun_settings.json"))
     }
