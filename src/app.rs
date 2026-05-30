@@ -59,6 +59,8 @@ struct GameUiState {
     city_tab: CityTab,
     map_zoom: f32,
     map_pan: egui::Vec2,
+    map_boundaries_enabled: bool,
+    map_boundaries: Option<MapBoundaryCatalog>,
     city_drawer_open: bool,
     city_list_open: bool,
     reports_open: bool,
@@ -102,8 +104,15 @@ impl GameUiState {
             .unwrap_or_default();
         let save_manager = SaveManager::with_default_dir();
         let save_slots = save_manager.list_slots().unwrap_or_default();
-        let message =
+        let (map_boundaries, map_boundary_message) = load_map_boundary_catalog();
+        let mut message =
             combined_menu_message(loaded_settings.message.as_deref(), &history_menu.message);
+        if let Some(boundary_message) = &map_boundary_message {
+            if !message.is_empty() {
+                message.push('\n');
+            }
+            message.push_str(boundary_message);
+        }
         Self {
             json_scenario,
             history_scenarios: history_menu.scenarios,
@@ -113,6 +122,8 @@ impl GameUiState {
             city_tab: CityTab::Construction,
             map_zoom: 1.0,
             map_pan: egui::Vec2::ZERO,
+            map_boundaries_enabled: true,
+            map_boundaries,
             city_drawer_open: false,
             city_list_open: false,
             reports_open: true,
@@ -160,6 +171,16 @@ fn combined_menu_message(settings_message: Option<&str>, history_message: &str) 
         (Some(message), true) => message.to_string(),
         (None, false) => history_message.to_string(),
         (None, true) => String::new(),
+    }
+}
+
+fn load_map_boundary_catalog() -> (Option<MapBoundaryCatalog>, Option<String>) {
+    match MapBoundaryCatalog::from_path(MAP_BOUNDARY_ASSET_PATH) {
+        Ok(catalog) => (Some(catalog), None),
+        Err(error) => (
+            None,
+            Some(format!("州郡边界不可用，已退回点线地图: {error}")),
+        ),
     }
 }
 
@@ -1027,6 +1048,13 @@ fn map_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
             reset_map_view(ui_state);
         }
     });
+    ui.add_enabled(
+        ui_state.map_boundaries.is_some(),
+        egui::Checkbox::new(&mut ui_state.map_boundaries_enabled, "州郡边界"),
+    );
+    if ui_state.map_boundaries.is_none() {
+        ui.colored_label(war_text_muted(), "边界资产未加载");
+    }
 }
 
 fn city_list(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
@@ -1584,6 +1612,12 @@ fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
         return;
     };
 
+    if ui_state.map_boundaries_enabled {
+        if let Some(catalog) = &ui_state.map_boundaries {
+            draw_map_boundaries(&painter, game, catalog, bounds, rect, ui_state);
+        }
+    }
+
     for road in &game.roads {
         let Some(from) = game.cities.get(&road.from) else {
             continue;
@@ -1837,6 +1871,163 @@ fn draw_strategy_map_background(painter: &egui::Painter, rect: egui::Rect) {
         egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(180, 132, 74, 76)),
         egui::StrokeKind::Inside,
     );
+}
+
+fn draw_map_boundaries(
+    painter: &egui::Painter,
+    game: &GameState,
+    catalog: &MapBoundaryCatalog,
+    bounds: MapBounds,
+    rect: egui::Rect,
+    ui_state: &GameUiState,
+) {
+    let boundaries: Vec<_> = catalog.boundaries_for_year(game.year).collect();
+
+    for level in [MapBoundaryLevel::Province, MapBoundaryLevel::Commandery] {
+        for boundary in boundaries
+            .iter()
+            .copied()
+            .filter(|boundary| boundary.level == level)
+        {
+            let fill = boundary_fill_color(boundary, game, ui_state);
+            let points = boundary_screen_points(boundary, bounds, rect, ui_state);
+            paint_boundary_polygon(painter, points, fill, egui::Stroke::NONE);
+        }
+    }
+
+    for boundary in boundaries
+        .iter()
+        .copied()
+        .filter(|boundary| boundary.level == MapBoundaryLevel::Province)
+    {
+        let points = boundary_screen_points(boundary, bounds, rect, ui_state);
+        paint_boundary_polygon(
+            painter,
+            points,
+            egui::Color32::TRANSPARENT,
+            egui::Stroke::new(
+                2.2,
+                egui::Color32::from_rgba_unmultiplied(190, 141, 78, 126),
+            ),
+        );
+    }
+
+    for boundary in boundaries
+        .iter()
+        .copied()
+        .filter(|boundary| boundary.level == MapBoundaryLevel::Commandery)
+    {
+        let selected = selected_city_in_boundary(boundary, game, ui_state);
+        let points = boundary_screen_points(boundary, bounds, rect, ui_state);
+        let stroke = if selected {
+            egui::Stroke::new(
+                2.0,
+                egui::Color32::from_rgba_unmultiplied(238, 181, 82, 205),
+            )
+        } else {
+            egui::Stroke::new(
+                1.0,
+                egui::Color32::from_rgba_unmultiplied(118, 103, 70, 112),
+            )
+        };
+        paint_boundary_polygon(painter, points, egui::Color32::TRANSPARENT, stroke);
+    }
+}
+
+fn boundary_screen_points(
+    boundary: &MapBoundary,
+    bounds: MapBounds,
+    rect: egui::Rect,
+    ui_state: &GameUiState,
+) -> Vec<egui::Pos2> {
+    boundary
+        .points
+        .iter()
+        .map(|point| map_to_screen(*point, bounds, rect, ui_state))
+        .collect()
+}
+
+fn paint_boundary_polygon(
+    painter: &egui::Painter,
+    points: Vec<egui::Pos2>,
+    fill: egui::Color32,
+    stroke: egui::Stroke,
+) {
+    if points.len() < 3 {
+        return;
+    }
+    painter.add(egui::Shape::Path(egui::epaint::PathShape {
+        points,
+        closed: true,
+        fill,
+        stroke: stroke.into(),
+    }));
+}
+
+fn boundary_fill_color(
+    boundary: &MapBoundary,
+    game: &GameState,
+    ui_state: &GameUiState,
+) -> egui::Color32 {
+    let selected = selected_city_in_boundary(boundary, game, ui_state);
+    let alpha = match boundary.level {
+        MapBoundaryLevel::Province => 10,
+        MapBoundaryLevel::Commandery if selected => 58,
+        MapBoundaryLevel::Commandery => 30,
+    };
+
+    dominant_boundary_faction(boundary, game)
+        .map(faction_color)
+        .map(|color| egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), alpha))
+        .unwrap_or_else(|| egui::Color32::from_rgba_unmultiplied(92, 96, 67, alpha))
+}
+
+fn dominant_boundary_faction<'a>(
+    boundary: &MapBoundary,
+    game: &'a GameState,
+) -> Option<&'a Faction> {
+    let mut counts: BTreeMap<&str, (usize, u32)> = BTreeMap::new();
+    for city in game
+        .cities
+        .values()
+        .filter(|city| city_matches_boundary(boundary, city))
+    {
+        let entry = counts.entry(city.faction_id.as_str()).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 = entry.1.saturating_add(city.troops);
+    }
+    let faction_id = counts
+        .iter()
+        .max_by_key(|(_, (city_count, troops))| (*city_count, *troops))
+        .map(|(faction_id, _)| *faction_id)?;
+    game.factions.get(faction_id)
+}
+
+fn selected_city_in_boundary(
+    boundary: &MapBoundary,
+    game: &GameState,
+    ui_state: &GameUiState,
+) -> bool {
+    let Some(selected_city_id) = ui_state.selected_city_id.as_deref() else {
+        return false;
+    };
+    game.cities
+        .get(selected_city_id)
+        .is_some_and(|city| city_matches_boundary(boundary, city))
+}
+
+fn city_matches_boundary(boundary: &MapBoundary, city: &City) -> bool {
+    if boundary.city_ids.iter().any(|city_id| city_id == &city.id) {
+        return true;
+    }
+
+    let Some(profile) = &city.profile else {
+        return false;
+    };
+    match boundary.level {
+        MapBoundaryLevel::Province => profile.province == boundary.name,
+        MapBoundaryLevel::Commandery => profile.commandery == boundary.name,
+    }
 }
 
 fn draw_city_marker(

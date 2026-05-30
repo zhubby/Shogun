@@ -114,9 +114,10 @@ const DISPLAY_RESOLUTION_PRESETS: [DisplayResolution; 7] = [
     DisplayResolution::new(2560, 1440),
 ];
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum DisplayMode {
+    #[default]
     Windowed,
     BorderlessFullscreen,
     ExclusiveFullscreen,
@@ -133,12 +134,6 @@ impl DisplayMode {
             DisplayMode::BorderlessFullscreen => "无边框全屏",
             DisplayMode::ExclusiveFullscreen => "独占全屏",
         }
-    }
-}
-
-impl Default for DisplayMode {
-    fn default() -> Self {
-        Self::Windowed
     }
 }
 
