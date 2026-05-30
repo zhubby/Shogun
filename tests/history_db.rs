@@ -18,6 +18,15 @@ fn query_user_version(conn: &Connection) -> i64 {
         .unwrap()
 }
 
+fn applied_sqlx_migration_versions(conn: &Connection) -> Vec<i64> {
+    conn.prepare("SELECT version FROM _sqlx_migrations ORDER BY version")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+}
+
 fn build_legacy_unversioned_database(path: &Path) {
     let conn = Connection::open(path).unwrap();
     conn.pragma_update(None, "foreign_keys", "ON").unwrap();
@@ -35,6 +44,7 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
     let conn = Connection::open(&path).unwrap();
     conn.pragma_update(None, "foreign_keys", "ON").unwrap();
     assert_eq!(query_user_version(&conn), HISTORY_DB_SCHEMA_VERSION as i64);
+    assert_eq!(applied_sqlx_migration_versions(&conn), [1, 2, 3]);
 
     let mut fk_check = conn.prepare("PRAGMA foreign_key_check").unwrap();
     let mut fk_rows = fk_check.query([]).unwrap();
@@ -120,6 +130,7 @@ fn open_or_create_creates_database_and_runs_initial_migration() {
     assert_eq!(catalog.scenarios().unwrap().len(), 4);
     let conn = Connection::open(&path).unwrap();
     assert_eq!(query_user_version(&conn), HISTORY_DB_SCHEMA_VERSION as i64);
+    assert_eq!(applied_sqlx_migration_versions(&conn), [1, 2, 3]);
 }
 
 #[test]
@@ -133,6 +144,7 @@ fn open_or_create_adopts_legacy_unversioned_database() {
     assert_eq!(catalog.scenarios().unwrap().len(), 4);
     let conn = Connection::open(&path).unwrap();
     assert_eq!(query_user_version(&conn), HISTORY_DB_SCHEMA_VERSION as i64);
+    assert_eq!(applied_sqlx_migration_versions(&conn), [1, 2, 3]);
     assert_eq!(query_count(&conn, "officer_external_ids"), 86);
     assert_eq!(query_count(&conn, "officer_relationships"), 85);
 }
@@ -148,6 +160,7 @@ fn open_or_create_migrates_old_v2_unknown_gender_to_two_value_schema() {
     let conn = Connection::open(&path).unwrap();
     conn.pragma_update(None, "foreign_keys", "ON").unwrap();
     assert_eq!(query_user_version(&conn), HISTORY_DB_SCHEMA_VERSION as i64);
+    assert_eq!(applied_sqlx_migration_versions(&conn), [1, 2, 3]);
     assert_eq!(
         conn.query_row(
             "SELECT gender FROM officers WHERE id = 'liu_bei'",

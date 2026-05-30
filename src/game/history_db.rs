@@ -11,6 +11,9 @@ use super::officer::{
 use directories::ProjectDirs;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use sqlx::migrate::Migration;
+use sqlx::sqlite::SqliteConnectOptions;
+use sqlx::ConnectOptions;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,20 +21,7 @@ use std::path::{Path, PathBuf};
 const HISTORY_DB_FILE_NAME: &str = "database.sqlite";
 pub const HISTORY_DB_SCHEMA_VERSION: u32 = 3;
 const LEGACY_UNVERSIONED_DB_VERSION: u32 = 1;
-const SCHEMA_SQL: &str = include_str!("../../assets/data/schema.sql");
-const CORE_SEED_SQL: &str = include_str!("../../assets/data/seeds/001_core.sql");
-const THREE_KINGDOMS_IMPORT_SEED_SQL: &str =
-    include_str!("../../assets/data/seeds/002_three_kingdoms_import.sql");
-const OFFICER_RELATIONSHIP_SEED_SQL: &str =
-    include_str!("../../assets/data/seeds/003_officer_relationships.sql");
-const HISTORY_DB_V2_MIGRATION_SQL: &str =
-    include_str!("../../assets/data/migrations/002_officer_profiles_relationships.sql");
-const INITIAL_HISTORY_DB_STATEMENTS: &[&str] = &[
-    SCHEMA_SQL,
-    CORE_SEED_SQL,
-    THREE_KINGDOMS_IMPORT_SEED_SQL,
-    OFFICER_RELATIONSHIP_SEED_SQL,
-];
+static HISTORY_DB_MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("assets/data/migrations");
 const REQUIRED_HISTORY_TABLES: &[&str] = &[
     "cities",
     "factions",
@@ -56,61 +46,6 @@ const REQUIRED_LEGACY_HISTORY_TABLES: &[&str] = &[
     "officer_life_events",
     "scenario_diplomacy",
 ];
-const HISTORY_DB_MIGRATIONS: &[HistoryDbMigration] = &[
-    HistoryDbMigration {
-        version: 2,
-        statements: &[
-            HISTORY_DB_V2_MIGRATION_SQL,
-            THREE_KINGDOMS_IMPORT_SEED_SQL,
-            OFFICER_RELATIONSHIP_SEED_SQL,
-        ],
-    },
-    HistoryDbMigration {
-        version: 3,
-        statements: &[
-            "UPDATE officers SET gender = 'Male' WHERE gender NOT IN ('Male', 'Female');",
-            r#"
-        PRAGMA foreign_keys = OFF;
-
-        CREATE TABLE officers_v3 (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            courtesy_name TEXT,
-            native_place TEXT,
-            birth_year INTEGER,
-            death_year INTEGER,
-            gender TEXT NOT NULL DEFAULT 'Male' CHECK (gender IN ('Male', 'Female')),
-            leadership INTEGER NOT NULL CHECK (leadership BETWEEN 1 AND 100),
-            strength INTEGER NOT NULL CHECK (strength BETWEEN 1 AND 100),
-            intelligence INTEGER NOT NULL CHECK (intelligence BETWEEN 1 AND 100),
-            politics INTEGER NOT NULL CHECK (politics BETWEEN 1 AND 100),
-            charm INTEGER NOT NULL CHECK (charm BETWEEN 1 AND 100),
-            tags TEXT NOT NULL DEFAULT '',
-            confidence TEXT NOT NULL CHECK (confidence IN ('High', 'Medium', 'Low')),
-            biography TEXT NOT NULL DEFAULT '',
-            notes TEXT NOT NULL DEFAULT ''
-        );
-
-        INSERT INTO officers_v3
-        SELECT id, name, courtesy_name, native_place, birth_year, death_year, gender,
-               leadership, strength, intelligence, politics, charm, tags, confidence,
-               biography, notes
-        FROM officers;
-
-        DROP TABLE officers;
-        ALTER TABLE officers_v3 RENAME TO officers;
-        CREATE INDEX idx_officers_name ON officers(name);
-
-        PRAGMA foreign_keys = ON;
-        "#,
-        ],
-    },
-];
-
-struct HistoryDbMigration {
-    version: u32,
-    statements: &'static [&'static str],
-}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HistoricalScenario {
@@ -172,10 +107,11 @@ impl SqliteHistoricalCatalog {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(HistoryDbError::Io)?;
         }
-        let mut conn = Connection::open(path).map_err(HistoryDbError::Sql)?;
+        migrate_history_database(path)?;
+        let conn = Connection::open(path).map_err(HistoryDbError::Sql)?;
         conn.pragma_update(None, "foreign_keys", "ON")
             .map_err(HistoryDbError::Sql)?;
-        migrate_history_database(&mut conn)?;
+        validate_history_database(&conn)?;
         Ok(Self { conn })
     }
 
@@ -252,15 +188,37 @@ pub fn build_history_database(path: impl AsRef<Path>) -> Result<(), HistoryDbErr
     if path.exists() {
         fs::remove_file(path).map_err(HistoryDbError::Io)?;
     }
-    let conn = Connection::open(path).map_err(HistoryDbError::Sql)?;
-    conn.pragma_update(None, "foreign_keys", "ON")
-        .map_err(HistoryDbError::Sql)?;
-    let mut conn = conn;
-    migrate_history_database(&mut conn)?;
+    migrate_history_database(path)?;
     Ok(())
 }
 
-fn migrate_history_database(conn: &mut Connection) -> Result<(), HistoryDbError> {
+fn migrate_history_database(path: &Path) -> Result<(), HistoryDbError> {
+    {
+        let conn = Connection::open(path).map_err(HistoryDbError::Sql)?;
+        conn.pragma_update(None, "foreign_keys", "ON")
+            .map_err(HistoryDbError::Sql)?;
+        prepare_history_database_for_sqlx_migrations(&conn)?;
+    }
+
+    sqlx::test_block_on(async {
+        let mut conn = SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true)
+            .foreign_keys(false)
+            .connect()
+            .await?;
+        HISTORY_DB_MIGRATOR.run_direct(&mut conn).await
+    })
+    .map_err(HistoryDbError::Migrate)?;
+
+    let conn = Connection::open(path).map_err(HistoryDbError::Sql)?;
+    conn.pragma_update(None, "foreign_keys", "ON")
+        .map_err(HistoryDbError::Sql)?;
+    update_history_database_user_version(&conn)?;
+    validate_history_database(&conn)
+}
+
+fn prepare_history_database_for_sqlx_migrations(conn: &Connection) -> Result<(), HistoryDbError> {
     let mut current_version = database_user_version(conn)?;
     if current_version > HISTORY_DB_SCHEMA_VERSION {
         return Err(HistoryDbError::Invalid(format!(
@@ -269,7 +227,6 @@ fn migrate_history_database(conn: &mut Connection) -> Result<(), HistoryDbError>
     }
 
     if current_version == 0 && database_is_empty(conn)? {
-        initialize_history_database(conn)?;
         return Ok(());
     }
 
@@ -278,55 +235,85 @@ fn migrate_history_database(conn: &mut Connection) -> Result<(), HistoryDbError>
         current_version = database_user_version(conn)?;
     }
 
-    for migration in HISTORY_DB_MIGRATIONS
-        .iter()
-        .filter(|migration| migration.version > current_version)
-    {
-        let rebuilds_referenced_tables = migration.version == 3;
-        if rebuilds_referenced_tables {
-            conn.pragma_update(None, "foreign_keys", "OFF")
-                .map_err(HistoryDbError::Sql)?;
-        }
-
-        let migration_result = (|| {
-            let transaction = conn.transaction().map_err(HistoryDbError::Sql)?;
-            for statement in migration.statements {
-                transaction
-                    .execute_batch(statement)
-                    .map_err(HistoryDbError::Sql)?;
-            }
-            validate_required_tables(&transaction)?;
-            validate_foreign_keys(&transaction)?;
-            transaction
-                .pragma_update(None, "user_version", migration.version)
-                .map_err(HistoryDbError::Sql)?;
-            transaction.commit().map_err(HistoryDbError::Sql)
-        })();
-
-        if rebuilds_referenced_tables {
-            conn.pragma_update(None, "foreign_keys", "ON")
-                .map_err(HistoryDbError::Sql)?;
-        }
-        migration_result?;
-    }
-
-    validate_required_tables(conn)?;
-    validate_foreign_keys(conn)
+    record_applied_user_version_migrations(conn, current_version)
 }
 
 fn initialize_history_database(conn: &mut Connection) -> Result<(), HistoryDbError> {
+    conn.pragma_update(None, "foreign_keys", "OFF")
+        .map_err(HistoryDbError::Sql)?;
     let transaction = conn.transaction().map_err(HistoryDbError::Sql)?;
-    for statement in INITIAL_HISTORY_DB_STATEMENTS {
+    for migration in HISTORY_DB_MIGRATOR.iter() {
         transaction
-            .execute_batch(statement)
+            .execute_batch(&migration.sql)
             .map_err(HistoryDbError::Sql)?;
     }
-    validate_required_tables(&transaction)?;
-    validate_foreign_keys(&transaction)?;
-    transaction
-        .pragma_update(None, "user_version", HISTORY_DB_SCHEMA_VERSION)
+    transaction.commit().map_err(HistoryDbError::Sql)?;
+    conn.pragma_update(None, "foreign_keys", "ON")
         .map_err(HistoryDbError::Sql)?;
-    transaction.commit().map_err(HistoryDbError::Sql)
+    update_history_database_user_version(conn)?;
+    validate_history_database(conn)
+}
+
+fn record_applied_user_version_migrations(
+    conn: &Connection,
+    current_version: u32,
+) -> Result<(), HistoryDbError> {
+    if current_version == 0 {
+        return Ok(());
+    }
+
+    create_sqlx_migrations_table(conn)?;
+    for migration in HISTORY_DB_MIGRATOR
+        .iter()
+        .filter(|migration| migration.version <= i64::from(current_version))
+    {
+        record_applied_migration(conn, migration)?;
+    }
+    Ok(())
+}
+
+fn create_sqlx_migrations_table(conn: &Connection) -> Result<(), HistoryDbError> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS _sqlx_migrations (
+            version BIGINT PRIMARY KEY,
+            description TEXT NOT NULL,
+            installed_on TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            success BOOLEAN NOT NULL,
+            checksum BLOB NOT NULL,
+            execution_time BIGINT NOT NULL
+        );
+        "#,
+    )
+    .map_err(HistoryDbError::Sql)
+}
+
+fn record_applied_migration(
+    conn: &Connection,
+    migration: &Migration,
+) -> Result<(), HistoryDbError> {
+    conn.execute(
+        "INSERT OR IGNORE INTO _sqlx_migrations
+         (version, description, success, checksum, execution_time)
+         VALUES (?1, ?2, TRUE, ?3, 0)",
+        (
+            migration.version,
+            migration.description.as_ref(),
+            migration.checksum.as_ref(),
+        ),
+    )
+    .map_err(HistoryDbError::Sql)?;
+    Ok(())
+}
+
+fn update_history_database_user_version(conn: &Connection) -> Result<(), HistoryDbError> {
+    conn.pragma_update(None, "user_version", HISTORY_DB_SCHEMA_VERSION)
+        .map_err(HistoryDbError::Sql)
+}
+
+fn validate_history_database(conn: &Connection) -> Result<(), HistoryDbError> {
+    validate_required_tables(conn)?;
+    validate_foreign_keys(conn)
 }
 
 fn adopt_legacy_v1_database(conn: &Connection) -> Result<(), HistoryDbError> {
@@ -914,6 +901,7 @@ fn parse_life_event_kind(value: &str) -> LifeEventKind {
 pub enum HistoryDbError {
     Io(std::io::Error),
     Sql(rusqlite::Error),
+    Migrate(sqlx::migrate::MigrateError),
     Invalid(String),
 }
 
@@ -922,6 +910,7 @@ impl std::fmt::Display for HistoryDbError {
         match self {
             HistoryDbError::Io(error) => write!(f, "历史资料库 IO 失败: {error}"),
             HistoryDbError::Sql(error) => write!(f, "历史资料库 SQL 失败: {error}"),
+            HistoryDbError::Migrate(error) => write!(f, "历史资料库迁移失败: {error}"),
             HistoryDbError::Invalid(message) => write!(f, "历史资料库数据无效: {message}"),
         }
     }

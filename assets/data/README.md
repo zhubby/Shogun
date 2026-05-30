@@ -8,7 +8,9 @@
 - `seeds/001_core.sql`：核心城镇、主要势力、固定剧本、道路、主要武将和基础履历事件。
 - `seeds/002_three_kingdoms_import.sql`：从 `fthux/Characters_of_the_Three_Kingdoms` 语料导入的来源化武将、外部 ID、履历登场事件和可解析亲属关系。
 - `seeds/003_officer_relationships.sql`：人工校订的高价值人物、亲属、夫妻、君臣、结义和仇敌关系 overlay。
-- `migrations/002_officer_profiles_relationships.sql`：将旧 v1 本机库升级到 v2，添加性别、生平、关系、外部来源 ID 和履历初始忠诚度字段。v3 迁移在程序内收敛旧库性别约束，只保留男/女两种值。
+- `migrations/001_initial_history.sql`：SQLx 初始迁移，创建 v1 历史资料库结构并导入核心 seed。
+- `migrations/002_officer_profiles_relationships.sql`：SQLx v2 迁移，添加性别、生平、关系、外部来源 ID、履历初始忠诚度字段，并导入来源化人物和关系 overlay。
+- `migrations/003_restrict_officer_gender.sql`：SQLx v3 迁移，收敛旧库性别约束，只保留男/女两种值。
 - `map_boundaries.json`：游戏地图坐标系下的州郡轮廓近似资产，参考 CHGIS 类历史行政区口径手工校订，用于 UI 地图绘制，不参与规则判定。
 
 `seeds/002_supplemental_officers.sql` 占位池已停用。资料库验收口径是来源化人物全量进入 SQLite，不再用 `supplemental_%` 伪造数量。
@@ -29,9 +31,9 @@ rtk cargo run --bin build_history_db
 rtk cargo run --bin build_history_db -- /tmp/database.sqlite
 ```
 
-游戏启动和新开局默认读取本机 `database.sqlite`。若文件缺失，会创建空库并执行内置迁移。迁移版本使用 SQLite `PRAGMA user_version`，当前版本为 `3`。
+游戏启动和新开局默认读取本机 `database.sqlite`。若文件缺失，会创建空库并执行 SQLx migrations。迁移记录使用 SQLx 的 `_sqlx_migrations` 表；SQLite `PRAGMA user_version` 保留为兼容性版本标记，当前为 `3`。
 
-新增或修正历史资料时，优先添加版本化迁移，而不是对已有本机库重复运行全量 seed。空库初始化当前 `schema.sql` 和所有 seed SQL；已有 v1 本机库按版本顺序执行增量迁移、导入 seed 和 overlay seed。
+新增或修正历史资料时，优先添加版本化 SQLx 迁移，而不是对已有本机库重复运行全量 seed。空库从 `migrations/001_initial_history.sql` 开始按顺序迁移；已有未版本化 v1 本机库会先校验结构并回填 SQLx 迁移记录，再执行后续增量迁移。
 
 从 CTK 语料重新生成导入 seed：
 
