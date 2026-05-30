@@ -18,7 +18,7 @@ pub fn run() {
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Shogun - 三国志风格策略原型".to_string(),
+                title: "大将军 Shogun".to_string(),
                 resolution: WindowResolution::new(1280, 820),
                 ..default()
             }),
@@ -246,13 +246,13 @@ fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) {
                     ui.add_space(34.0);
                     ui.vertical_centered(|ui| {
                         ui.label(
-                            egui::RichText::new("Shogun")
+                            egui::RichText::new("大将军")
                                 .size(42.0)
                                 .color(war_gold())
                                 .strong(),
                         );
                         ui.label(
-                            egui::RichText::new("三国志风格策略原型")
+                            egui::RichText::new("Shogun")
                                 .size(18.0)
                                 .color(war_text_muted()),
                         );
@@ -563,7 +563,7 @@ fn top_status_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui:
                 ui.set_width(width);
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("Shogun")
+                        egui::RichText::new("大将军")
                             .size(24.0)
                             .color(war_gold())
                             .strong(),
