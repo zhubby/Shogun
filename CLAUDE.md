@@ -38,8 +38,8 @@ This repository is a single-crate Rust 2021 Bevy strategy game prototype.
 - `src/game/history_db.rs`: SQLite-backed historical catalog and database builder.
 - `src/game/scenario.rs`: JSON scenario loading and fallback scenario construction.
 - `src/game/save.rs`: save-slot persistence and metadata.
-- `src/bin/build_history_db.rs`: helper binary that regenerates `assets/data/history.sqlite`.
-- `assets/data/`: SQLite schema, seed SQL, generated historical database, and data notes.
+- `src/bin/build_history_db.rs`: helper binary that rebuilds a local `database.sqlite`.
+- `assets/data/`: SQLite schema, seed SQL, migration sources, and data notes.
 - `assets/scenarios/`: JSON fallback scenarios loaded by `ScenarioData`.
 - `assets/fonts/`: bundled fonts used by the UI.
 - `tests/`: integration tests for gameplay and historical database integrity.
@@ -55,11 +55,11 @@ All shell commands should be prefixed with `rtk`.
 - `rtk cargo test --test gameplay`: run gameplay rule, AI, and save tests.
 - `rtk cargo test --test history_db`: run SQLite seed/schema integrity tests.
 - `rtk cargo run`: launch the Bevy app.
-- `rtk cargo run --bin build_history_db`: regenerate `assets/data/history.sqlite` from schema and seeds.
+- `rtk cargo run --bin build_history_db`: rebuild the local runtime `database.sqlite` from migrations.
 - `rtk cargo fmt`: format Rust code.
 - `rtk cargo clippy --all-targets -- -D warnings`: lint strictly before larger changes.
 
-When changing schema or seed SQL, regenerate `assets/data/history.sqlite` and run `rtk cargo test --test history_db`. When changing command rules or save behavior, run `rtk cargo test --test gameplay` at minimum.
+When changing schema, seed SQL, or migrations, rebuild a test database and run `rtk cargo test --test history_db`. When changing command rules or save behavior, run `rtk cargo test --test gameplay` at minimum.
 
 ## Rust Style and Idioms
 
@@ -96,7 +96,7 @@ When changing schema or seed SQL, regenerate `assets/data/history.sqlite` and ru
 ## Historical Data and Assets
 
 - Treat `assets/data/schema.sql` and `assets/data/seeds/*.sql` as the source of truth for historical data.
-- `assets/data/history.sqlite` is a generated, tracked runtime asset. Regenerate it with `rtk cargo run --bin build_history_db` after schema or seed changes.
+- Runtime `database.sqlite` lives in the game data directory and is not tracked. Update versioned migrations after schema or seed changes.
 - Keep SQLite foreign keys valid and maintain indexes needed by `tests/history_db.rs`.
 - Use stable ASCII identifiers for `id` fields; display names may use Chinese text.
 - Prefer adding historically uncertain information with explicit confidence/notes fields rather than pretending precision.

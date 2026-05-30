@@ -269,6 +269,110 @@ fn save_manager_round_trips_multiple_slots() {
 }
 
 #[test]
+fn save_load_preserves_officer_profile_extensions_and_dynamic_loyalty() {
+    let temp = tempfile::tempdir().unwrap();
+    let manager = SaveManager::new(temp.path());
+    let mut game = sample_game();
+    let officer = game.officers.get_mut("liu_bei").unwrap();
+    officer.loyalty = 41;
+    officer.gender = OfficerGender::Male;
+    officer.profile = Some(OfficerProfile {
+        id: "liu_bei".to_string(),
+        name: "刘备".to_string(),
+        courtesy_name: Some("玄德".to_string()),
+        native_place: Some("涿郡涿县".to_string()),
+        birth_year: Some(161),
+        death_year: Some(223),
+        gender: OfficerGender::Male,
+        stats: officer.stats,
+        tags: vec!["ruler".to_string()],
+        confidence: SourceConfidence::High,
+        biography: String::new(),
+        relationships: Vec::new(),
+        notes: String::new(),
+    });
+    let profile = officer.profile.as_mut().unwrap();
+    profile.gender = OfficerGender::Male;
+    profile.biography = "刘备详细生平摘要".to_string();
+    profile.relationships = vec![OfficerRelationship {
+        target_id: "guan_yu".to_string(),
+        target_name: "关羽".to_string(),
+        kind: OfficerRelationshipKind::SwornSibling,
+        confidence: SourceConfidence::Medium,
+        notes: "桃园结义".to_string(),
+        source: "test".to_string(),
+    }];
+
+    manager
+        .save_slot("profile_fields", "资料字段", &game)
+        .unwrap();
+    let loaded = manager.load_slot("profile_fields").unwrap();
+    let loaded_officer = &loaded.officers["liu_bei"];
+    let loaded_profile = loaded_officer.profile.as_ref().unwrap();
+
+    assert_eq!(loaded_officer.loyalty, 41);
+    assert_eq!(loaded_officer.gender, OfficerGender::Male);
+    assert_eq!(loaded_profile.gender, OfficerGender::Male);
+    assert_eq!(loaded_profile.biography, "刘备详细生平摘要");
+    assert_eq!(loaded_profile.relationships.len(), 1);
+    assert_eq!(
+        loaded_profile.relationships[0].kind,
+        OfficerRelationshipKind::SwornSibling
+    );
+}
+
+#[test]
+fn old_save_json_missing_profile_extensions_still_deserializes() {
+    let mut game_json = serde_json::to_value(sample_game()).unwrap();
+    let officers = game_json
+        .get_mut("officers")
+        .and_then(serde_json::Value::as_object_mut)
+        .unwrap();
+    let liu_bei = officers
+        .get_mut("liu_bei")
+        .and_then(serde_json::Value::as_object_mut)
+        .unwrap();
+    liu_bei.insert(
+        "profile".to_string(),
+        serde_json::json!({
+            "id": "liu_bei",
+            "name": "刘备",
+            "courtesy_name": "玄德",
+            "native_place": "涿郡涿县",
+            "birth_year": 161,
+            "death_year": 223,
+            "stats": {
+                "leadership": 76,
+                "strength": 72,
+                "intelligence": 78,
+                "politics": 80,
+                "charm": 99
+            },
+            "tags": ["ruler"],
+            "confidence": "High",
+            "notes": "旧存档资料"
+        }),
+    );
+    liu_bei.remove("gender");
+    let profile = liu_bei
+        .get_mut("profile")
+        .and_then(serde_json::Value::as_object_mut)
+        .unwrap();
+    profile.remove("gender");
+    profile.remove("biography");
+    profile.remove("relationships");
+
+    let loaded: GameState = serde_json::from_value(game_json).unwrap();
+    let officer = &loaded.officers["liu_bei"];
+    let profile = officer.profile.as_ref().unwrap();
+
+    assert_eq!(officer.gender, OfficerGender::Male);
+    assert_eq!(profile.gender, OfficerGender::Male);
+    assert!(profile.biography.is_empty());
+    assert!(profile.relationships.is_empty());
+}
+
+#[test]
 fn player_can_play_several_months_with_ai() {
     let mut game = sample_game();
     let provider = RuleBasedAiProvider;
