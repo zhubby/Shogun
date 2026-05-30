@@ -667,6 +667,13 @@ fn apply_due_life_events(
                         officer.faction_id = target_faction_id.clone();
                         officer.city_id = city_id.clone();
                         officer.status = status.clone();
+                        if let Some(loyalty) = event.loyalty {
+                            officer.loyalty = loyalty;
+                        }
+                        officer.gender = officer_profile
+                            .as_ref()
+                            .map(|profile| profile.gender.clone())
+                            .unwrap_or_default();
                         officer.profile = officer_profile.clone();
                     })
                     .or_insert(Officer {
@@ -675,7 +682,11 @@ fn apply_due_life_events(
                         faction_id: target_faction_id.clone(),
                         city_id: city_id.clone(),
                         stats,
-                        loyalty: 75,
+                        loyalty: event.loyalty.unwrap_or(75),
+                        gender: officer_profile
+                            .as_ref()
+                            .map(|profile| profile.gender.clone())
+                            .unwrap_or_default(),
                         status: status.clone(),
                         profile: officer_profile.clone(),
                     });

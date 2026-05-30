@@ -1,6 +1,6 @@
 use super::city::SourceConfidence;
 use super::ids::{CityId, FactionId, OfficerId};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum OfficerStatus {
@@ -8,6 +8,47 @@ pub enum OfficerStatus {
     Wild,
     Unavailable,
     Dead,
+}
+
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+pub enum OfficerGender {
+    #[default]
+    Male,
+    Female,
+}
+
+impl<'de> Deserialize<'de> for OfficerGender {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Ok(match value.as_str() {
+            "Female" => Self::Female,
+            _ => Self::Male,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum OfficerRelationshipKind {
+    RulerSubject,
+    ParentChild,
+    AdoptiveParentChild,
+    Spouse,
+    Sibling,
+    SwornSibling,
+    Enemy,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OfficerRelationship {
+    pub target_id: OfficerId,
+    pub target_name: String,
+    pub kind: OfficerRelationshipKind,
+    pub confidence: SourceConfidence,
+    pub notes: String,
+    pub source: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -18,9 +59,15 @@ pub struct OfficerProfile {
     pub native_place: Option<String>,
     pub birth_year: Option<i32>,
     pub death_year: Option<i32>,
+    #[serde(default)]
+    pub gender: OfficerGender,
     pub stats: OfficerStats,
     pub tags: Vec<String>,
     pub confidence: SourceConfidence,
+    #[serde(default)]
+    pub biography: String,
+    #[serde(default)]
+    pub relationships: Vec<OfficerRelationship>,
     pub notes: String,
 }
 
@@ -31,6 +78,7 @@ pub trait OfficerProfileView {
     fn native_place(&self) -> Option<&str>;
     fn birth_year(&self) -> Option<i32>;
     fn death_year(&self) -> Option<i32>;
+    fn gender(&self) -> &OfficerGender;
     fn confidence(&self) -> &SourceConfidence;
 }
 
@@ -59,6 +107,10 @@ impl OfficerProfileView for OfficerProfile {
         self.death_year
     }
 
+    fn gender(&self) -> &OfficerGender {
+        &self.gender
+    }
+
     fn confidence(&self) -> &SourceConfidence {
         &self.confidence
     }
@@ -72,6 +124,8 @@ pub struct Officer {
     pub city_id: Option<CityId>,
     pub stats: OfficerStats,
     pub loyalty: u8,
+    #[serde(default)]
+    pub gender: OfficerGender,
     pub status: OfficerStatus,
     pub profile: Option<OfficerProfile>,
 }

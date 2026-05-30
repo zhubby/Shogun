@@ -1,7 +1,7 @@
 use super::city::City;
 use super::ids::{CityId, FactionId, OfficerId};
 use super::model::*;
-use super::officer::{Officer, OfficerStats, OfficerStatus};
+use super::officer::{Officer, OfficerGender, OfficerStats, OfficerStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -103,6 +103,7 @@ impl ScenarioData {
                     city_id: seed.city_id.clone(),
                     stats: seed.stats,
                     loyalty: seed.loyalty,
+                    gender: OfficerGender::Male,
                     status: OfficerStatus::Active,
                     profile: None,
                 },

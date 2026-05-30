@@ -19,7 +19,7 @@ impl SaveManager {
     }
 
     pub fn default_dir() -> PathBuf {
-        ProjectDirs::from("dev", "zhubby", "Shogun")
+        ProjectDirs::from("", "", "Shogun")
             .map(|dirs| dirs.data_local_dir().join("saves"))
             .unwrap_or_else(|| PathBuf::from(".shogun_saves"))
     }
