@@ -1,6 +1,9 @@
+use crate::app_settings::{
+    AppSettings, AppSettingsStore, DisplayMode, DisplayResolution, LoadedAppSettings,
+};
 use crate::game::{Command as GameCommand, *};
 use bevy::prelude::*;
-use bevy::window::WindowResolution;
+use bevy::window::{EnabledButtons, PrimaryWindow};
 use bevy_egui::{egui, EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use std::collections::BTreeMap;
 use std::fs;
@@ -15,17 +18,28 @@ const HUD_TOP_HEIGHT: f32 = 68.0;
 const CITY_DRAWER_WIDTH: f32 = 390.0;
 
 pub fn run() {
+    let settings_store = AppSettingsStore::with_default_path();
+    let loaded_settings = settings_store.load();
+    let initial_settings = loaded_settings.settings;
+
     App::new()
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Shogun - 三国志风格策略原型".to_string(),
-                resolution: WindowResolution::new(1280, 820),
+                title: "大将军 Shogun".to_string(),
+                resolution: initial_settings.window_resolution(),
+                mode: initial_settings.window_mode(),
+                present_mode: initial_settings.present_mode(),
+                resizable: false,
+                enabled_buttons: EnabledButtons {
+                    maximize: false,
+                    ..default()
+                },
                 ..default()
             }),
             ..default()
         }))
         .add_plugins(EguiPlugin::default())
-        .init_resource::<GameUiState>()
+        .insert_resource(GameUiState::new(settings_store, loaded_settings))
         .add_systems(Startup, setup_camera)
         .add_systems(EguiPrimaryContextPass, game_ui_system)
         .run();
@@ -49,6 +63,7 @@ struct GameUiState {
     city_list_open: bool,
     reports_open: bool,
     save_panel_open: bool,
+    settings_open: bool,
     game: Option<GameState>,
     selected_faction_id: FactionId,
     selected_city_id: Option<CityId>,
@@ -65,12 +80,15 @@ struct GameUiState {
     save_slots: Vec<SaveSlotMeta>,
     save_slot_id: String,
     save_display_name: String,
+    settings_store: AppSettingsStore,
+    applied_settings: AppSettings,
+    pending_settings: AppSettings,
     message: String,
     egui_font_configured: bool,
 }
 
-impl Default for GameUiState {
-    fn default() -> Self {
+impl GameUiState {
+    fn new(settings_store: AppSettingsStore, loaded_settings: LoadedAppSettings) -> Self {
         let json_scenario = ScenarioData::from_path("assets/scenarios/early_three_kingdoms.json")
             .or_else(|_| ScenarioData::default_scenario())
             .expect("默认剧本必须可加载");
@@ -84,6 +102,8 @@ impl Default for GameUiState {
             .unwrap_or_default();
         let save_manager = SaveManager::with_default_dir();
         let save_slots = save_manager.list_slots().unwrap_or_default();
+        let message =
+            combined_menu_message(loaded_settings.message.as_deref(), &history_menu.message);
         Self {
             json_scenario,
             history_scenarios: history_menu.scenarios,
@@ -97,6 +117,7 @@ impl Default for GameUiState {
             city_list_open: false,
             reports_open: true,
             save_panel_open: false,
+            settings_open: false,
             game: None,
             selected_faction_id,
             selected_city_id: None,
@@ -113,9 +134,32 @@ impl Default for GameUiState {
             save_slots,
             save_slot_id: "slot1".to_string(),
             save_display_name: "新存档".to_string(),
-            message: history_menu.message,
+            settings_store,
+            applied_settings: loaded_settings.settings,
+            pending_settings: loaded_settings.settings,
+            message,
             egui_font_configured: false,
         }
+    }
+}
+
+impl Default for GameUiState {
+    fn default() -> Self {
+        let settings_store = AppSettingsStore::with_default_path();
+        let loaded_settings = settings_store.load();
+        Self::new(settings_store, loaded_settings)
+    }
+}
+
+fn combined_menu_message(settings_message: Option<&str>, history_message: &str) -> String {
+    match (
+        settings_message.filter(|message| !message.is_empty()),
+        history_message.is_empty(),
+    ) {
+        (Some(message), false) => format!("{message}\n{history_message}"),
+        (Some(message), true) => message.to_string(),
+        (None, false) => history_message.to_string(),
+        (None, true) => String::new(),
     }
 }
 
@@ -219,7 +263,11 @@ enum CityTab {
     Governance,
 }
 
-fn game_ui_system(mut contexts: EguiContexts, mut ui_state: ResMut<GameUiState>) {
+fn game_ui_system(
+    mut contexts: EguiContexts,
+    mut ui_state: ResMut<GameUiState>,
+    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+) {
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
@@ -227,12 +275,20 @@ fn game_ui_system(mut contexts: EguiContexts, mut ui_state: ResMut<GameUiState>)
     configure_egui_theme(ctx);
 
     match ui_state.screen {
-        Screen::MainMenu => main_menu(ctx, &mut ui_state),
+        Screen::MainMenu => {
+            if main_menu(ctx, &mut ui_state) {
+                match windows.single_mut() {
+                    Ok(mut window) => apply_pending_display_settings(&mut ui_state, &mut window),
+                    Err(_) => ui_state.message = "找不到主窗口，无法应用显示设置".to_string(),
+                }
+            }
+        }
         Screen::InGame => in_game(ctx, &mut ui_state),
     }
 }
 
-fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) {
+fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) -> bool {
+    let mut apply_display_settings = false;
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(ctx, |ui| {
@@ -312,6 +368,11 @@ fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) {
                     }
                 });
         });
+    main_menu_settings_button(ctx, ui_state);
+    if ui_state.settings_open {
+        apply_display_settings |= settings_modal(ctx, ui_state);
+    }
+    apply_display_settings
 }
 
 fn new_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
@@ -464,6 +525,149 @@ fn load_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
                 }
             });
     });
+}
+
+fn main_menu_settings_button(ctx: &egui::Context, ui_state: &mut GameUiState) {
+    if ui_state.settings_open {
+        return;
+    }
+
+    egui::Area::new(egui::Id::new("main_menu_settings_button"))
+        .order(egui::Order::Foreground)
+        .anchor(
+            egui::Align2::RIGHT_TOP,
+            egui::vec2(-HUD_MARGIN, HUD_TOP_OFFSET),
+        )
+        .show(ctx, |ui| {
+            war_bar_frame().show(ui, |ui| {
+                if ui
+                    .add_sized([86.0, 32.0], egui::Button::new("设置"))
+                    .clicked()
+                {
+                    ui_state.settings_open = true;
+                }
+            });
+        });
+}
+
+fn settings_modal(ctx: &egui::Context, ui_state: &mut GameUiState) -> bool {
+    let screen = ctx.content_rect();
+    egui::Area::new(egui::Id::new("settings_modal_scrim"))
+        .order(egui::Order::Middle)
+        .fixed_pos(screen.min)
+        .show(ctx, |ui| {
+            let (rect, response) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
+            ui.painter().rect_filled(
+                rect,
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 120),
+            );
+            if response.clicked() {
+                ui_state.settings_open = false;
+            }
+        });
+
+    let mut apply_settings = false;
+    let modal_width = (screen.width() - HUD_MARGIN * 2.0).clamp(320.0, 560.0);
+    egui::Area::new(egui::Id::new("settings_modal"))
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            war_panel_frame().show(ui, |ui| {
+                ui.set_width(modal_width);
+                ui.horizontal(|ui| {
+                    ui.heading(egui::RichText::new("设置").color(war_gold()));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("关闭").clicked() {
+                            ui_state.settings_open = false;
+                        }
+                    });
+                });
+                ui.separator();
+                apply_settings |= settings_controls(ui, ui_state);
+            });
+        });
+    apply_settings
+}
+
+fn settings_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState) -> bool {
+    let mut apply_settings = false;
+    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(
+            egui::RichText::new(format!(
+                "配置: {}",
+                ui_state.settings_store.path().display()
+            ))
+            .color(war_text_muted()),
+        );
+        ui.add_space(8.0);
+
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new("分辨率").color(war_text_muted()));
+            egui::ComboBox::from_id_salt("display_resolution")
+                .selected_text(ui_state.pending_settings.resolution.to_string())
+                .show_ui(ui, |ui| {
+                    for resolution in DisplayResolution::presets() {
+                        ui.selectable_value(
+                            &mut ui_state.pending_settings.resolution,
+                            *resolution,
+                            resolution.to_string(),
+                        );
+                    }
+                });
+        });
+
+        ui.horizontal_wrapped(|ui| {
+            ui.label(egui::RichText::new("显示模式").color(war_text_muted()));
+            for mode in DisplayMode::variants() {
+                ui.radio_value(
+                    &mut ui_state.pending_settings.display_mode,
+                    *mode,
+                    mode.label(),
+                );
+            }
+        });
+
+        ui.checkbox(&mut ui_state.pending_settings.vsync, "垂直同步");
+
+        if ui_state.pending_settings != ui_state.applied_settings {
+            ui.colored_label(war_gold(), "有未应用更改");
+        }
+
+        ui.add_space(8.0);
+        ui.horizontal_wrapped(|ui| {
+            if ui
+                .add_sized([132.0, 34.0], egui::Button::new("应用并保存"))
+                .clicked()
+            {
+                apply_settings = true;
+                ui_state.settings_open = false;
+            }
+            if ui.button("恢复默认").clicked() {
+                ui_state.pending_settings = AppSettings::default();
+                ui_state.message = "显示设置已恢复默认，点击应用并保存生效".to_string();
+            }
+        });
+    });
+    apply_settings
+}
+
+fn apply_pending_display_settings(ui_state: &mut GameUiState, window: &mut Window) {
+    let settings = ui_state.pending_settings;
+    settings.apply_to_window(window);
+    ui_state.applied_settings = settings;
+    match ui_state.settings_store.save(settings) {
+        Ok(()) => {
+            ui_state.message = format!(
+                "显示设置已保存到 {}",
+                ui_state.settings_store.path().display()
+            );
+        }
+        Err(error) => {
+            ui_state.message = format!("显示设置已应用，但保存失败: {error}");
+        }
+    }
 }
 
 fn start_history_game(ui_state: &mut GameUiState) {
@@ -716,7 +920,7 @@ fn city_drawer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui
 }
 
 fn report_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
-    let width = (screen.width() * 0.58).clamp(360.0, 760.0);
+    let width = (screen.width() * 0.62).clamp(420.0, 880.0);
     egui::Area::new(egui::Id::new("hud_report_panel"))
         .order(egui::Order::Foreground)
         .anchor(
@@ -743,7 +947,7 @@ fn report_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rec
                 });
                 if ui_state.reports_open {
                     ui.separator();
-                    report_panel(ui, ui_state);
+                    report_panel(ui, ui_state, screen);
                 } else if !ui_state.message.is_empty() {
                     ui.label(&ui_state.message);
                 }
@@ -1438,12 +1642,20 @@ fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
     });
 }
 
-fn report_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
+fn report_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, screen: egui::Rect) {
     let Some(game) = &ui_state.game else {
         return;
     };
+    let report_count = game.reports.len();
+    let visible_start = report_count.saturating_sub(12);
+    let report_height = (screen.height() * 0.32).clamp(220.0, 340.0);
+    ui.set_min_height(report_height);
     egui::ScrollArea::vertical()
-        .max_height(150.0)
+        .id_salt("turn_report_scroll")
+        .max_height(report_height)
+        .min_scrolled_height(report_height)
+        .stick_to_bottom(true)
+        .auto_shrink([false, false])
         .show(ui, |ui| {
             if !ui_state.message.is_empty() {
                 ui.colored_label(war_gold(), &ui_state.message);
@@ -1452,7 +1664,7 @@ fn report_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
             if game.reports.is_empty() {
                 ui.label("暂无报告");
             }
-            for report in game.reports.iter().rev().take(8) {
+            for report in game.reports.iter().skip(visible_start) {
                 ui.label(format!(
                     "{}年{}月 第{}回合",
                     report.year, report.month, report.turn
