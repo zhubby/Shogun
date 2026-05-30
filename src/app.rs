@@ -9,6 +9,10 @@ use std::path::PathBuf;
 const MAP_MIN_ZOOM: f32 = 0.65;
 const MAP_MAX_ZOOM: f32 = 5.0;
 const MAP_ZOOM_STEP: f32 = 1.2;
+const HUD_MARGIN: f32 = 16.0;
+const HUD_TOP_OFFSET: f32 = 14.0;
+const HUD_TOP_HEIGHT: f32 = 68.0;
+const CITY_DRAWER_WIDTH: f32 = 390.0;
 
 pub fn run() {
     App::new()
@@ -38,10 +42,13 @@ struct GameUiState {
     selected_scenario_id: ScenarioId,
     history_factions: Vec<Faction>,
     screen: Screen,
-    in_game_view: InGameView,
     city_tab: CityTab,
     map_zoom: f32,
     map_pan: egui::Vec2,
+    city_drawer_open: bool,
+    city_list_open: bool,
+    reports_open: bool,
+    save_panel_open: bool,
     game: Option<GameState>,
     selected_faction_id: FactionId,
     selected_city_id: Option<CityId>,
@@ -83,10 +90,13 @@ impl Default for GameUiState {
             selected_scenario_id: history_menu.selected_scenario_id,
             history_factions: history_menu.factions,
             screen: Screen::MainMenu,
-            in_game_view: InGameView::Map,
             city_tab: CityTab::Construction,
             map_zoom: 1.0,
             map_pan: egui::Vec2::ZERO,
+            city_drawer_open: false,
+            city_list_open: false,
+            reports_open: true,
+            save_panel_open: false,
             game: None,
             selected_faction_id,
             selected_city_id: None,
@@ -204,12 +214,6 @@ enum Screen {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum InGameView {
-    Map,
-    City,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CityTab {
     Construction,
     Governance,
@@ -220,10 +224,7 @@ fn game_ui_system(mut contexts: EguiContexts, mut ui_state: ResMut<GameUiState>)
         return;
     };
     configure_egui_fonts(ctx, &mut ui_state);
-
-    egui::TopBottomPanel::top("top_bar").show(ctx, |ui| {
-        top_bar(ui, &mut ui_state);
-    });
+    configure_egui_theme(ctx);
 
     match ui_state.screen {
         Screen::MainMenu => main_menu(ctx, &mut ui_state),
@@ -231,52 +232,107 @@ fn game_ui_system(mut contexts: EguiContexts, mut ui_state: ResMut<GameUiState>)
     }
 }
 
-fn top_bar(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
-    ui.horizontal(|ui| {
-        ui.heading("Shogun");
-        ui.separator();
-        if let Some(game) = &ui_state.game {
-            ui.label(format!(
-                "{} {}年{}月 第{}回合",
-                game.scenario_name, game.year, game.month, game.turn
-            ));
-            if let Some(faction) = game.factions.get(&game.player_faction_id) {
-                ui.label(format!("玩家: {}", faction.name));
-            }
-            match &game.status {
-                GameStatus::Running => {}
-                GameStatus::Victory { reason } => {
-                    ui.colored_label(egui::Color32::LIGHT_GREEN, format!("胜利: {reason}"));
-                }
-                GameStatus::Defeat { reason } => {
-                    ui.colored_label(egui::Color32::LIGHT_RED, format!("失败: {reason}"));
-                }
-            }
-        } else {
-            ui.label("桌面策略游戏原型");
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("主菜单").clicked() {
-                ui_state.screen = Screen::MainMenu;
-            }
+fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) {
+    egui::CentralPanel::default()
+        .frame(egui::Frame::NONE)
+        .show(ctx, |ui| {
+            let rect = ui.max_rect();
+            let painter = ui.painter_at(rect);
+            draw_menu_background(&painter, rect);
+
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.add_space(34.0);
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            egui::RichText::new("Shogun")
+                                .size(42.0)
+                                .color(war_gold())
+                                .strong(),
+                        );
+                        ui.label(
+                            egui::RichText::new("三国志风格策略原型")
+                                .size(18.0)
+                                .color(war_text_muted()),
+                        );
+                    });
+                    ui.add_space(24.0);
+
+                    let total_width = (ui.available_width() - HUD_MARGIN * 2.0).min(1060.0);
+                    let stacked_menu = total_width < 900.0;
+                    let panel_width = if stacked_menu {
+                        total_width
+                    } else {
+                        (total_width - 18.0) * 0.5
+                    };
+                    let left_pad = ((ui.available_width() - total_width) * 0.5).max(HUD_MARGIN);
+
+                    if stacked_menu {
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(left_pad);
+                            war_panel_frame().show(ui, |ui| {
+                                ui.set_width(panel_width);
+                                new_game_menu(ui, ui_state);
+                            });
+                        });
+                        ui.add_space(14.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(left_pad);
+                            war_panel_frame().show(ui, |ui| {
+                                ui.set_width(panel_width);
+                                load_game_menu(ui, ui_state);
+                            });
+                        });
+                    } else {
+                        ui.horizontal_top(|ui| {
+                            ui.add_space(left_pad);
+                            war_panel_frame().show(ui, |ui| {
+                                ui.set_width(panel_width);
+                                new_game_menu(ui, ui_state);
+                            });
+                            ui.add_space(18.0);
+                            war_panel_frame().show(ui, |ui| {
+                                ui.set_width(panel_width);
+                                load_game_menu(ui, ui_state);
+                            });
+                        });
+                    }
+
+                    if !ui_state.message.is_empty() {
+                        ui.add_space(16.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(left_pad);
+                            war_panel_frame().show(ui, |ui| {
+                                ui.set_width(total_width);
+                                ui.colored_label(war_gold(), &ui_state.message);
+                            });
+                        });
+                    }
+                });
         });
-    });
 }
 
-fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) {
-    egui::CentralPanel::default().show(ctx, |ui| {
-        ui.horizontal_top(|ui| {
-            ui.vertical(|ui| {
-                ui.heading("新开局");
-                ui.add_space(8.0);
-                if !ui_state.history_scenarios.is_empty() {
-                    ui.horizontal(|ui| {
-                        ui.label("剧本");
-                        if ui.button("刷新资料库").clicked() {
-                            refresh_history_menu(ui_state);
-                        }
-                    });
-                    let mut scenario_changed = false;
+fn new_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
+    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.set_width(ui.available_width());
+        ui.heading(egui::RichText::new("新开局").color(war_gold()));
+        ui.add_space(8.0);
+        if !ui_state.history_scenarios.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("剧本").color(war_text_muted()));
+                if ui.button("刷新资料库").clicked() {
+                    refresh_history_menu(ui_state);
+                }
+            });
+            let mut scenario_changed = false;
+            egui::ScrollArea::vertical()
+                .id_salt("main_menu_scenarios")
+                .max_height(190.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
                     for scenario in ui_state.history_scenarios.clone() {
                         let label = format!(
                             "{} ({}年{}月)",
@@ -289,12 +345,19 @@ fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) {
                             scenario_changed = true;
                         }
                     }
-                    if scenario_changed {
-                        refresh_history_factions(ui_state);
-                    }
+                });
+            if scenario_changed {
+                refresh_history_factions(ui_state);
+            }
 
-                    ui.add_space(8.0);
-                    ui.label("势力");
+            ui.add_space(10.0);
+            ui.label(egui::RichText::new("势力").color(war_text_muted()));
+            egui::ScrollArea::vertical()
+                .id_salt("main_menu_factions")
+                .max_height(160.0)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
                     for faction in ui_state
                         .history_factions
                         .iter()
@@ -304,62 +367,84 @@ fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) {
                     {
                         ui.radio_value(&mut ui_state.selected_faction_id, faction.id, faction.name);
                     }
-                    ui.add_space(8.0);
-                    if ui.button("开始游戏").clicked() {
-                        start_history_game(ui_state);
-                    }
-                } else {
-                    ui.label("选择势力");
-                    for faction_id in &ui_state.json_scenario.player_selectable_factions {
-                        let faction_name = ui_state
-                            .json_scenario
-                            .factions
-                            .iter()
-                            .find(|faction| &faction.id == faction_id)
-                            .map(|faction| faction.name.as_str())
-                            .unwrap_or(faction_id);
-                        ui.radio_value(
-                            &mut ui_state.selected_faction_id,
-                            faction_id.clone(),
-                            faction_name,
-                        );
-                    }
-                    ui.add_space(8.0);
-                    if ui.button("开始兼容小剧本").clicked() {
-                        start_json_game(ui_state);
-                    }
-                }
-            });
+                });
+            ui.add_space(12.0);
+            if ui
+                .add_sized([ui.available_width(), 34.0], egui::Button::new("开始游戏"))
+                .clicked()
+            {
+                start_history_game(ui_state);
+            }
+        } else {
+            ui.label(egui::RichText::new("选择势力").color(war_text_muted()));
+            for faction_id in &ui_state.json_scenario.player_selectable_factions {
+                let faction_name = ui_state
+                    .json_scenario
+                    .factions
+                    .iter()
+                    .find(|faction| &faction.id == faction_id)
+                    .map(|faction| faction.name.as_str())
+                    .unwrap_or(faction_id);
+                ui.radio_value(
+                    &mut ui_state.selected_faction_id,
+                    faction_id.clone(),
+                    faction_name,
+                );
+            }
+            ui.add_space(12.0);
+            if ui
+                .add_sized(
+                    [ui.available_width(), 34.0],
+                    egui::Button::new("开始兼容小剧本"),
+                )
+                .clicked()
+            {
+                start_json_game(ui_state);
+            }
+        }
+    });
+}
 
-            ui.separator();
-
-            ui.vertical(|ui| {
-                ui.heading("读取存档");
-                ui.label(format!(
-                    "目录: {}",
-                    ui_state.save_manager.base_dir().display()
-                ));
-                if ui.button("刷新存档列表").clicked() {
-                    refresh_saves(ui_state);
-                }
-                ui.add_space(8.0);
-                let slots = ui_state.save_slots.clone();
+fn load_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
+    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.set_width(ui.available_width());
+        ui.heading(egui::RichText::new("读取存档").color(war_gold()));
+        ui.label(
+            egui::RichText::new(format!(
+                "目录: {}",
+                ui_state.save_manager.base_dir().display()
+            ))
+            .color(war_text_muted()),
+        );
+        if ui.button("刷新存档列表").clicked() {
+            refresh_saves(ui_state);
+        }
+        ui.add_space(8.0);
+        let slots = ui_state.save_slots.clone();
+        if slots.is_empty() {
+            ui.label("暂无存档");
+        }
+        egui::ScrollArea::vertical()
+            .id_salt("main_menu_saves")
+            .max_height(430.0)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 for slot in slots {
-                    ui.group(|ui| {
+                    war_sub_panel_frame().show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(format!(
+                            "{} - {}年{}月 第{}回合",
+                            slot.display_name, slot.year, slot.month, slot.turn
+                        ));
                         ui.horizontal(|ui| {
-                            ui.label(format!(
-                                "{} - {}年{}月 第{}回合",
-                                slot.display_name, slot.year, slot.month, slot.turn
-                            ));
                             if ui.button("读取").clicked() {
                                 match ui_state.save_manager.load_slot(&slot.slot_id) {
-                                    Ok(game) => {
-                                        enter_game(
-                                            ui_state,
-                                            game,
-                                            format!("读取存档 {}", slot.display_name),
-                                        );
-                                    }
+                                    Ok(game) => enter_game(
+                                        ui_state,
+                                        game,
+                                        format!("读取存档 {}", slot.display_name),
+                                    ),
                                     Err(error) => ui_state.message = error.to_string(),
                                 }
                             }
@@ -375,14 +460,9 @@ fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) {
                             }
                         });
                     });
+                    ui.add_space(6.0);
                 }
             });
-        });
-
-        if !ui_state.message.is_empty() {
-            ui.separator();
-            ui.label(&ui_state.message);
-        }
     });
 }
 
@@ -418,8 +498,11 @@ fn enter_game(ui_state: &mut GameUiState, game: GameState, message: String) {
     ui_state.selected_transfer_target = None;
     ui_state.selected_expedition_target = None;
     ui_state.selected_diplomacy_target = None;
-    ui_state.in_game_view = InGameView::Map;
     ui_state.city_tab = CityTab::Construction;
+    ui_state.city_drawer_open = ui_state.selected_city_id.is_some();
+    ui_state.city_list_open = false;
+    ui_state.reports_open = true;
+    ui_state.save_panel_open = false;
     reset_map_view(ui_state);
     ui_state.game = Some(game);
     ui_state.screen = Screen::InGame;
@@ -427,66 +510,269 @@ fn enter_game(ui_state: &mut GameUiState, game: GameState, message: String) {
 }
 
 fn in_game(ctx: &egui::Context, ui_state: &mut GameUiState) {
-    egui::SidePanel::left("city_panel")
-        .resizable(true)
-        .default_width(360.0)
-        .show(ctx, |ui| match ui_state.in_game_view {
-            InGameView::Map => map_side_panel(ui, ui_state),
-            InGameView::City => city_navigation_panel(ui, ui_state),
+    egui::CentralPanel::default()
+        .frame(egui::Frame::NONE)
+        .show(ctx, |ui| {
+            map_panel(ui, ui_state);
         });
 
-    egui::TopBottomPanel::bottom("report_panel")
-        .resizable(true)
-        .default_height(160.0)
-        .show(ctx, |ui| report_panel(ui, ui_state));
+    in_game_hud(ctx, ui_state);
+}
 
-    egui::CentralPanel::default().show(ctx, |ui| match ui_state.in_game_view {
-        InGameView::Map => map_panel(ui, ui_state),
-        InGameView::City => selected_city_panel(ui, ui_state),
+fn in_game_hud(ctx: &egui::Context, ui_state: &mut GameUiState) {
+    let screen = ctx.content_rect();
+    top_status_hud(ctx, ui_state, screen);
+    left_map_hud(ctx, ui_state);
+    city_list_hud(ctx, ui_state, screen);
+    save_hud(ctx, ui_state, screen);
+    city_drawer_hud(ctx, ui_state, screen);
+    report_hud(ctx, ui_state, screen);
+}
+
+fn top_status_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
+    let width = (screen.width() - HUD_MARGIN * 2.0).max(320.0);
+    let summary = ui_state.game.as_ref().map(|game| {
+        let faction_name = game
+            .factions
+            .get(&game.player_faction_id)
+            .map(|faction| faction.name.clone())
+            .unwrap_or_else(|| "未知势力".to_string());
+        let status = match &game.status {
+            GameStatus::Running => None,
+            GameStatus::Victory { reason } => Some(format!("胜利: {reason}")),
+            GameStatus::Defeat { reason } => Some(format!("失败: {reason}")),
+        };
+        (
+            game.scenario_name.clone(),
+            game.year,
+            game.month,
+            game.turn,
+            faction_name,
+            status,
+        )
     });
+
+    egui::Area::new(egui::Id::new("hud_top_status"))
+        .order(egui::Order::Foreground)
+        .anchor(
+            egui::Align2::LEFT_TOP,
+            egui::vec2(HUD_MARGIN, HUD_TOP_OFFSET),
+        )
+        .show(ctx, |ui| {
+            war_bar_frame().show(ui, |ui| {
+                ui.set_width(width);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new("Shogun")
+                            .size(24.0)
+                            .color(war_gold())
+                            .strong(),
+                    );
+                    ui.separator();
+                    if let Some((scenario, year, month, turn, faction_name, status)) = summary {
+                        ui.label(format!("{scenario}  {year}年{month}月  第{turn}回合"));
+                        ui.label(format!("玩家: {faction_name}"));
+                        if let Some(status) = status {
+                            ui.colored_label(egui::Color32::from_rgb(200, 72, 52), status);
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("主菜单").clicked() {
+                            ui_state.screen = Screen::MainMenu;
+                        }
+                        if ui.button("存档").clicked() {
+                            ui_state.save_panel_open = !ui_state.save_panel_open;
+                        }
+                        if ui.button("清空命令").clicked() {
+                            clear_pending_commands(ui_state);
+                        }
+                        if ui.button("结束本月").clicked() {
+                            finish_current_turn(ui_state);
+                        }
+                    });
+                });
+            });
+        });
 }
 
-fn map_side_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
-    save_controls(ui, ui_state);
-    ui.separator();
-    turn_controls(ui, ui_state);
-    ui.separator();
-    selected_city_summary(ui, ui_state);
-    ui.separator();
-    map_controls(ui, ui_state);
-    ui.separator();
-    city_list(ui, ui_state);
+fn left_map_hud(ctx: &egui::Context, ui_state: &mut GameUiState) {
+    egui::Area::new(egui::Id::new("hud_left_map_tools"))
+        .order(egui::Order::Foreground)
+        .anchor(
+            egui::Align2::LEFT_TOP,
+            egui::vec2(HUD_MARGIN, HUD_TOP_OFFSET + HUD_TOP_HEIGHT + 14.0),
+        )
+        .show(ctx, |ui| {
+            war_panel_frame().show(ui, |ui| {
+                ui.set_width(285.0);
+                map_controls(ui, ui_state);
+                ui.separator();
+                selected_city_summary(ui, ui_state);
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui
+                        .button(if ui_state.city_list_open {
+                            "收起城池"
+                        } else {
+                            "城池一览"
+                        })
+                        .clicked()
+                    {
+                        ui_state.city_list_open = !ui_state.city_list_open;
+                    }
+                    if ui.button("战报").clicked() {
+                        ui_state.reports_open = !ui_state.reports_open;
+                    }
+                });
+            });
+        });
 }
 
-fn city_navigation_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
-    save_controls(ui, ui_state);
-    ui.separator();
-    turn_controls(ui, ui_state);
-    ui.separator();
-    if ui.button("返回地图").clicked() {
-        ui_state.in_game_view = InGameView::Map;
+fn city_list_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
+    if !ui_state.city_list_open {
+        return;
     }
-    ui.separator();
-    city_list(ui, ui_state);
+    let max_height = (screen.height() - HUD_TOP_HEIGHT - 170.0).clamp(240.0, 520.0);
+    egui::Area::new(egui::Id::new("hud_city_list"))
+        .order(egui::Order::Foreground)
+        .anchor(
+            egui::Align2::LEFT_TOP,
+            egui::vec2(HUD_MARGIN, HUD_TOP_OFFSET + HUD_TOP_HEIGHT + 210.0),
+        )
+        .show(ctx, |ui| {
+            war_panel_frame().show(ui, |ui| {
+                ui.set_width(285.0);
+                ui.set_max_height(max_height);
+                city_list(ui, ui_state);
+            });
+        });
 }
 
-fn turn_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
+fn save_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
+    if !ui_state.save_panel_open {
+        return;
+    }
+    let x_offset = if ui_state.city_drawer_open && screen.width() > 860.0 {
+        -(CITY_DRAWER_WIDTH + HUD_MARGIN + 18.0)
+    } else {
+        -HUD_MARGIN
+    };
+    egui::Area::new(egui::Id::new("hud_save_panel"))
+        .order(egui::Order::Foreground)
+        .anchor(
+            egui::Align2::RIGHT_TOP,
+            egui::vec2(x_offset, HUD_TOP_OFFSET + HUD_TOP_HEIGHT + 14.0),
+        )
+        .show(ctx, |ui| {
+            war_panel_frame().show(ui, |ui| {
+                ui.set_width(330.0);
+                ui.horizontal(|ui| {
+                    ui.heading(egui::RichText::new("存档").color(war_gold()));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("收起").clicked() {
+                            ui_state.save_panel_open = false;
+                        }
+                    });
+                });
+                save_controls(ui, ui_state);
+            });
+        });
+}
+
+fn city_drawer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
+    if !ui_state.city_drawer_open {
+        return;
+    }
+    let max_height = (screen.height() - HUD_TOP_HEIGHT - 48.0).max(360.0);
+    egui::Area::new(egui::Id::new("hud_city_drawer"))
+        .order(egui::Order::Foreground)
+        .anchor(
+            egui::Align2::RIGHT_TOP,
+            egui::vec2(-HUD_MARGIN, HUD_TOP_OFFSET + HUD_TOP_HEIGHT + 14.0),
+        )
+        .show(ctx, |ui| {
+            war_panel_frame().show(ui, |ui| {
+                let drawer_width = CITY_DRAWER_WIDTH
+                    .min(screen.width() - HUD_MARGIN * 2.0)
+                    .max(300.0);
+                ui.set_width(drawer_width);
+                ui.horizontal(|ui| {
+                    ui.heading(egui::RichText::new("军令").color(war_gold()));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("收起").clicked() {
+                            ui_state.city_drawer_open = false;
+                        }
+                    });
+                });
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .max_height(max_height)
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        selected_city_panel(ui, ui_state);
+                    });
+            });
+        });
+}
+
+fn report_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
+    let width = (screen.width() * 0.58).clamp(360.0, 760.0);
+    egui::Area::new(egui::Id::new("hud_report_panel"))
+        .order(egui::Order::Foreground)
+        .anchor(
+            egui::Align2::LEFT_BOTTOM,
+            egui::vec2(HUD_MARGIN, -HUD_MARGIN),
+        )
+        .show(ctx, |ui| {
+            war_panel_frame().show(ui, |ui| {
+                ui.set_width(width);
+                ui.horizontal(|ui| {
+                    ui.heading(egui::RichText::new("回合报告").color(war_gold()));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .button(if ui_state.reports_open {
+                                "收起"
+                            } else {
+                                "展开"
+                            })
+                            .clicked()
+                        {
+                            ui_state.reports_open = !ui_state.reports_open;
+                        }
+                    });
+                });
+                if ui_state.reports_open {
+                    ui.separator();
+                    report_panel(ui, ui_state);
+                } else if !ui_state.message.is_empty() {
+                    ui.label(&ui_state.message);
+                }
+            });
+        });
+}
+
+fn finish_current_turn(ui_state: &mut GameUiState) {
     let Some(game) = &mut ui_state.game else {
-        ui.label("尚未开始游戏");
+        ui_state.message = "尚未开始游戏".to_string();
         return;
     };
-    ui.horizontal(|ui| {
-        if ui.button("结束本月").clicked() && game.status == GameStatus::Running {
-            let provider = RuleBasedAiProvider;
-            let report = finish_turn(game, &provider);
-            ui_state.message = format!("完成 {} 条结算记录", report.entries.len());
-            ui_state.selected_city_id = first_player_city(game);
-        }
-        if ui.button("清空待命令").clicked() {
-            game.pending_commands.clear();
-            ui_state.message = "已清空玩家待命令".to_string();
-        }
-    });
+    if game.status != GameStatus::Running {
+        return;
+    }
+    let provider = RuleBasedAiProvider;
+    let report = finish_turn(game, &provider);
+    ui_state.message = format!("完成 {} 条结算记录", report.entries.len());
+    ui_state.selected_city_id = first_player_city(game);
+    ui_state.city_drawer_open = ui_state.selected_city_id.is_some();
+}
+
+fn clear_pending_commands(ui_state: &mut GameUiState) {
+    let Some(game) = &mut ui_state.game else {
+        ui_state.message = "尚未开始游戏".to_string();
+        return;
+    };
+    game.pending_commands.clear();
+    ui_state.message = "已清空玩家待命令".to_string();
 }
 
 fn selected_city_summary(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
@@ -518,7 +804,7 @@ fn selected_city_summary(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
     ui.label(format!(
         "人口 {population} | 兵 {troops} | 金 {gold} | 粮 {food}"
     ));
-    if ui.button("进入城市").clicked() {
+    if ui.button("打开军令").clicked() {
         open_city(ui_state, city_id);
     }
 }
@@ -560,6 +846,7 @@ fn city_list(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
     ui.heading("城池");
     egui::ScrollArea::vertical()
         .id_salt("city_list")
+        .max_height(460.0)
         .auto_shrink([false, false])
         .show(ui, |ui| {
             for (city_id, city_name, faction_name) in rows {
@@ -568,12 +855,13 @@ fn city_list(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
                     ui.selectable_label(selected, format!("{} ({})", city_name, faction_name));
                 if response.clicked() {
                     ui_state.selected_city_id = Some(city_id.clone());
+                    ui_state.city_drawer_open = true;
                 }
                 if response.double_clicked() {
                     open_city(ui_state, city_id.clone());
                 }
                 response.context_menu(|ui| {
-                    if ui.button("进入城市").clicked() {
+                    if ui.button("打开军令").clicked() {
                         open_city(ui_state, city_id.clone());
                         ui.close();
                     }
@@ -584,7 +872,7 @@ fn city_list(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
 
 fn open_city(ui_state: &mut GameUiState, city_id: CityId) {
     ui_state.selected_city_id = Some(city_id);
-    ui_state.in_game_view = InGameView::City;
+    ui_state.city_drawer_open = true;
 }
 
 fn finish_turn(game: &mut GameState, provider: &RuleBasedAiProvider) -> TurnReport {
@@ -601,7 +889,6 @@ fn is_history_scenario(scenario_id: &str) -> bool {
 }
 
 fn save_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
-    ui.heading("存档");
     ui.horizontal(|ui| {
         ui.label("槽位");
         egui::ComboBox::from_id_salt("save_slot_combo")
@@ -1068,7 +1355,7 @@ fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
     let desired = ui.available_size();
     let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(24, 29, 34));
+    draw_strategy_map_background(&painter, rect);
 
     let scroll_delta = ui.input(|input| input.raw_scroll_delta.y);
     if response.hovered() && scroll_delta.abs() > f32::EPSILON {
@@ -1102,7 +1389,17 @@ fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
         };
         let a = map_to_screen(from.position, bounds, rect, ui_state);
         let b = map_to_screen(to.position, bounds, rect, ui_state);
-        painter.line_segment([a, b], egui::Stroke::new(3.0, egui::Color32::from_gray(96)));
+        painter.line_segment(
+            [a, b],
+            egui::Stroke::new(7.0, egui::Color32::from_rgba_unmultiplied(10, 12, 10, 110)),
+        );
+        painter.line_segment(
+            [a, b],
+            egui::Stroke::new(
+                3.0,
+                egui::Color32::from_rgba_unmultiplied(160, 128, 77, 185),
+            ),
+        );
     }
 
     for city in game.cities.values() {
@@ -1110,33 +1407,8 @@ fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
         let faction = &game.factions[&city.faction_id];
         let color = faction_color(faction);
         let selected = ui_state.selected_city_id.as_deref() == Some(city.id.as_str());
-        painter.circle_filled(pos, 20.0, color);
-        painter.circle_stroke(
-            pos,
-            if selected { 26.0 } else { 22.0 },
-            egui::Stroke::new(
-                if selected { 4.0 } else { 2.0 },
-                if selected {
-                    egui::Color32::WHITE
-                } else {
-                    egui::Color32::from_gray(35)
-                },
-            ),
-        );
-        painter.text(
-            pos + egui::vec2(0.0, 31.0),
-            egui::Align2::CENTER_CENTER,
-            &city.name,
-            egui::FontId::proportional(16.0),
-            egui::Color32::WHITE,
-        );
-        painter.text(
-            pos,
-            egui::Align2::CENTER_CENTER,
-            city.troops.to_string(),
-            egui::FontId::proportional(12.0),
-            egui::Color32::BLACK,
-        );
+        let player_owned = city.faction_id == game.player_faction_id;
+        draw_city_marker(&painter, pos, city, color, selected, player_owned, ui_state);
     }
 
     let picked_city = response
@@ -1146,6 +1418,7 @@ fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
     if response.clicked() || response.secondary_clicked() {
         if let Some(city_id) = picked_city.clone() {
             ui_state.selected_city_id = Some(city_id);
+            ui_state.city_drawer_open = true;
         }
     }
     if response.double_clicked() {
@@ -1157,7 +1430,7 @@ fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
     let context_city_id = ui_state.selected_city_id.clone();
     response.context_menu(|ui| {
         if let Some(city_id) = context_city_id.clone() {
-            if ui.button("进入城市").clicked() {
+            if ui.button("打开军令").clicked() {
                 open_city(ui_state, city_id);
                 ui.close();
             }
@@ -1169,26 +1442,34 @@ fn report_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
     let Some(game) = &ui_state.game else {
         return;
     };
-    ui.heading("回合报告");
-    egui::ScrollArea::vertical().show(ui, |ui| {
-        for report in game.reports.iter().rev().take(8) {
-            ui.label(format!(
-                "{}年{}月 第{}回合",
-                report.year, report.month, report.turn
-            ));
-            for entry in &report.entries {
-                match entry.severity {
-                    ReportSeverity::Info => {
-                        ui.label(format!("· {}", entry.message));
-                    }
-                    ReportSeverity::Warning => {
-                        ui.colored_label(egui::Color32::YELLOW, format!("! {}", entry.message));
+    egui::ScrollArea::vertical()
+        .max_height(150.0)
+        .show(ui, |ui| {
+            if !ui_state.message.is_empty() {
+                ui.colored_label(war_gold(), &ui_state.message);
+                ui.separator();
+            }
+            if game.reports.is_empty() {
+                ui.label("暂无报告");
+            }
+            for report in game.reports.iter().rev().take(8) {
+                ui.label(format!(
+                    "{}年{}月 第{}回合",
+                    report.year, report.month, report.turn
+                ));
+                for entry in &report.entries {
+                    match entry.severity {
+                        ReportSeverity::Info => {
+                            ui.label(format!("· {}", entry.message));
+                        }
+                        ReportSeverity::Warning => {
+                            ui.colored_label(egui::Color32::YELLOW, format!("! {}", entry.message));
+                        }
                     }
                 }
+                ui.separator();
             }
-            ui.separator();
-        }
-    });
+        });
 }
 
 fn refresh_saves(ui_state: &mut GameUiState) {
@@ -1200,6 +1481,257 @@ fn first_player_city(game: &GameState) -> Option<CityId> {
         .values()
         .find(|city| city.faction_id == game.player_faction_id)
         .map(|city| city.id.clone())
+}
+
+fn configure_egui_theme(ctx: &egui::Context) {
+    let mut style = (*ctx.style()).clone();
+    style.visuals = egui::Visuals::dark();
+    style.visuals.override_text_color = Some(war_text());
+    style.visuals.weak_text_color = Some(war_text_muted());
+    style.visuals.window_fill = war_panel_fill();
+    style.visuals.panel_fill = egui::Color32::TRANSPARENT;
+    style.visuals.extreme_bg_color = egui::Color32::from_rgb(15, 14, 12);
+    style.visuals.faint_bg_color = egui::Color32::from_rgb(43, 38, 29);
+    style.visuals.hyperlink_color = war_gold();
+    style.visuals.selection.bg_fill = egui::Color32::from_rgb(122, 59, 39);
+    style.visuals.selection.stroke = egui::Stroke::new(1.0, war_gold());
+    style.visuals.widgets.inactive.bg_fill = egui::Color32::from_rgb(45, 36, 27);
+    style.visuals.widgets.inactive.weak_bg_fill = egui::Color32::from_rgb(57, 45, 32);
+    style.visuals.widgets.inactive.bg_stroke = egui::Stroke::new(1.0, war_border());
+    style.visuals.widgets.hovered.bg_fill = egui::Color32::from_rgb(83, 61, 37);
+    style.visuals.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(94, 69, 42);
+    style.visuals.widgets.hovered.bg_stroke = egui::Stroke::new(1.0, war_gold());
+    style.visuals.widgets.active.bg_fill = egui::Color32::from_rgb(110, 53, 37);
+    style.visuals.widgets.active.bg_stroke = egui::Stroke::new(1.0, war_gold());
+    style.spacing.item_spacing = egui::vec2(8.0, 7.0);
+    style.spacing.button_padding = egui::vec2(10.0, 6.0);
+    ctx.set_style(style);
+}
+
+fn war_panel_frame() -> egui::Frame {
+    egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(14, 12))
+        .fill(war_panel_fill())
+        .stroke(egui::Stroke::new(1.0, war_border()))
+        .corner_radius(6)
+}
+
+fn war_bar_frame() -> egui::Frame {
+    egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(14, 9))
+        .fill(egui::Color32::from_rgba_unmultiplied(18, 17, 14, 238))
+        .stroke(egui::Stroke::new(1.0, war_border()))
+        .corner_radius(4)
+}
+
+fn war_sub_panel_frame() -> egui::Frame {
+    egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(10, 8))
+        .fill(egui::Color32::from_rgba_unmultiplied(34, 29, 22, 210))
+        .stroke(egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgba_unmultiplied(138, 101, 58, 120),
+        ))
+        .corner_radius(4)
+}
+
+fn war_panel_fill() -> egui::Color32 {
+    egui::Color32::from_rgba_unmultiplied(24, 21, 16, 232)
+}
+
+fn war_text() -> egui::Color32 {
+    egui::Color32::from_rgb(226, 213, 184)
+}
+
+fn war_text_muted() -> egui::Color32 {
+    egui::Color32::from_rgb(168, 154, 124)
+}
+
+fn war_gold() -> egui::Color32 {
+    egui::Color32::from_rgb(215, 162, 72)
+}
+
+fn war_border() -> egui::Color32 {
+    egui::Color32::from_rgb(118, 85, 48)
+}
+
+fn draw_menu_background(painter: &egui::Painter, rect: egui::Rect) {
+    draw_strategy_map_background(painter, rect);
+    painter.rect_filled(
+        rect,
+        0.0,
+        egui::Color32::from_rgba_unmultiplied(8, 8, 7, 86),
+    );
+    let top = egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.top() + 150.0));
+    painter.rect_filled(
+        top,
+        0.0,
+        egui::Color32::from_rgba_unmultiplied(15, 13, 10, 120),
+    );
+}
+
+fn draw_strategy_map_background(painter: &egui::Painter, rect: egui::Rect) {
+    painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(35, 39, 29));
+
+    let mut x = rect.left() - rect.left().rem_euclid(72.0);
+    while x < rect.right() {
+        painter.line_segment(
+            [
+                egui::pos2(x, rect.top()),
+                egui::pos2(x + 44.0, rect.bottom()),
+            ],
+            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(120, 104, 65, 24)),
+        );
+        x += 72.0;
+    }
+
+    let mut y = rect.top() - rect.top().rem_euclid(58.0);
+    while y < rect.bottom() {
+        painter.line_segment(
+            [
+                egui::pos2(rect.left(), y),
+                egui::pos2(rect.right(), y + 18.0),
+            ],
+            egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(94, 120, 93, 18)),
+        );
+        y += 58.0;
+    }
+
+    let river_y = rect.center().y + rect.height() * 0.12;
+    let river = [
+        egui::pos2(rect.left() - 80.0, river_y - 28.0),
+        egui::pos2(rect.left() + rect.width() * 0.22, river_y + 22.0),
+        egui::pos2(rect.left() + rect.width() * 0.44, river_y - 10.0),
+        egui::pos2(rect.left() + rect.width() * 0.68, river_y + 30.0),
+        egui::pos2(rect.right() + 80.0, river_y - 18.0),
+    ];
+    for segment in river.windows(2) {
+        painter.line_segment(
+            [segment[0], segment[1]],
+            egui::Stroke::new(15.0, egui::Color32::from_rgba_unmultiplied(40, 83, 84, 48)),
+        );
+        painter.line_segment(
+            [segment[0], segment[1]],
+            egui::Stroke::new(
+                3.0,
+                egui::Color32::from_rgba_unmultiplied(111, 143, 126, 74),
+            ),
+        );
+    }
+
+    painter.rect_stroke(
+        rect.shrink(8.0),
+        0.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(180, 132, 74, 76)),
+        egui::StrokeKind::Inside,
+    );
+}
+
+fn draw_city_marker(
+    painter: &egui::Painter,
+    pos: egui::Pos2,
+    city: &City,
+    color: egui::Color32,
+    selected: bool,
+    player_owned: bool,
+    ui_state: &GameUiState,
+) {
+    let scale = ui_state.map_zoom.sqrt().clamp(0.85, 1.35);
+    let pole_top = pos + egui::vec2(-13.0 * scale, -31.0 * scale);
+    let pole_bottom = pos + egui::vec2(-13.0 * scale, 18.0 * scale);
+    let flag_fill = if player_owned {
+        color
+    } else {
+        color.gamma_multiply(0.82)
+    };
+    let shadow = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 120);
+
+    painter.line_segment(
+        [
+            pole_top + egui::vec2(2.0, 3.0),
+            pole_bottom + egui::vec2(2.0, 3.0),
+        ],
+        egui::Stroke::new(5.0, shadow),
+    );
+    painter.line_segment(
+        [pole_top, pole_bottom],
+        egui::Stroke::new(3.0, egui::Color32::from_rgb(34, 26, 18)),
+    );
+
+    let banner = egui::Rect::from_min_size(
+        pole_top + egui::vec2(3.0 * scale, 1.0 * scale),
+        egui::vec2(43.0 * scale, 20.0 * scale),
+    );
+    painter.rect(
+        banner.translate(egui::vec2(2.0, 2.0)),
+        2.0,
+        shadow,
+        egui::Stroke::NONE,
+        egui::StrokeKind::Outside,
+    );
+    painter.rect(
+        banner,
+        2.0,
+        flag_fill,
+        egui::Stroke::new(
+            if selected { 2.5 } else { 1.5 },
+            if selected {
+                war_gold()
+            } else {
+                egui::Color32::from_rgb(35, 28, 20)
+            },
+        ),
+        egui::StrokeKind::Outside,
+    );
+
+    let base = egui::Rect::from_center_size(
+        pos + egui::vec2(0.0, 12.0 * scale),
+        egui::vec2(42.0 * scale, 17.0 * scale),
+    );
+    painter.rect(
+        base,
+        4.0,
+        egui::Color32::from_rgba_unmultiplied(20, 18, 14, 222),
+        egui::Stroke::new(1.0, flag_fill),
+        egui::StrokeKind::Outside,
+    );
+    painter.text(
+        base.center(),
+        egui::Align2::CENTER_CENTER,
+        compact_troops(city.troops),
+        egui::FontId::proportional(12.0 * scale),
+        war_text(),
+    );
+
+    let label_center = pos + egui::vec2(0.0, 42.0 * scale);
+    let label_width = (city.name.chars().count() as f32 * 17.0 + 28.0).max(68.0);
+    let label_rect =
+        egui::Rect::from_center_size(label_center, egui::vec2(label_width, 25.0 * scale));
+    painter.rect(
+        label_rect,
+        4.0,
+        egui::Color32::from_rgba_unmultiplied(17, 16, 13, if selected { 238 } else { 204 }),
+        egui::Stroke::new(
+            if selected { 1.5 } else { 1.0 },
+            if selected { war_gold() } else { war_border() },
+        ),
+        egui::StrokeKind::Outside,
+    );
+    painter.text(
+        label_center,
+        egui::Align2::CENTER_CENTER,
+        &city.name,
+        egui::FontId::proportional(15.0 * scale),
+        if selected { war_gold() } else { war_text() },
+    );
+}
+
+fn compact_troops(troops: u32) -> String {
+    if troops >= 10_000 {
+        format!("{:.1}万", troops as f32 / 10_000.0)
+    } else {
+        troops.to_string()
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1234,7 +1766,7 @@ fn map_to_screen(
     rect: egui::Rect,
     ui_state: &GameUiState,
 ) -> egui::Pos2 {
-    let padding = 70.0;
+    let padding = (rect.width().min(rect.height()) * 0.09).clamp(72.0, 118.0);
     let width = (bounds.max_x - bounds.min_x).max(1.0);
     let height = (bounds.max_y - bounds.min_y).max(1.0);
     let x = (position.x - bounds.min_x) / width;
