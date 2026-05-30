@@ -34,7 +34,6 @@ CREATE TABLE officers (
     native_place TEXT,
     birth_year INTEGER,
     death_year INTEGER,
-    gender TEXT NOT NULL DEFAULT 'Male' CHECK (gender IN ('Male', 'Female')),
     leadership INTEGER NOT NULL CHECK (leadership BETWEEN 1 AND 100),
     strength INTEGER NOT NULL CHECK (strength BETWEEN 1 AND 100),
     intelligence INTEGER NOT NULL CHECK (intelligence BETWEEN 1 AND 100),
@@ -42,37 +41,7 @@ CREATE TABLE officers (
     charm INTEGER NOT NULL CHECK (charm BETWEEN 1 AND 100),
     tags TEXT NOT NULL DEFAULT '',
     confidence TEXT NOT NULL CHECK (confidence IN ('High', 'Medium', 'Low')),
-    biography TEXT NOT NULL DEFAULT '',
     notes TEXT NOT NULL DEFAULT ''
-);
-
-CREATE TABLE officer_external_ids (
-    officer_id TEXT NOT NULL REFERENCES officers(id) ON DELETE CASCADE,
-    source TEXT NOT NULL,
-    external_id TEXT NOT NULL,
-    source_url TEXT NOT NULL DEFAULT '',
-    confidence TEXT NOT NULL CHECK (confidence IN ('High', 'Medium', 'Low')),
-    notes TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (officer_id, source, external_id)
-);
-
-CREATE TABLE officer_relationships (
-    source_officer_id TEXT NOT NULL REFERENCES officers(id) ON DELETE CASCADE,
-    target_officer_id TEXT NOT NULL REFERENCES officers(id) ON DELETE CASCADE,
-    relationship_kind TEXT NOT NULL CHECK (relationship_kind IN (
-        'RulerSubject',
-        'ParentChild',
-        'AdoptiveParentChild',
-        'Spouse',
-        'Sibling',
-        'SwornSibling',
-        'Enemy'
-    )),
-    confidence TEXT NOT NULL CHECK (confidence IN ('High', 'Medium', 'Low')),
-    notes TEXT NOT NULL DEFAULT '',
-    source TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (source_officer_id, target_officer_id, relationship_kind),
-    CHECK (source_officer_id <> target_officer_id)
 );
 
 CREATE TABLE roads (
@@ -123,7 +92,6 @@ CREATE TABLE officer_life_events (
     event_kind TEXT NOT NULL CHECK (event_kind IN ('Appear', 'ServeFaction', 'MoveToCity', 'BecomeUnavailable', 'Die')),
     faction_id TEXT REFERENCES factions(id),
     city_id TEXT REFERENCES cities(id),
-    loyalty INTEGER CHECK (loyalty BETWEEN 1 AND 100),
     notes TEXT NOT NULL DEFAULT ''
 );
 
@@ -145,7 +113,7 @@ CREATE INDEX idx_scenario_faction_states_scenario ON scenario_faction_states(sce
 CREATE INDEX idx_officer_life_events_date ON officer_life_events(event_year, event_month);
 CREATE INDEX idx_officer_life_events_officer ON officer_life_events(officer_id);
 CREATE INDEX idx_officers_name ON officers(name);
-CREATE INDEX idx_officer_relationships_target ON officer_relationships(target_officer_id);
-CREATE INDEX idx_officer_relationships_kind ON officer_relationships(relationship_kind);
-CREATE INDEX idx_officer_external_ids_source ON officer_external_ids(source, external_id);
 CREATE INDEX idx_cities_province ON cities(province, commandery);
+
+INSERT INTO cities (id, name, province, commandery, x, y, scale, strategic_rank, agriculture_base, commerce_base, defense_base, population_min, population_max, confidence, notes)
+SELECT id, name, province, commandery, x, y, scale, strategic_rank, agriculture_base, commerce_base, defense_base, population_min, population_max, confidence, notes FROM seed_cities;
