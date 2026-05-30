@@ -33,3 +33,22 @@ pub(super) fn confidence_label(confidence: &SourceConfidence) -> &'static str {
         SourceConfidence::Low => "低",
     }
 }
+
+pub(super) fn officer_gender_label(gender: &OfficerGender) -> &'static str {
+    match gender {
+        OfficerGender::Male => "男",
+        OfficerGender::Female => "女",
+    }
+}
+
+pub(super) fn officer_relationship_label(kind: &OfficerRelationshipKind) -> &'static str {
+    match kind {
+        OfficerRelationshipKind::RulerSubject => "君臣",
+        OfficerRelationshipKind::ParentChild => "亲子",
+        OfficerRelationshipKind::AdoptiveParentChild => "养亲子",
+        OfficerRelationshipKind::Spouse => "夫妻",
+        OfficerRelationshipKind::Sibling => "兄弟姊妹",
+        OfficerRelationshipKind::SwornSibling => "结义",
+        OfficerRelationshipKind::Enemy => "仇敌",
+    }
+}

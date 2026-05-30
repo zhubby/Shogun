@@ -19,9 +19,14 @@ pub(super) struct GameUiState {
     pub(super) map_boundaries: Option<MapBoundaryCatalog>,
     pub(super) city_drawer_open: bool,
     pub(super) city_list_open: bool,
+    pub(super) officer_browser_open: bool,
+    pub(super) officer_browser_filters: OfficerBrowserFilters,
     pub(super) reports_open: bool,
     pub(super) save_panel_open: bool,
     pub(super) settings_open: bool,
+    pub(super) officer_settings_open: bool,
+    pub(super) officer_settings_game: Option<GameState>,
+    pub(super) officer_settings_filters: OfficerBrowserFilters,
     pub(super) game: Option<GameState>,
     pub(super) selected_faction_id: FactionId,
     pub(super) selected_city_id: Option<CityId>,
@@ -85,9 +90,14 @@ impl GameUiState {
             map_boundaries,
             city_drawer_open: false,
             city_list_open: false,
+            officer_browser_open: false,
+            officer_browser_filters: OfficerBrowserFilters::default(),
             reports_open: true,
             save_panel_open: false,
             settings_open: false,
+            officer_settings_open: false,
+            officer_settings_game: None,
+            officer_settings_filters: OfficerBrowserFilters::default(),
             game: None,
             selected_faction_id,
             selected_city_id: None,
@@ -154,7 +164,7 @@ pub(super) struct HistoryMenuState {
 }
 
 pub(super) fn load_history_menu(preferred_scenario_id: Option<&str>) -> HistoryMenuState {
-    match SqliteHistoricalCatalog::open_asset().and_then(|catalog| {
+    match SqliteHistoricalCatalog::open_default().and_then(|catalog| {
         let scenarios = catalog.scenarios()?;
         let selected_scenario_id = preferred_scenario_id
             .filter(|id| scenarios.iter().any(|scenario| scenario.id == *id))
@@ -195,7 +205,7 @@ pub(super) fn refresh_history_menu(ui_state: &mut GameUiState) {
 }
 
 pub(super) fn refresh_history_factions(ui_state: &mut GameUiState) {
-    match SqliteHistoricalCatalog::open_asset()
+    match SqliteHistoricalCatalog::open_default()
         .and_then(|catalog| catalog.selectable_factions(&ui_state.selected_scenario_id))
     {
         Ok(factions) => {
@@ -244,4 +254,37 @@ pub(super) enum Screen {
 pub(super) enum CityTab {
     Construction,
     Governance,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum OfficerGenderFilter {
+    #[default]
+    All,
+    Male,
+    Female,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum OfficerStatusFilter {
+    #[default]
+    All,
+    Active,
+    Wild,
+    Unavailable,
+    Dead,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(super) struct OfficerBrowserFilters {
+    pub(super) search: String,
+    pub(super) gender: OfficerGenderFilter,
+    pub(super) faction_id: Option<FactionId>,
+    pub(super) status: OfficerStatusFilter,
+    pub(super) city_id: Option<CityId>,
+}
+
+impl OfficerBrowserFilters {
+    pub(super) fn reset(&mut self) {
+        *self = Self::default();
+    }
 }

@@ -32,7 +32,7 @@ pub(super) fn settings_modal(ctx: &egui::Context, ui_state: &mut GameUiState) ->
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(modal_width);
                 ui.horizontal(|ui| {
-                    ui.heading(egui::RichText::new("设置").color(war_gold()));
+                    ui.heading(egui::RichText::new("显示设置").color(war_gold()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("关闭").clicked() {
                             ui_state.settings_open = false;

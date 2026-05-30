@@ -2,7 +2,10 @@ use crate::game::*;
 use bevy_egui::egui;
 
 use super::actions::queue_selected_city_command;
-use super::labels::{city_scale_label, confidence_label, development_focus_label, diplomacy_label};
+use super::labels::{
+    city_scale_label, confidence_label, development_focus_label, diplomacy_label,
+    officer_gender_label, officer_relationship_label,
+};
 use super::state::{CityTab, GameUiState};
 
 pub(super) fn selected_city_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
@@ -420,13 +423,44 @@ pub(super) fn officer_row(ui: &mut egui::Ui, officer: &Officer) {
                 .death_year
                 .map(|year| year.to_string())
                 .unwrap_or_else(|| "未详".to_string());
-            ui.label(format!("字 {courtesy} | 籍贯 {native_place}"));
+            ui.label(format!(
+                "性别 {} | 字 {courtesy} | 籍贯 {native_place}",
+                officer_gender_label(&profile.gender)
+            ));
             ui.label(format!(
                 "生卒 {birth}-{death} | 可信度 {}",
                 confidence_label(&profile.confidence)
             ));
             if !profile.tags.is_empty() {
                 ui.label(format!("标签 {}", profile.tags.join(", ")));
+            }
+            if !profile.biography.is_empty() {
+                ui.separator();
+                ui.label("生平");
+                egui::ScrollArea::vertical()
+                    .id_salt(format!("officer_bio_{}", profile.id))
+                    .max_height(96.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.label(&profile.biography);
+                    });
+            }
+            if !profile.relationships.is_empty() {
+                ui.separator();
+                ui.label("关系");
+                for relationship in &profile.relationships {
+                    let notes = if relationship.notes.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" - {}", relationship.notes)
+                    };
+                    ui.label(format!(
+                        "{}: {}{}",
+                        officer_relationship_label(&relationship.kind),
+                        relationship.target_name,
+                        notes
+                    ));
+                }
             }
             if !profile.notes.is_empty() {
                 ui.label(&profile.notes);
