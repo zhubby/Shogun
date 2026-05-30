@@ -8,18 +8,18 @@ use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
-pub(crate) struct AppSettings {
-    pub(crate) resolution: DisplayResolution,
-    pub(crate) display_mode: DisplayMode,
-    pub(crate) vsync: bool,
+pub(super) struct DisplaySettings {
+    pub(super) resolution: DisplayResolution,
+    pub(super) display_mode: DisplayMode,
+    pub(super) vsync: bool,
 }
 
-impl AppSettings {
-    pub(crate) fn window_resolution(self) -> WindowResolution {
+impl DisplaySettings {
+    pub(super) fn window_resolution(self) -> WindowResolution {
         WindowResolution::new(self.resolution.width, self.resolution.height)
     }
 
-    pub(crate) fn window_mode(self) -> WindowMode {
+    pub(super) fn window_mode(self) -> WindowMode {
         match self.display_mode {
             DisplayMode::Windowed => WindowMode::Windowed,
             DisplayMode::BorderlessFullscreen => {
@@ -31,7 +31,7 @@ impl AppSettings {
         }
     }
 
-    pub(crate) fn present_mode(self) -> PresentMode {
+    pub(super) fn present_mode(self) -> PresentMode {
         if self.vsync {
             PresentMode::AutoVsync
         } else {
@@ -39,7 +39,7 @@ impl AppSettings {
         }
     }
 
-    pub(crate) fn apply_to_window(self, window: &mut Window) {
+    pub(super) fn apply_to_window(self, window: &mut Window) {
         window.resizable = false;
         window.enabled_buttons.maximize = false;
         window.mode = self.window_mode();
@@ -51,9 +51,9 @@ impl AppSettings {
         }
     }
 
-    fn validate(self) -> Result<Self, AppSettingsError> {
+    fn validate(self) -> Result<Self, DisplaySettingsError> {
         if !self.resolution.is_preset() {
-            return Err(AppSettingsError::Invalid(format!(
+            return Err(DisplaySettingsError::Invalid(format!(
                 "不支持的分辨率 {}",
                 self.resolution
             )));
@@ -62,7 +62,7 @@ impl AppSettings {
     }
 }
 
-impl Default for AppSettings {
+impl Default for DisplaySettings {
     fn default() -> Self {
         Self {
             resolution: DisplayResolution::new(1280, 820),
@@ -73,17 +73,17 @@ impl Default for AppSettings {
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub(crate) struct DisplayResolution {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
+pub(super) struct DisplayResolution {
+    pub(super) width: u32,
+    pub(super) height: u32,
 }
 
 impl DisplayResolution {
-    pub(crate) const fn new(width: u32, height: u32) -> Self {
+    pub(super) const fn new(width: u32, height: u32) -> Self {
         Self { width, height }
     }
 
-    pub(crate) fn presets() -> &'static [Self] {
+    pub(super) fn presets() -> &'static [Self] {
         &DISPLAY_RESOLUTION_PRESETS
     }
 
@@ -94,7 +94,7 @@ impl DisplayResolution {
 
 impl Default for DisplayResolution {
     fn default() -> Self {
-        AppSettings::default().resolution
+        DisplaySettings::default().resolution
     }
 }
 
@@ -116,7 +116,7 @@ const DISPLAY_RESOLUTION_PRESETS: [DisplayResolution; 7] = [
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum DisplayMode {
+pub(super) enum DisplayMode {
     #[default]
     Windowed,
     BorderlessFullscreen,
@@ -124,11 +124,11 @@ pub(crate) enum DisplayMode {
 }
 
 impl DisplayMode {
-    pub(crate) fn variants() -> &'static [Self] {
+    pub(super) fn variants() -> &'static [Self] {
         &DISPLAY_MODE_VARIANTS
     }
 
-    pub(crate) fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             DisplayMode::Windowed => "窗口",
             DisplayMode::BorderlessFullscreen => "无边框全屏",
@@ -144,79 +144,79 @@ const DISPLAY_MODE_VARIANTS: [DisplayMode; 3] = [
 ];
 
 #[derive(Clone, Debug)]
-pub(crate) struct AppSettingsStore {
+pub(super) struct DisplaySettingsStore {
     path: PathBuf,
 }
 
-impl AppSettingsStore {
-    pub(crate) fn new(path: impl Into<PathBuf>) -> Self {
+impl DisplaySettingsStore {
+    pub(super) fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
 
-    pub(crate) fn default_path() -> PathBuf {
+    pub(super) fn default_path() -> PathBuf {
         ProjectDirs::from("dev", "zhubby", "Shogun")
             .map(|dirs| dirs.config_dir().join("settings.json"))
             .unwrap_or_else(|| PathBuf::from(".shogun_settings.json"))
     }
 
-    pub(crate) fn with_default_path() -> Self {
+    pub(super) fn with_default_path() -> Self {
         Self::new(Self::default_path())
     }
 
-    pub(crate) fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.path
     }
 
-    pub(crate) fn load(&self) -> LoadedAppSettings {
+    pub(super) fn load(&self) -> LoadedDisplaySettings {
         match fs::read_to_string(&self.path) {
-            Ok(body) => match serde_json::from_str::<AppSettings>(&body) {
+            Ok(body) => match serde_json::from_str::<DisplaySettings>(&body) {
                 Ok(settings) => match settings.validate() {
-                    Ok(settings) => LoadedAppSettings::loaded(settings),
-                    Err(error) => LoadedAppSettings::fallback(format!(
+                    Ok(settings) => LoadedDisplaySettings::loaded(settings),
+                    Err(error) => LoadedDisplaySettings::fallback(format!(
                         "显示设置无效，已使用默认设置: {error}"
                     )),
                 },
-                Err(error) => LoadedAppSettings::fallback(format!(
+                Err(error) => LoadedDisplaySettings::fallback(format!(
                     "显示设置格式无效，已使用默认设置: {error}"
                 )),
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                LoadedAppSettings::fallback("未找到显示设置，已使用默认设置".to_string())
+                LoadedDisplaySettings::fallback("未找到显示设置，已使用默认设置".to_string())
             }
-            Err(error) => {
-                LoadedAppSettings::fallback(format!("读取显示设置失败，已使用默认设置: {error}"))
-            }
+            Err(error) => LoadedDisplaySettings::fallback(format!(
+                "读取显示设置失败，已使用默认设置: {error}"
+            )),
         }
     }
 
-    pub(crate) fn save(&self, settings: AppSettings) -> Result<(), AppSettingsError> {
+    pub(super) fn save(&self, settings: DisplaySettings) -> Result<(), DisplaySettingsError> {
         let settings = settings.validate()?;
         if let Some(parent) = self
             .path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
         {
-            fs::create_dir_all(parent).map_err(AppSettingsError::Io)?;
+            fs::create_dir_all(parent).map_err(DisplaySettingsError::Io)?;
         }
-        let body = serde_json::to_string_pretty(&settings).map_err(AppSettingsError::Json)?;
-        fs::write(&self.path, body).map_err(AppSettingsError::Io)
+        let body = serde_json::to_string_pretty(&settings).map_err(DisplaySettingsError::Json)?;
+        fs::write(&self.path, body).map_err(DisplaySettingsError::Io)
     }
 }
 
-impl Default for AppSettingsStore {
+impl Default for DisplaySettingsStore {
     fn default() -> Self {
         Self::with_default_path()
     }
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct LoadedAppSettings {
-    pub(crate) settings: AppSettings,
-    pub(crate) message: Option<String>,
+pub(super) struct LoadedDisplaySettings {
+    pub(super) settings: DisplaySettings,
+    pub(super) message: Option<String>,
 }
 
-impl LoadedAppSettings {
-    fn loaded(settings: AppSettings) -> Self {
+impl LoadedDisplaySettings {
+    fn loaded(settings: DisplaySettings) -> Self {
         Self {
             settings,
             message: None,
@@ -225,20 +225,20 @@ impl LoadedAppSettings {
 
     fn fallback(message: String) -> Self {
         Self {
-            settings: AppSettings::default(),
+            settings: DisplaySettings::default(),
             message: Some(message),
         }
     }
 }
 
 #[derive(Debug)]
-pub(crate) enum AppSettingsError {
+pub(super) enum DisplaySettingsError {
     Io(std::io::Error),
     Json(serde_json::Error),
     Invalid(String),
 }
 
-impl std::fmt::Display for AppSettingsError {
+impl std::fmt::Display for DisplaySettingsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(error) => write!(f, "设置 IO 失败: {error}"),
@@ -248,7 +248,7 @@ impl std::fmt::Display for AppSettingsError {
     }
 }
 
-impl std::error::Error for AppSettingsError {}
+impl std::error::Error for DisplaySettingsError {}
 
 #[cfg(test)]
 mod tests {
@@ -256,7 +256,7 @@ mod tests {
 
     #[test]
     fn default_settings_are_windowed_1280_by_820_with_vsync() {
-        let settings = AppSettings::default();
+        let settings = DisplaySettings::default();
 
         assert_eq!(settings.resolution, DisplayResolution::new(1280, 820));
         assert_eq!(settings.display_mode, DisplayMode::Windowed);
@@ -266,8 +266,8 @@ mod tests {
     #[test]
     fn settings_round_trip_through_json() {
         let temp = tempfile::tempdir().unwrap();
-        let store = AppSettingsStore::new(temp.path().join("settings.json"));
-        let settings = AppSettings {
+        let store = DisplaySettingsStore::new(temp.path().join("settings.json"));
+        let settings = DisplaySettings {
             resolution: DisplayResolution::new(1600, 900),
             display_mode: DisplayMode::BorderlessFullscreen,
             vsync: false,
@@ -283,11 +283,11 @@ mod tests {
     #[test]
     fn missing_settings_file_falls_back_to_default() {
         let temp = tempfile::tempdir().unwrap();
-        let store = AppSettingsStore::new(temp.path().join("missing.json"));
+        let store = DisplaySettingsStore::new(temp.path().join("missing.json"));
 
         let loaded = store.load();
 
-        assert_eq!(loaded.settings, AppSettings::default());
+        assert_eq!(loaded.settings, DisplaySettings::default());
         assert!(loaded.message.is_some());
     }
 
@@ -296,11 +296,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("settings.json");
         fs::write(&path, "{invalid json").unwrap();
-        let store = AppSettingsStore::new(path);
+        let store = DisplaySettingsStore::new(path);
 
         let loaded = store.load();
 
-        assert_eq!(loaded.settings, AppSettings::default());
+        assert_eq!(loaded.settings, DisplaySettings::default());
         assert!(loaded.message.is_some());
     }
 
@@ -317,17 +317,17 @@ mod tests {
 }"#,
         )
         .unwrap();
-        let store = AppSettingsStore::new(path);
+        let store = DisplaySettingsStore::new(path);
 
         let loaded = store.load();
 
-        assert_eq!(loaded.settings, AppSettings::default());
+        assert_eq!(loaded.settings, DisplaySettings::default());
         assert!(loaded.message.is_some());
     }
 
     #[test]
     fn settings_map_to_bevy_window_types() {
-        let mut settings = AppSettings {
+        let mut settings = DisplaySettings {
             resolution: DisplayResolution::new(1920, 1080),
             display_mode: DisplayMode::Windowed,
             vsync: false,
@@ -354,7 +354,7 @@ mod tests {
 
     #[test]
     fn applying_windowed_settings_sets_size_and_locks_resizing() {
-        let settings = AppSettings {
+        let settings = DisplaySettings {
             resolution: DisplayResolution::new(1600, 900),
             display_mode: DisplayMode::Windowed,
             vsync: true,

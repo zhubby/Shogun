@@ -1,4 +1,2 @@
-mod app_settings;
-
-pub mod app;
+pub mod core;
 pub mod game;

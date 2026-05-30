@@ -1,5 +1,5 @@
-use shogun::app;
+use shogun::core;
 
 fn main() {
-    app::run();
+    core::run();
 }

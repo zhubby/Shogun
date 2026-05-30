@@ -28,9 +28,9 @@ Tool mapping:
 
 This repository is a single-crate Rust 2021 Bevy strategy game prototype.
 
-- `src/main.rs`: binary entrypoint; it should stay thin and delegate to `shogun::app::run`.
+- `src/main.rs`: binary entrypoint; it should stay thin and delegate to `shogun::core::run`.
 - `src/lib.rs`: library surface used by integration tests and helper binaries.
-- `src/app.rs`: Bevy setup, `bevy_egui` UI, visual styling, and player interaction flow.
+- `src/core/`: Bevy setup, `bevy_egui` UI, visual styling, and player interaction flow.
 - `src/game/`: domain model and rules. Keep game behavior here, not in the UI layer.
 - `src/game/model.rs`: core state, commands, reports, diplomacy, and save version.
 - `src/game/commands.rs`: command validation, monthly resolution, combat, diplomacy, and life-event application.
@@ -44,7 +44,7 @@ This repository is a single-crate Rust 2021 Bevy strategy game prototype.
 - `assets/fonts/`: bundled fonts used by the UI.
 - `tests/`: integration tests for gameplay and historical database integrity.
 
-Keep rules, serialization, save compatibility, and data validation in `src/game`. `src/app.rs` should call exported domain functions instead of duplicating rule checks. Do not introduce Bevy or egui dependencies into `src/game` modules.
+Keep rules, serialization, save compatibility, and data validation in `src/game`. `src/core` should call exported domain functions instead of duplicating rule checks. Do not introduce Bevy or egui dependencies into `src/game` modules.
 
 ## Build, Test, and Development Commands
 
@@ -88,7 +88,7 @@ When changing schema or seed SQL, regenerate `assets/data/history.sqlite` and ru
 
 - Keep `GameUiState` as UI state only; avoid storing a second source of truth for game rules outside `GameState`.
 - Do not block egui render/update systems with heavy IO, database rebuilds, or long computations. If work becomes noticeable, move it out of the frame path and surface pending/completed state in the UI.
-- Reuse existing layout constants, palette helpers, panel frames, and map interaction patterns in `src/app.rs`.
+- Reuse existing layout constants, palette helpers, panel frames, and map interaction patterns in `src/core`.
 - Keep command controls wired to domain functions and show validation errors through the existing message/report surfaces.
 - Preserve bundled font configuration when adding text-heavy UI, especially for Chinese display names.
 - For visual changes, run the app when feasible and check the main menu plus in-game screen at the default 1280x820 window size.
