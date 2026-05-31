@@ -12,7 +12,8 @@ pub(super) struct GameUiState {
     pub(super) selected_scenario_id: ScenarioId,
     pub(super) history_factions: Vec<Faction>,
     pub(super) screen: Screen,
-    pub(super) city_tab: CityTab,
+    pub(super) selected_command_category: CommandCategory,
+    pub(super) selected_command_action: CommandAction,
     pub(super) map_zoom: f32,
     pub(super) map_pan: egui::Vec2,
     pub(super) map_boundaries_enabled: bool,
@@ -91,7 +92,8 @@ impl GameUiState {
             selected_scenario_id: history_menu.selected_scenario_id,
             history_factions: history_menu.factions,
             screen: Screen::MainMenu,
-            city_tab: CityTab::Construction,
+            selected_command_category: CommandCategory::Domestic,
+            selected_command_action: CommandAction::Develop,
             map_zoom: 1.0,
             map_pan: egui::Vec2::ZERO,
             map_boundaries_enabled: true,
@@ -267,9 +269,23 @@ pub(super) enum Screen {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum CityTab {
-    Construction,
-    Governance,
+pub(super) enum CommandCategory {
+    Domestic,
+    Military,
+    Diplomacy,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CommandAction {
+    Develop,
+    UpgradeCityCore,
+    BuildFacility,
+    Recruit,
+    Train,
+    AppointGovernor,
+    Transfer,
+    Expedition,
+    Diplomacy,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

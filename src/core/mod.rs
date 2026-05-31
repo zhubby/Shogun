@@ -26,7 +26,6 @@ pub(super) const MAP_ZOOM_STEP: f32 = 1.2;
 pub(super) const HUD_MARGIN: f32 = 16.0;
 pub(super) const HUD_TOP_OFFSET: f32 = 14.0;
 pub(super) const HUD_TOP_HEIGHT: f32 = 68.0;
-pub(super) const CITY_DRAWER_WIDTH: f32 = 390.0;
 
 pub fn run() {
     let settings_store = DisplaySettingsStore::with_default_path();

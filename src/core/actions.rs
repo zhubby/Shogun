@@ -1,7 +1,7 @@
-use crate::game::{Command as GameCommand, *};
+use crate::game::*;
 
 use super::map::reset_map_view;
-use super::state::{CityTab, GameUiState, Screen};
+use super::state::{CommandAction, CommandCategory, GameUiState, Screen};
 
 pub(super) fn start_history_game(ui_state: &mut GameUiState) {
     if ui_state.selected_scenario_id.is_empty() {
@@ -35,7 +35,8 @@ pub(super) fn enter_game(ui_state: &mut GameUiState, game: GameState, message: S
     ui_state.selected_transfer_target = None;
     ui_state.selected_expedition_target = None;
     ui_state.selected_diplomacy_target = None;
-    ui_state.city_tab = CityTab::Construction;
+    ui_state.selected_command_category = CommandCategory::Domestic;
+    ui_state.selected_command_action = CommandAction::Develop;
     ui_state.city_drawer_open = ui_state.selected_city_id.is_some();
     ui_state.city_list_open = false;
     ui_state.reports_open = true;
@@ -97,28 +98,4 @@ pub(super) fn first_player_city(game: &GameState) -> Option<CityId> {
         .values()
         .find(|city| city.faction_id == game.player_faction_id)
         .map(|city| city.id.clone())
-}
-
-pub(super) fn queue_selected_city_command(
-    ui_state: &mut GameUiState,
-    city: &City,
-    kind: CommandKind,
-) {
-    let Some(game) = &mut ui_state.game else {
-        return;
-    };
-    let Some(officer_id) = ui_state.selected_officers.get(&city.id).cloned() else {
-        ui_state.message = "请选择执行武将".to_string();
-        return;
-    };
-    let command = GameCommand {
-        issuer_faction_id: game.player_faction_id.clone(),
-        city_id: city.id.clone(),
-        officer_id: Some(officer_id),
-        kind,
-    };
-    match queue_player_command(game, command) {
-        Ok(()) => ui_state.message = format!("已提交 {} 的命令", city.name),
-        Err(error) => ui_state.message = error.to_string(),
-    }
 }

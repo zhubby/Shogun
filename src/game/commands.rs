@@ -218,11 +218,11 @@ fn validate_command(
                     "征兵数量必须在 1-5000 之间".to_string(),
                 ));
             }
-            let gold_cost = recruit_gold_cost(*amount);
-            let food_cost = recruit_food_cost(*amount);
-            if city.gold < gold_cost || city.food < food_cost {
+            let cost = recruit_cost(*amount);
+            if city.gold < cost.gold || city.food < cost.food {
                 return Err(CommandError::Invalid(format!(
-                    "征兵需要 {gold_cost} 金和 {food_cost} 粮"
+                    "征兵需要 {} 金和 {} 粮",
+                    cost.gold, cost.food
                 )));
             }
             if city.population < amount.saturating_mul(2) {
@@ -513,10 +513,9 @@ fn apply_recruit(state: &mut GameState, command: &Command, amount: u32, report: 
         .get(command.officer_id.as_ref().unwrap())
         .unwrap();
     let city = state.cities.get_mut(&command.city_id).unwrap();
-    let gold_cost = recruit_gold_cost(amount);
-    let food_cost = recruit_food_cost(amount);
-    city.gold -= gold_cost;
-    city.food -= food_cost;
+    let cost = recruit_cost(amount);
+    city.gold -= cost.gold;
+    city.food -= cost.food;
     city.population = city.population.saturating_sub(amount * 2);
     city.troops += amount;
     city.order = city.order.saturating_sub(2);
@@ -1073,12 +1072,12 @@ fn resolve_life_event_assignment(
     }
 }
 
-fn recruit_gold_cost(amount: u32) -> i32 {
-    (amount / 10) as i32 + 30
-}
-
-fn recruit_food_cost(amount: u32) -> i32 {
-    (amount / 4) as i32 + 80
+pub fn recruit_cost(amount: u32) -> ResourceCost {
+    ResourceCost {
+        gold: (amount / 10) as i32 + 30,
+        food: (amount / 4) as i32 + 80,
+        materials: 0,
+    }
 }
 
 fn battle_noise(turn: u32, source: &str, target: &str) -> i32 {

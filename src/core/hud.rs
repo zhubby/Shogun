@@ -11,7 +11,7 @@ use super::state::{
     GameUiState, OfficerBrowserFilters, OfficerGenderFilter, OfficerStatusFilter, Screen,
 };
 use super::style::{modal_title_bar, war_bar_frame, war_gold, war_panel_frame, war_text_muted};
-use super::{CITY_DRAWER_WIDTH, HUD_MARGIN, HUD_TOP_HEIGHT, HUD_TOP_OFFSET, MAP_ZOOM_STEP};
+use super::{HUD_MARGIN, HUD_TOP_HEIGHT, HUD_TOP_OFFSET, MAP_ZOOM_STEP};
 
 pub(super) fn in_game(ctx: &egui::Context, ui_state: &mut GameUiState) {
     egui::CentralPanel::default()
@@ -180,20 +180,15 @@ pub(super) fn city_list_hud(ctx: &egui::Context, ui_state: &mut GameUiState, scr
         });
 }
 
-pub(super) fn save_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
+pub(super) fn save_hud(ctx: &egui::Context, ui_state: &mut GameUiState, _screen: egui::Rect) {
     if !ui_state.save_panel_open {
         return;
     }
-    let x_offset = if ui_state.city_drawer_open && screen.width() > 860.0 {
-        -(CITY_DRAWER_WIDTH + HUD_MARGIN + 18.0)
-    } else {
-        -HUD_MARGIN
-    };
     egui::Area::new(egui::Id::new("hud_save_panel"))
         .order(egui::Order::Foreground)
         .anchor(
             egui::Align2::RIGHT_TOP,
-            egui::vec2(x_offset, HUD_TOP_OFFSET + HUD_TOP_HEIGHT + 14.0),
+            egui::vec2(-HUD_MARGIN, HUD_TOP_OFFSET + HUD_TOP_HEIGHT + 14.0),
         )
         .show(ctx, |ui| {
             war_panel_frame().show(ui, |ui| {
@@ -215,21 +210,17 @@ pub(super) fn city_drawer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, s
     if !ui_state.city_drawer_open {
         return;
     }
-    let max_height = (screen.height() - HUD_TOP_HEIGHT - 48.0).max(360.0);
+    let modal_width = (screen.width() - HUD_MARGIN * 2.0).clamp(760.0, 1120.0);
+    let modal_height = (screen.height() - HUD_MARGIN * 2.0).clamp(520.0, 760.0);
     egui::Area::new(egui::Id::new("hud_city_drawer"))
         .order(egui::Order::Foreground)
-        .anchor(
-            egui::Align2::RIGHT_TOP,
-            egui::vec2(-HUD_MARGIN, HUD_TOP_OFFSET + HUD_TOP_HEIGHT + 14.0),
-        )
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .show(ctx, |ui| {
             war_panel_frame().show(ui, |ui| {
-                let drawer_width = CITY_DRAWER_WIDTH
-                    .min(screen.width() - HUD_MARGIN * 2.0)
-                    .max(300.0);
-                ui.set_width(drawer_width);
+                ui.set_width(modal_width);
+                ui.set_min_height(modal_height);
                 ui.horizontal(|ui| {
-                    ui.heading(egui::RichText::new("军令").color(war_gold()));
+                    ui.heading(egui::RichText::new("中军帐").color(war_gold()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button("收起").clicked() {
                             ui_state.city_drawer_open = false;
@@ -238,7 +229,7 @@ pub(super) fn city_drawer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, s
                 });
                 ui.separator();
                 egui::ScrollArea::vertical()
-                    .max_height(max_height)
+                    .max_height(modal_height - 54.0)
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         selected_city_panel(ui, ui_state);
@@ -321,11 +312,13 @@ pub(super) fn officer_browser_hud(
                         ui,
                         game,
                         &ui_state.officer_browser_filters,
-                        height - 118.0,
-                        "hud_officer_browser_table",
-                        None,
-                        false,
-                        None,
+                        OfficerBrowserTableOptions {
+                            max_height: height - 118.0,
+                            id_salt: "hud_officer_browser_table",
+                            selected_officer_id: None,
+                            editable: false,
+                            retainer_faction_id: None,
+                        },
                     );
                 }
             });
@@ -369,11 +362,13 @@ pub(super) fn retainer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, scre
                     ui,
                     game,
                     &ui_state.retainer_filters,
-                    height - 142.0,
-                    "hud_retainer_table",
-                    None,
-                    false,
-                    Some(player_faction_id.as_str()),
+                    OfficerBrowserTableOptions {
+                        max_height: height - 142.0,
+                        id_salt: "hud_retainer_table",
+                        selected_officer_id: None,
+                        editable: false,
+                        retainer_faction_id: Some(player_faction_id.as_str()),
+                    },
                 );
 
                 if response.appoint_officer_id.is_some() || response.dismiss_officer_id.is_some() {
@@ -636,24 +631,20 @@ pub(super) fn officer_browser_table(
     ui: &mut egui::Ui,
     game: &GameState,
     filters: &OfficerBrowserFilters,
-    max_height: f32,
-    id_salt: &'static str,
-    selected_officer_id: Option<&str>,
-    editable: bool,
-    retainer_faction_id: Option<&str>,
+    options: OfficerBrowserTableOptions<'_>,
 ) -> OfficerBrowserTableResponse {
-    let rows = retainer_faction_id.map_or_else(
+    let rows = options.retainer_faction_id.map_or_else(
         || filtered_officer_rows(filters, game),
         |faction_id| retainer_officer_rows(filters, game, faction_id),
     );
     let mut table_response = OfficerBrowserTableResponse::default();
     ui.label(format!("共 {} 名武将", rows.len()));
     egui::ScrollArea::vertical()
-        .id_salt(id_salt)
-        .max_height(max_height.max(260.0))
+        .id_salt(options.id_salt)
+        .max_height(options.max_height.max(260.0))
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            egui::Grid::new((id_salt, "grid"))
+            egui::Grid::new((options.id_salt, "grid"))
                 .striped(true)
                 .num_columns(13)
                 .min_col_width(42.0)
@@ -675,142 +666,66 @@ pub(super) fn officer_browser_table(
                     ui.end_row();
 
                     for row in rows {
-                        let selected = selected_officer_id == Some(row.id.as_str());
-                        officer_row_cell(
+                        let selected = options.selected_officer_id == Some(row.id.as_str());
+                        let mut cell_context = OfficerRowCellContext {
                             ui,
-                            &row,
-                            selected,
-                            editable,
-                            &row.name,
-                            &mut table_response,
                             game,
-                            retainer_faction_id,
-                        );
+                            table_response: &mut table_response,
+                            editable: options.editable,
+                            retainer_faction_id: options.retainer_faction_id,
+                        };
+                        officer_row_cell(&mut cell_context, &row, selected, &row.name);
+                        officer_row_cell(&mut cell_context, &row, selected, row.gender);
+                        officer_row_cell(&mut cell_context, &row, selected, &row.faction_name);
+                        officer_row_cell(&mut cell_context, &row, selected, &row.city_name);
+                        officer_row_cell(&mut cell_context, &row, selected, &row.office_name);
+                        officer_row_cell(&mut cell_context, &row, selected, row.salary.to_string());
+                        officer_row_cell(&mut cell_context, &row, selected, row.status);
                         officer_row_cell(
-                            ui,
+                            &mut cell_context,
                             &row,
                             selected,
-                            editable,
-                            row.gender,
-                            &mut table_response,
-                            game,
-                            retainer_faction_id,
-                        );
-                        officer_row_cell(
-                            ui,
-                            &row,
-                            selected,
-                            editable,
-                            &row.faction_name,
-                            &mut table_response,
-                            game,
-                            retainer_faction_id,
-                        );
-                        officer_row_cell(
-                            ui,
-                            &row,
-                            selected,
-                            editable,
-                            &row.city_name,
-                            &mut table_response,
-                            game,
-                            retainer_faction_id,
-                        );
-                        officer_row_cell(
-                            ui,
-                            &row,
-                            selected,
-                            editable,
-                            &row.office_name,
-                            &mut table_response,
-                            game,
-                            retainer_faction_id,
-                        );
-                        officer_row_cell(
-                            ui,
-                            &row,
-                            selected,
-                            editable,
-                            row.salary.to_string(),
-                            &mut table_response,
-                            game,
-                            retainer_faction_id,
-                        );
-                        officer_row_cell(
-                            ui,
-                            &row,
-                            selected,
-                            editable,
-                            row.status,
-                            &mut table_response,
-                            game,
-                            retainer_faction_id,
-                        );
-                        officer_row_cell(
-                            ui,
-                            &row,
-                            selected,
-                            editable,
                             row.loyalty.to_string(),
-                            &mut table_response,
-                            game,
-                            retainer_faction_id,
                         );
                         officer_row_cell(
-                            ui,
+                            &mut cell_context,
                             &row,
                             selected,
-                            editable,
                             row.leadership.to_string(),
-                            &mut table_response,
-                            game,
-                            retainer_faction_id,
                         );
                         officer_row_cell(
-                            ui,
+                            &mut cell_context,
                             &row,
                             selected,
-                            editable,
                             row.strength.to_string(),
-                            &mut table_response,
-                            game,
-                            retainer_faction_id,
                         );
                         officer_row_cell(
-                            ui,
+                            &mut cell_context,
                             &row,
                             selected,
-                            editable,
                             row.intelligence.to_string(),
-                            &mut table_response,
-                            game,
-                            retainer_faction_id,
                         );
                         officer_row_cell(
-                            ui,
+                            &mut cell_context,
                             &row,
                             selected,
-                            editable,
                             row.politics.to_string(),
-                            &mut table_response,
-                            game,
-                            retainer_faction_id,
                         );
-                        officer_row_cell(
-                            ui,
-                            &row,
-                            selected,
-                            editable,
-                            row.charm.to_string(),
-                            &mut table_response,
-                            game,
-                            retainer_faction_id,
-                        );
+                        officer_row_cell(&mut cell_context, &row, selected, row.charm.to_string());
                         ui.end_row();
                     }
                 });
         });
     table_response
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct OfficerBrowserTableOptions<'a> {
+    pub(super) max_height: f32,
+    pub(super) id_salt: &'static str,
+    pub(super) selected_officer_id: Option<&'a str>,
+    pub(super) editable: bool,
+    pub(super) retainer_faction_id: Option<&'a str>,
 }
 
 #[derive(Clone, Debug)]
@@ -842,30 +757,26 @@ pub(super) struct OfficerBrowserTableResponse {
 }
 
 fn officer_row_cell(
-    ui: &mut egui::Ui,
+    context: &mut OfficerRowCellContext<'_, '_>,
     row: &OfficerBrowserRow,
     selected: bool,
-    editable: bool,
     text: impl Into<egui::WidgetText>,
-    table_response: &mut OfficerBrowserTableResponse,
-    game: &GameState,
-    retainer_faction_id: Option<&str>,
 ) {
-    let response = ui.selectable_label(selected, text);
+    let response = context.ui.selectable_label(selected, text);
     if response.clicked() || response.secondary_clicked() {
-        table_response.selected_officer_id = Some(row.id.clone());
+        context.table_response.selected_officer_id = Some(row.id.clone());
     }
-    if editable || retainer_faction_id.is_some() {
+    if context.editable || context.retainer_faction_id.is_some() {
         response.context_menu(|ui| {
-            if editable && ui.button("编辑").clicked() {
-                table_response.selected_officer_id = Some(row.id.clone());
-                table_response.edit_officer_id = Some(row.id.clone());
+            if context.editable && ui.button("编辑").clicked() {
+                context.table_response.selected_officer_id = Some(row.id.clone());
+                context.table_response.edit_officer_id = Some(row.id.clone());
                 ui.close();
             }
-            if retainer_faction_id.is_some() {
+            if context.retainer_faction_id.is_some() {
                 ui.menu_button("授官", |ui| {
                     for spec in official_post_specs() {
-                        let occupant = game.officers.values().find(|officer| {
+                        let occupant = context.game.officers.values().find(|officer| {
                             officer.faction_id == row.faction_id
                                 && officer.office_id.as_deref() == Some(spec.id)
                         });
@@ -884,21 +795,29 @@ fn officer_row_cell(
                             format!("{} ({})", spec.name, official_rank_label(spec.rank))
                         };
                         if ui.button(label).clicked() {
-                            table_response.selected_officer_id = Some(row.id.clone());
-                            table_response.appoint_officer_id = Some(row.id.clone());
-                            table_response.appoint_office_id = Some(spec.id.to_string());
+                            context.table_response.selected_officer_id = Some(row.id.clone());
+                            context.table_response.appoint_officer_id = Some(row.id.clone());
+                            context.table_response.appoint_office_id = Some(spec.id.to_string());
                             ui.close();
                         }
                     }
                 });
                 if row.office_name != "无" && ui.button("免官").clicked() {
-                    table_response.selected_officer_id = Some(row.id.clone());
-                    table_response.dismiss_officer_id = Some(row.id.clone());
+                    context.table_response.selected_officer_id = Some(row.id.clone());
+                    context.table_response.dismiss_officer_id = Some(row.id.clone());
                     ui.close();
                 }
             }
         });
     }
+}
+
+struct OfficerRowCellContext<'ui, 'data> {
+    ui: &'ui mut egui::Ui,
+    game: &'data GameState,
+    table_response: &'ui mut OfficerBrowserTableResponse,
+    editable: bool,
+    retainer_faction_id: Option<&'data str>,
 }
 
 pub(super) fn filtered_officer_rows(

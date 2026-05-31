@@ -8,7 +8,7 @@ use crate::game::{
 };
 
 use super::actions::{enter_game, refresh_saves, start_history_game, start_json_game};
-use super::hud::{officer_browser_filters, officer_browser_table};
+use super::hud::{OfficerBrowserTableOptions, officer_browser_filters, officer_browser_table};
 use super::labels::{confidence_label, officer_gender_label};
 use super::settings::settings_modal;
 use super::state::{GameUiState, OfficerEditDraft, refresh_history_factions, refresh_history_menu};
@@ -444,11 +444,13 @@ pub(super) fn officer_settings_modal(ctx: &egui::Context, ui_state: &mut GameUiS
                         ui,
                         game,
                         &ui_state.officer_settings_filters,
-                        height - 118.0,
-                        "main_menu_officer_settings_table",
-                        ui_state.officer_settings_selected_id.as_deref(),
-                        ui_state.officer_settings_editable,
-                        None,
+                        OfficerBrowserTableOptions {
+                            max_height: height - 118.0,
+                            id_salt: "main_menu_officer_settings_table",
+                            selected_officer_id: ui_state.officer_settings_selected_id.as_deref(),
+                            editable: ui_state.officer_settings_editable,
+                            retainer_faction_id: None,
+                        },
                     );
                     if let Some(officer_id) = response.selected_officer_id {
                         ui_state.officer_settings_selected_id = Some(officer_id);
