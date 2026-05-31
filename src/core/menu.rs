@@ -488,7 +488,7 @@ fn officer_profile_edit_modal(ctx: &egui::Context, ui_state: &mut GameUiState) {
     let width = (screen.width() * 0.72).clamp(620.0, 900.0);
     let height = (screen.height() * 0.78).clamp(460.0, 720.0);
     egui::Area::new(egui::Id::new("officer_profile_edit_modal"))
-        .order(egui::Order::Tooltip)
+        .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .show(ctx, |ui| {
             war_panel_frame().show(ui, |ui| {
