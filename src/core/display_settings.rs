@@ -6,6 +6,70 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub(super) struct GameSettings {
+    pub(super) display: DisplaySettings,
+    pub(super) audio: AudioSettings,
+}
+
+impl GameSettings {
+    pub(super) fn validated(self) -> Result<Self, GameSettingsError> {
+        Ok(Self {
+            display: self.display.validate()?,
+            audio: self.audio.normalized(),
+        })
+    }
+}
+
+impl Default for GameSettings {
+    fn default() -> Self {
+        Self {
+            display: DisplaySettings::default(),
+            audio: AudioSettings::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub(super) struct AudioSettings {
+    pub(super) master_volume: f32,
+    pub(super) output_device_name: Option<String>,
+}
+
+impl AudioSettings {
+    pub(super) fn normalized(mut self) -> Self {
+        self.master_volume = normalize_master_volume(self.master_volume);
+        self.output_device_name = normalize_output_device_name(self.output_device_name);
+        self
+    }
+}
+
+impl Default for AudioSettings {
+    fn default() -> Self {
+        Self {
+            master_volume: 1.0,
+            output_device_name: None,
+        }
+    }
+}
+
+pub(super) fn normalize_master_volume(volume: f32) -> f32 {
+    if volume.is_finite() {
+        volume.clamp(0.0, 1.0)
+    } else {
+        AudioSettings::default().master_volume
+    }
+}
+
+pub(super) fn normalize_output_device_name(device_name: Option<String>) -> Option<String> {
+    device_name.and_then(|name| {
+        let trimmed = name.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    })
+}
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub(super) struct DisplaySettings {
@@ -51,9 +115,9 @@ impl DisplaySettings {
         }
     }
 
-    fn validate(self) -> Result<Self, DisplaySettingsError> {
+    fn validate(self) -> Result<Self, GameSettingsError> {
         if !self.resolution.is_preset() {
-            return Err(DisplaySettingsError::Invalid(format!(
+            return Err(GameSettingsError::Invalid(format!(
                 "不支持的分辨率 {}",
                 self.resolution
             )));
@@ -144,11 +208,11 @@ const DISPLAY_MODE_VARIANTS: [DisplayMode; 3] = [
 ];
 
 #[derive(Clone, Debug)]
-pub(super) struct DisplaySettingsStore {
+pub(super) struct GameSettingsStore {
     path: PathBuf,
 }
 
-impl DisplaySettingsStore {
+impl GameSettingsStore {
     pub(super) fn new(path: impl Into<PathBuf>) -> Self {
         Self { path: path.into() }
     }
@@ -167,56 +231,66 @@ impl DisplaySettingsStore {
         &self.path
     }
 
-    pub(super) fn load(&self) -> LoadedDisplaySettings {
+    pub(super) fn load(&self) -> LoadedGameSettings {
         match fs::read_to_string(&self.path) {
-            Ok(body) => match serde_json::from_str::<DisplaySettings>(&body) {
-                Ok(settings) => match settings.validate() {
-                    Ok(settings) => LoadedDisplaySettings::loaded(settings),
-                    Err(error) => LoadedDisplaySettings::fallback(format!(
-                        "显示设置无效，已使用默认设置: {error}"
-                    )),
-                },
-                Err(error) => LoadedDisplaySettings::fallback(format!(
-                    "显示设置格式无效，已使用默认设置: {error}"
-                )),
+            Ok(body) => match parse_game_settings(&body) {
+                Ok(settings) => LoadedGameSettings::loaded(settings),
+                Err(error) => {
+                    LoadedGameSettings::fallback(format!("游戏设置无效，已使用默认设置: {error}"))
+                }
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                LoadedDisplaySettings::fallback("未找到显示设置，已使用默认设置".to_string())
+                LoadedGameSettings::fallback("未找到游戏设置，已使用默认设置".to_string())
             }
-            Err(error) => LoadedDisplaySettings::fallback(format!(
-                "读取显示设置失败，已使用默认设置: {error}"
-            )),
+            Err(error) => {
+                LoadedGameSettings::fallback(format!("读取游戏设置失败，已使用默认设置: {error}"))
+            }
         }
     }
 
-    pub(super) fn save(&self, settings: DisplaySettings) -> Result<(), DisplaySettingsError> {
-        let settings = settings.validate()?;
+    pub(super) fn save(&self, settings: GameSettings) -> Result<(), GameSettingsError> {
+        let settings = settings.validated()?;
         if let Some(parent) = self
             .path
             .parent()
             .filter(|parent| !parent.as_os_str().is_empty())
         {
-            fs::create_dir_all(parent).map_err(DisplaySettingsError::Io)?;
+            fs::create_dir_all(parent).map_err(GameSettingsError::Io)?;
         }
-        let body = serde_json::to_string_pretty(&settings).map_err(DisplaySettingsError::Json)?;
-        fs::write(&self.path, body).map_err(DisplaySettingsError::Io)
+        let body = serde_json::to_string_pretty(&settings).map_err(GameSettingsError::Json)?;
+        fs::write(&self.path, body).map_err(GameSettingsError::Io)
     }
 }
 
-impl Default for DisplaySettingsStore {
+impl Default for GameSettingsStore {
     fn default() -> Self {
         Self::with_default_path()
     }
 }
 
+fn parse_game_settings(body: &str) -> Result<GameSettings, GameSettingsError> {
+    let value = serde_json::from_str::<serde_json::Value>(body).map_err(GameSettingsError::Json)?;
+    let settings = if value.get("display").is_some() || value.get("audio").is_some() {
+        serde_json::from_value::<GameSettings>(value).map_err(GameSettingsError::Json)?
+    } else {
+        let display =
+            serde_json::from_value::<DisplaySettings>(value).map_err(GameSettingsError::Json)?;
+        GameSettings {
+            display,
+            audio: AudioSettings::default(),
+        }
+    };
+    settings.validated()
+}
+
 #[derive(Clone, Debug)]
-pub(super) struct LoadedDisplaySettings {
-    pub(super) settings: DisplaySettings,
+pub(super) struct LoadedGameSettings {
+    pub(super) settings: GameSettings,
     pub(super) message: Option<String>,
 }
 
-impl LoadedDisplaySettings {
-    fn loaded(settings: DisplaySettings) -> Self {
+impl LoadedGameSettings {
+    fn loaded(settings: GameSettings) -> Self {
         Self {
             settings,
             message: None,
@@ -225,20 +299,20 @@ impl LoadedDisplaySettings {
 
     fn fallback(message: String) -> Self {
         Self {
-            settings: DisplaySettings::default(),
+            settings: GameSettings::default(),
             message: Some(message),
         }
     }
 }
 
 #[derive(Debug)]
-pub(super) enum DisplaySettingsError {
+pub(super) enum GameSettingsError {
     Io(std::io::Error),
     Json(serde_json::Error),
     Invalid(String),
 }
 
-impl std::fmt::Display for DisplaySettingsError {
+impl std::fmt::Display for GameSettingsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(error) => write!(f, "设置 IO 失败: {error}"),
@@ -248,7 +322,7 @@ impl std::fmt::Display for DisplaySettingsError {
     }
 }
 
-impl std::error::Error for DisplaySettingsError {}
+impl std::error::Error for GameSettingsError {}
 
 #[cfg(test)]
 mod tests {
@@ -266,14 +340,20 @@ mod tests {
     #[test]
     fn settings_round_trip_through_json() {
         let temp = tempfile::tempdir().unwrap();
-        let store = DisplaySettingsStore::new(temp.path().join("settings.json"));
-        let settings = DisplaySettings {
-            resolution: DisplayResolution::new(1600, 900),
-            display_mode: DisplayMode::BorderlessFullscreen,
-            vsync: false,
+        let store = GameSettingsStore::new(temp.path().join("settings.json"));
+        let settings = GameSettings {
+            display: DisplaySettings {
+                resolution: DisplayResolution::new(1600, 900),
+                display_mode: DisplayMode::BorderlessFullscreen,
+                vsync: false,
+            },
+            audio: AudioSettings {
+                master_volume: 0.42,
+                output_device_name: Some("Built-in Output".to_string()),
+            },
         };
 
-        store.save(settings).unwrap();
+        store.save(settings.clone()).unwrap();
         let loaded = store.load();
 
         assert_eq!(loaded.settings, settings);
@@ -281,13 +361,42 @@ mod tests {
     }
 
     #[test]
-    fn missing_settings_file_falls_back_to_default() {
+    fn legacy_display_settings_json_loads_with_default_audio() {
         let temp = tempfile::tempdir().unwrap();
-        let store = DisplaySettingsStore::new(temp.path().join("missing.json"));
+        let path = temp.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{
+  "resolution": { "width": 1600, "height": 900 },
+  "display_mode": "borderless_fullscreen",
+  "vsync": false
+}"#,
+        )
+        .unwrap();
+        let store = GameSettingsStore::new(path);
 
         let loaded = store.load();
 
-        assert_eq!(loaded.settings, DisplaySettings::default());
+        assert_eq!(
+            loaded.settings.display,
+            DisplaySettings {
+                resolution: DisplayResolution::new(1600, 900),
+                display_mode: DisplayMode::BorderlessFullscreen,
+                vsync: false,
+            }
+        );
+        assert_eq!(loaded.settings.audio, AudioSettings::default());
+        assert!(loaded.message.is_none());
+    }
+
+    #[test]
+    fn missing_settings_file_falls_back_to_default() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = GameSettingsStore::new(temp.path().join("missing.json"));
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.settings, GameSettings::default());
         assert!(loaded.message.is_some());
     }
 
@@ -296,11 +405,11 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("settings.json");
         fs::write(&path, "{invalid json").unwrap();
-        let store = DisplaySettingsStore::new(path);
+        let store = GameSettingsStore::new(path);
 
         let loaded = store.load();
 
-        assert_eq!(loaded.settings, DisplaySettings::default());
+        assert_eq!(loaded.settings, GameSettings::default());
         assert!(loaded.message.is_some());
     }
 
@@ -317,12 +426,36 @@ mod tests {
 }"#,
         )
         .unwrap();
-        let store = DisplaySettingsStore::new(path);
+        let store = GameSettingsStore::new(path);
 
         let loaded = store.load();
 
-        assert_eq!(loaded.settings, DisplaySettings::default());
+        assert_eq!(loaded.settings, GameSettings::default());
         assert!(loaded.message.is_some());
+    }
+
+    #[test]
+    fn audio_settings_normalize_volume_and_empty_device_name() {
+        let settings = AudioSettings {
+            master_volume: 1.4,
+            output_device_name: Some("  ".to_string()),
+        }
+        .normalized();
+
+        assert_eq!(settings.master_volume, 1.0);
+        assert_eq!(settings.output_device_name, None);
+
+        let settings = AudioSettings {
+            master_volume: -0.25,
+            output_device_name: Some("  External DAC  ".to_string()),
+        }
+        .normalized();
+
+        assert_eq!(settings.master_volume, 0.0);
+        assert_eq!(
+            settings.output_device_name,
+            Some("External DAC".to_string())
+        );
     }
 
     #[test]

@@ -1,9 +1,10 @@
 use bevy::{
-    asset::RenderAssetUsages,
-    image::{CompressedImageFormats, Image as BevyImage, ImageFormat, ImageSampler, ImageType},
+    image::Image as BevyImage,
+    prelude::{Assets, Handle, Res, ResMut, Resource},
     render::render_resource::TextureFormat,
 };
-use bevy_egui::egui;
+use bevy_asset_loader::prelude::AssetCollection;
+use bevy_egui::{EguiTextureHandle, EguiUserTextures, egui};
 
 use crate::build_info::menu_build_label;
 use crate::game::{
@@ -16,7 +17,7 @@ use super::HUD_MARGIN;
 use super::actions::{enter_game, refresh_saves, start_history_game, start_json_game};
 use super::hud::{OfficerBrowserTableOptions, officer_browser_filters, officer_browser_table};
 use super::labels::{confidence_label, officer_gender_label};
-use super::settings::settings_modal;
+use super::settings::{refresh_audio_output_devices, settings_modal};
 use super::state::{
     GameUiState, MenuBannerLogo, MenuCloudPattern, MenuIllustration, OfficerEditDraft,
     refresh_history_factions, refresh_history_menu,
@@ -25,26 +26,25 @@ use super::style::{
     modal_title_bar, war_gold, war_panel_frame, war_sub_panel_frame, war_text_muted,
 };
 
-const BANNER_LOGO_BYTES: &[u8] = include_bytes!("../../assets/icons/banner_logo.png");
-const BANNER_LOGO_TEXTURE_ID: &str = "main_menu_banner_logo";
+#[cfg(test)]
+const BANNER_LOGO_ASSET_PATH: &str = "icons/banner_logo.png";
 const BANNER_LOGO_ALPHA_THRESHOLD: u8 = 8;
 const BANNER_LOGO_CROP_PADDING: usize = 32;
 const BANNER_LOGO_MAX_WIDTH: f32 = 860.0;
 const BANNER_LOGO_MAX_HEIGHT: f32 = 340.0;
 const MAIN_MENU_ILLUSTRATION_COUNT: usize = 6;
 const MAIN_MENU_DEFAULT_ILLUSTRATION_INDEX: usize = 0;
-const MAIN_MENU_ILLUSTRATION_BYTES: [&[u8]; MAIN_MENU_ILLUSTRATION_COUNT] = [
-    include_bytes!("../../assets/Illustrations/main_menu_0.png"),
-    include_bytes!("../../assets/Illustrations/main_menu_1.png"),
-    include_bytes!("../../assets/Illustrations/main_menu_2.png"),
-    include_bytes!("../../assets/Illustrations/main_menu_3.png"),
-    include_bytes!("../../assets/Illustrations/main_menu_4.png"),
-    include_bytes!("../../assets/Illustrations/main_menu_5.png"),
+#[cfg(test)]
+const MAIN_MENU_ILLUSTRATION_ASSET_PATHS: [&str; MAIN_MENU_ILLUSTRATION_COUNT] = [
+    "Illustrations/main_menu_0.png",
+    "Illustrations/main_menu_1.png",
+    "Illustrations/main_menu_2.png",
+    "Illustrations/main_menu_3.png",
+    "Illustrations/main_menu_4.png",
+    "Illustrations/main_menu_5.png",
 ];
-const MAIN_MENU_ILLUSTRATION_TEXTURE_ID_PREFIX: &str = "main_menu_illustration";
-const MAIN_MENU_CLOUD_PATTERN_BYTES: &[u8] =
-    include_bytes!("../../assets/Illustrations/main_menu_cloud_pattern.png");
-const MAIN_MENU_CLOUD_PATTERN_TEXTURE_ID: &str = "main_menu_cloud_pattern";
+#[cfg(test)]
+const MAIN_MENU_CLOUD_PATTERN_ASSET_PATH: &str = "Illustrations/main_menu_cloud_pattern.png";
 const MAIN_MENU_CLOUD_PATTERN_ALPHA: u8 = 38;
 const MAIN_MENU_CLOUD_PATTERN_UV_INSET: f32 = 0.08;
 const MAIN_MENU_CONTROL_MIN_WIDTH: f32 = 420.0;
@@ -56,10 +56,44 @@ const MAIN_MENU_BUTTON_SPACING: f32 = 7.0;
 const MAIN_MENU_BGM_BUTTON_SIZE: f32 = 36.0;
 const MAIN_MENU_BGM_BUTTON_MARGIN: f32 = 12.0;
 
+#[derive(AssetCollection, Resource)]
+pub(super) struct MainMenuAssets {
+    #[asset(path = "icons/banner_logo.png")]
+    banner_logo: Handle<BevyImage>,
+    #[asset(path = "Illustrations/main_menu_0.png")]
+    illustration_0: Handle<BevyImage>,
+    #[asset(path = "Illustrations/main_menu_1.png")]
+    illustration_1: Handle<BevyImage>,
+    #[asset(path = "Illustrations/main_menu_2.png")]
+    illustration_2: Handle<BevyImage>,
+    #[asset(path = "Illustrations/main_menu_3.png")]
+    illustration_3: Handle<BevyImage>,
+    #[asset(path = "Illustrations/main_menu_4.png")]
+    illustration_4: Handle<BevyImage>,
+    #[asset(path = "Illustrations/main_menu_5.png")]
+    illustration_5: Handle<BevyImage>,
+    #[asset(path = "Illustrations/main_menu_cloud_pattern.png")]
+    cloud_pattern: Handle<BevyImage>,
+}
+
+impl MainMenuAssets {
+    fn illustration_handle(&self, index: usize) -> Option<&Handle<BevyImage>> {
+        match index {
+            0 => Some(&self.illustration_0),
+            1 => Some(&self.illustration_1),
+            2 => Some(&self.illustration_2),
+            3 => Some(&self.illustration_3),
+            4 => Some(&self.illustration_4),
+            5 => Some(&self.illustration_5),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum MainMenuAction {
     None,
-    ApplyDisplaySettings,
+    ApplyGameSettings,
     Exit,
 }
 
@@ -79,7 +113,7 @@ pub(super) fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) -> Main
     }
     if ui_state.settings_open {
         if settings_modal(ctx, ui_state) {
-            action = MainMenuAction::ApplyDisplaySettings;
+            action = MainMenuAction::ApplyGameSettings;
         }
     }
     if ui_state.officer_settings_open {
@@ -89,6 +123,63 @@ pub(super) fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) -> Main
         officer_profile_edit_modal(ctx, ui_state);
     }
     action
+}
+
+pub(super) fn prepare_main_menu_assets_for_egui(
+    mut ui_state: ResMut<GameUiState>,
+    menu_assets: Option<Res<MainMenuAssets>>,
+    images: Res<Assets<BevyImage>>,
+    mut egui_user_textures: ResMut<EguiUserTextures>,
+) {
+    let Some(menu_assets) = menu_assets else {
+        return;
+    };
+
+    if ui_state.banner_logo.is_none()
+        && ui_state.banner_logo_error.is_none()
+        && let Some(image) = images.get(&menu_assets.banner_logo)
+    {
+        match register_banner_logo(&mut egui_user_textures, &menu_assets.banner_logo, image) {
+            Ok(logo) => ui_state.banner_logo = Some(logo),
+            Err(error) => ui_state.banner_logo_error = Some(error),
+        }
+    }
+
+    ensure_main_menu_illustration_slots(&mut ui_state);
+    for index in 0..MAIN_MENU_ILLUSTRATION_COUNT {
+        if ui_state.main_menu_illustrations[index].is_some()
+            || ui_state.main_menu_illustration_errors[index].is_some()
+        {
+            continue;
+        }
+        let Some(handle) = menu_assets.illustration_handle(index) else {
+            ui_state.main_menu_illustration_errors[index] = Some(format!(
+                "main menu illustration index {index} is out of range"
+            ));
+            continue;
+        };
+        let Some(image) = images.get(handle) else {
+            continue;
+        };
+        match register_main_menu_illustration(&mut egui_user_textures, handle, image, index) {
+            Ok(illustration) => ui_state.main_menu_illustrations[index] = Some(illustration),
+            Err(error) => ui_state.main_menu_illustration_errors[index] = Some(error),
+        }
+    }
+
+    if ui_state.main_menu_cloud_pattern.is_none()
+        && ui_state.main_menu_cloud_pattern_error.is_none()
+        && let Some(image) = images.get(&menu_assets.cloud_pattern)
+    {
+        match register_main_menu_cloud_pattern(
+            &mut egui_user_textures,
+            &menu_assets.cloud_pattern,
+            image,
+        ) {
+            Ok(pattern) => ui_state.main_menu_cloud_pattern = Some(pattern),
+            Err(error) => ui_state.main_menu_cloud_pattern_error = Some(error),
+        }
+    }
 }
 
 fn main_menu_columns(ui: &mut egui::Ui, ui_state: &mut GameUiState) -> MainMenuAction {
@@ -208,12 +299,13 @@ fn draw_main_menu_buttons(ui: &mut egui::Ui, ui_state: &mut GameUiState) -> Main
         open_officer_settings(ui_state);
     }
     ui.add_space(MAIN_MENU_BUTTON_SPACING);
-    let settings_response = main_menu_button(ui, button_width, "显示设置");
+    let settings_response = main_menu_button(ui, button_width, "游戏设置");
     if settings_response.hovered() {
         hovered_illustration_index = Some(4);
     }
     if settings_response.clicked() {
         close_main_menu_popups(ui_state);
+        refresh_audio_output_devices(ui_state);
         ui_state.settings_open = true;
     }
     ui.add_space(MAIN_MENU_BUTTON_SPACING);
@@ -522,22 +614,11 @@ fn draw_main_menu_illustration(
     ensure_main_menu_illustration_slots(ui_state);
     let illustration_index = active_main_menu_illustration_index(ui_state);
 
-    if ui_state.main_menu_illustrations[illustration_index].is_none()
-        && ui_state.main_menu_illustration_errors[illustration_index].is_none()
-    {
-        match load_main_menu_illustration(ui.ctx(), illustration_index) {
-            Ok(illustration) => {
-                ui_state.main_menu_illustrations[illustration_index] = Some(illustration)
-            }
-            Err(error) => ui_state.main_menu_illustration_errors[illustration_index] = Some(error),
-        }
-    }
-
     if let Some(illustration) = &ui_state.main_menu_illustrations[illustration_index] {
         let fit_size = fit_contained_size(illustration.crop_size, art_rect.size());
         let image_rect = egui::Align2::CENTER_CENTER.align_size_within_rect(fit_size, art_rect);
         paint_illustration_underlay(ui.painter(), background_rect, image_rect);
-        egui::Image::from_texture((illustration.texture.id(), fit_size))
+        egui::Image::from_texture((illustration.texture_id, fit_size))
             .fit_to_exact_size(fit_size)
             .uv(illustration.crop_uv)
             .tint(egui::Color32::WHITE)
@@ -575,15 +656,6 @@ fn active_main_menu_illustration_index(ui_state: &GameUiState) -> usize {
 fn draw_cloud_pattern(ui: &mut egui::Ui, ui_state: &mut GameUiState, rect: egui::Rect) {
     if rect.width() <= 0.0 || rect.height() <= 0.0 {
         return;
-    }
-
-    if ui_state.main_menu_cloud_pattern.is_none()
-        && ui_state.main_menu_cloud_pattern_error.is_none()
-    {
-        match load_main_menu_cloud_pattern(ui.ctx()) {
-            Ok(pattern) => ui_state.main_menu_cloud_pattern = Some(pattern),
-            Err(error) => ui_state.main_menu_cloud_pattern_error = Some(error),
-        }
     }
 
     let Some(pattern) = &ui_state.main_menu_cloud_pattern else {
@@ -629,7 +701,7 @@ fn draw_cloud_pattern(ui: &mut egui::Ui, ui_state: &mut GameUiState, rect: egui:
         );
         let decal_rect = egui::Align2::CENTER_CENTER
             .align_size_within_rect(decal_size, egui::Rect::from_center_size(center, decal_size));
-        painter.image(pattern.texture.id(), decal_rect, uv, tint);
+        painter.image(pattern.texture_id, decal_rect, uv, tint);
     }
 }
 
@@ -758,13 +830,6 @@ fn load_officer_settings_game(ui_state: &mut GameUiState) -> Option<GameState> {
 }
 
 fn banner_logo(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
-    if ui_state.banner_logo.is_none() && ui_state.banner_logo_error.is_none() {
-        match load_banner_logo(ui.ctx()) {
-            Ok(logo) => ui_state.banner_logo = Some(logo),
-            Err(error) => ui_state.banner_logo_error = Some(error),
-        }
-    }
-
     let Some(logo) = &ui_state.banner_logo else {
         ui.label(
             egui::RichText::new("三国争霸")
@@ -787,67 +852,61 @@ fn banner_logo(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
     let size = logo.crop_size * scale;
 
     ui.add(
-        egui::Image::from_texture((logo.texture.id(), size))
+        egui::Image::from_texture((logo.texture_id, size))
             .uv(logo.crop_uv)
             .fit_to_exact_size(size),
     );
 }
 
-fn load_banner_logo(ctx: &egui::Context) -> Result<MenuBannerLogo, String> {
-    let decoded = decode_banner_logo()?;
-    let texture = ctx.load_texture(
-        BANNER_LOGO_TEXTURE_ID,
-        decoded.image,
-        egui::TextureOptions::LINEAR,
-    );
+fn register_banner_logo(
+    egui_user_textures: &mut EguiUserTextures,
+    handle: &Handle<BevyImage>,
+    image: &BevyImage,
+) -> Result<MenuBannerLogo, String> {
+    let decoded = decode_banner_logo(image)?;
+    let texture_id = egui_user_textures.add_image(EguiTextureHandle::Strong(handle.clone()));
 
     Ok(MenuBannerLogo {
-        texture,
+        texture_id,
         crop_uv: decoded.crop_uv,
         crop_size: decoded.crop_size,
     })
 }
 
-fn load_main_menu_illustration(
-    ctx: &egui::Context,
+fn register_main_menu_illustration(
+    egui_user_textures: &mut EguiUserTextures,
+    handle: &Handle<BevyImage>,
+    image: &BevyImage,
     index: usize,
 ) -> Result<MenuIllustration, String> {
-    let decoded = decode_main_menu_illustration(index)?;
-    let texture = ctx.load_texture(
-        format!("{MAIN_MENU_ILLUSTRATION_TEXTURE_ID_PREFIX}_{index}"),
-        decoded.image,
-        egui::TextureOptions::LINEAR,
-    );
+    let decoded = decode_main_menu_illustration(image, index)?;
+    let texture_id = egui_user_textures.add_image(EguiTextureHandle::Strong(handle.clone()));
 
     Ok(MenuIllustration {
-        texture,
+        texture_id,
         crop_uv: decoded.crop_uv,
         crop_size: decoded.crop_size,
     })
 }
 
-fn load_main_menu_cloud_pattern(ctx: &egui::Context) -> Result<MenuCloudPattern, String> {
-    let decoded = decode_png_rgba(MAIN_MENU_CLOUD_PATTERN_BYTES, "main menu cloud pattern")?;
+fn register_main_menu_cloud_pattern(
+    egui_user_textures: &mut EguiUserTextures,
+    handle: &Handle<BevyImage>,
+    image: &BevyImage,
+) -> Result<MenuCloudPattern, String> {
+    let decoded = decode_png_rgba(image, "main menu cloud pattern")?;
     let size = egui::vec2(decoded.width as f32, decoded.height as f32);
-    let image =
-        egui::ColorImage::from_rgba_unmultiplied([decoded.width, decoded.height], &decoded.rgba);
-    let texture = ctx.load_texture(
-        MAIN_MENU_CLOUD_PATTERN_TEXTURE_ID,
-        image,
-        egui::TextureOptions::LINEAR,
-    );
+    let texture_id = egui_user_textures.add_image(EguiTextureHandle::Strong(handle.clone()));
 
-    Ok(MenuCloudPattern { texture, size })
+    Ok(MenuCloudPattern { texture_id, size })
 }
 
 struct DecodedBannerLogo {
-    image: egui::ColorImage,
     crop_uv: egui::Rect,
     crop_size: egui::Vec2,
 }
 
 struct DecodedMenuIllustration {
-    image: egui::ColorImage,
     crop_uv: egui::Rect,
     crop_size: egui::Vec2,
 }
@@ -858,8 +917,8 @@ struct DecodedPng {
     rgba: Vec<u8>,
 }
 
-fn decode_banner_logo() -> Result<DecodedBannerLogo, String> {
-    let decoded = decode_png_rgba(BANNER_LOGO_BYTES, "banner logo")?;
+fn decode_banner_logo(image: &BevyImage) -> Result<DecodedBannerLogo, String> {
+    let decoded = decode_png_rgba(image, "banner logo")?;
     let crop = alpha_crop_bounds(&decoded.rgba, decoded.width, decoded.height).unwrap_or((
         0,
         0,
@@ -868,21 +927,15 @@ fn decode_banner_logo() -> Result<DecodedBannerLogo, String> {
     ));
     let crop_uv = crop_uv(crop, decoded.width, decoded.height);
     let crop_size = egui::vec2((crop.2 - crop.0 + 1) as f32, (crop.3 - crop.1 + 1) as f32);
-    let image =
-        egui::ColorImage::from_rgba_unmultiplied([decoded.width, decoded.height], &decoded.rgba);
 
-    Ok(DecodedBannerLogo {
-        image,
-        crop_uv,
-        crop_size,
-    })
+    Ok(DecodedBannerLogo { crop_uv, crop_size })
 }
 
-fn decode_main_menu_illustration(index: usize) -> Result<DecodedMenuIllustration, String> {
-    let bytes = MAIN_MENU_ILLUSTRATION_BYTES
-        .get(index)
-        .ok_or_else(|| format!("main menu illustration index {index} is out of range"))?;
-    let decoded = decode_png_rgba(bytes, &format!("main menu illustration {index}"))?;
+fn decode_main_menu_illustration(
+    image: &BevyImage,
+    index: usize,
+) -> Result<DecodedMenuIllustration, String> {
+    let decoded = decode_png_rgba(image, &format!("main menu illustration {index}"))?;
     let crop = alpha_crop_bounds(&decoded.rgba, decoded.width, decoded.height).unwrap_or((
         0,
         0,
@@ -891,36 +944,21 @@ fn decode_main_menu_illustration(index: usize) -> Result<DecodedMenuIllustration
     ));
     let crop_uv = crop_uv(crop, decoded.width, decoded.height);
     let crop_size = egui::vec2((crop.2 - crop.0 + 1) as f32, (crop.3 - crop.1 + 1) as f32);
-    let image =
-        egui::ColorImage::from_rgba_unmultiplied([decoded.width, decoded.height], &decoded.rgba);
 
-    Ok(DecodedMenuIllustration {
-        image,
-        crop_uv,
-        crop_size,
-    })
+    Ok(DecodedMenuIllustration { crop_uv, crop_size })
 }
 
-fn decode_png_rgba(bytes: &[u8], description: &str) -> Result<DecodedPng, String> {
-    let image = BevyImage::from_buffer(
-        bytes,
-        ImageType::Format(ImageFormat::Png),
-        CompressedImageFormats::NONE,
-        true,
-        ImageSampler::Default,
-        RenderAssetUsages::MAIN_WORLD,
-    )
-    .map_err(|error| format!("failed to decode {description} PNG: {error}"))?;
-
+fn decode_png_rgba(image: &BevyImage, description: &str) -> Result<DecodedPng, String> {
     let width = image.width() as usize;
     let height = image.height() as usize;
     let format = image.texture_descriptor.format;
     let data = image
         .data
+        .as_ref()
         .ok_or_else(|| format!("decoded {description} has no CPU pixel data"))?;
     let rgba = match format {
         TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Uint => {
-            data
+            data.clone()
         }
         TextureFormat::Rgba16Unorm | TextureFormat::Rgba16Uint => rgba16_to_rgba8(&data)?,
         _ => {
@@ -1359,9 +1397,7 @@ fn close_officer_profile_editor(ui_state: &mut GameUiState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::display_settings::{
-        DisplaySettings, DisplaySettingsStore, LoadedDisplaySettings,
-    };
+    use crate::core::display_settings::{GameSettings, GameSettingsStore, LoadedGameSettings};
     use crate::game::ScenarioData;
 
     fn test_profile(name: &str) -> OfficerProfile {
@@ -1390,9 +1426,9 @@ mod tests {
 
     fn ui_state_with_officer_settings_profile() -> GameUiState {
         let mut state = GameUiState::new(
-            DisplaySettingsStore::with_default_path(),
-            LoadedDisplaySettings {
-                settings: DisplaySettings::default(),
+            GameSettingsStore::with_default_path(),
+            LoadedGameSettings {
+                settings: GameSettings::default(),
                 message: None,
             },
         );
@@ -1412,7 +1448,8 @@ mod tests {
 
     #[test]
     fn banner_logo_decodes_and_respects_display_bounds() {
-        let decoded = decode_banner_logo().unwrap();
+        let image = decode_png_asset(BANNER_LOGO_ASSET_PATH, "banner logo").unwrap();
+        let decoded = decode_banner_logo(&image).unwrap();
 
         assert!(decoded.crop_size.x > 0.0);
         assert!(decoded.crop_size.y > 0.0);
@@ -1427,8 +1464,12 @@ mod tests {
 
     #[test]
     fn main_menu_cloud_pattern_decodes_at_expected_size() {
-        let decoded =
-            decode_png_rgba(MAIN_MENU_CLOUD_PATTERN_BYTES, "main menu cloud pattern").unwrap();
+        let image = decode_png_asset(
+            MAIN_MENU_CLOUD_PATTERN_ASSET_PATH,
+            "main menu cloud pattern",
+        )
+        .unwrap();
+        let decoded = decode_png_rgba(&image, "main menu cloud pattern").unwrap();
 
         assert_eq!(decoded.width, 1536);
         assert_eq!(decoded.height, 1024);
@@ -1436,13 +1477,29 @@ mod tests {
 
     #[test]
     fn main_menu_illustrations_decode_at_expected_size() {
-        for (index, bytes) in MAIN_MENU_ILLUSTRATION_BYTES.iter().enumerate() {
+        for (index, asset_path) in MAIN_MENU_ILLUSTRATION_ASSET_PATHS.iter().enumerate() {
+            let image =
+                decode_png_asset(asset_path, &format!("main menu illustration {index}")).unwrap();
             let decoded =
-                decode_png_rgba(bytes, &format!("main menu illustration {index}")).unwrap();
+                decode_png_rgba(&image, &format!("main menu illustration {index}")).unwrap();
 
             assert_eq!(decoded.width, 1152);
             assert_eq!(decoded.height, 1696);
         }
+    }
+
+    fn decode_png_asset(asset_path: &str, description: &str) -> Result<BevyImage, String> {
+        let bytes = std::fs::read(std::path::Path::new("assets").join(asset_path))
+            .map_err(|error| format!("failed to read {description} PNG asset: {error}"))?;
+        BevyImage::from_buffer(
+            &bytes,
+            bevy::image::ImageType::Format(bevy::image::ImageFormat::Png),
+            bevy::image::CompressedImageFormats::NONE,
+            true,
+            bevy::image::ImageSampler::Default,
+            bevy::asset::RenderAssetUsages::MAIN_WORLD,
+        )
+        .map_err(|error| format!("failed to decode {description} PNG: {error}"))
     }
 
     #[test]

@@ -3,8 +3,14 @@ use bevy::prelude::Resource;
 use bevy_egui::egui;
 use std::collections::BTreeMap;
 
-use super::display_settings::{DisplaySettings, DisplaySettingsStore, LoadedDisplaySettings};
+use super::display_settings::{GameSettings, GameSettingsStore, LoadedGameSettings};
 use super::map::MapBoundaryViewCache;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum SettingsTab {
+    Display,
+    Audio,
+}
 
 #[derive(Resource)]
 pub(super) struct GameUiState {
@@ -35,6 +41,10 @@ pub(super) struct GameUiState {
     pub(super) main_menu_load_game_open: bool,
     pub(super) main_menu_bgm_enabled: bool,
     pub(super) settings_open: bool,
+    pub(super) settings_tab: SettingsTab,
+    pub(super) audio_output_devices: Vec<String>,
+    pub(super) audio_output_devices_refresh_attempted: bool,
+    pub(super) audio_output_devices_error: Option<String>,
     pub(super) officer_settings_open: bool,
     pub(super) officer_settings_game: Option<GameState>,
     pub(super) officer_settings_filters: OfficerBrowserFilters,
@@ -69,9 +79,9 @@ pub(super) struct GameUiState {
     pub(super) save_slots: Vec<SaveSlotMeta>,
     pub(super) save_slot_id: String,
     pub(super) save_display_name: String,
-    pub(super) settings_store: DisplaySettingsStore,
-    pub(super) applied_settings: DisplaySettings,
-    pub(super) pending_settings: DisplaySettings,
+    pub(super) settings_store: GameSettingsStore,
+    pub(super) applied_settings: GameSettings,
+    pub(super) pending_settings: GameSettings,
     pub(super) message: String,
     pub(super) egui_font_configured: bool,
     pub(super) banner_logo: Option<MenuBannerLogo>,
@@ -84,26 +94,26 @@ pub(super) struct GameUiState {
 }
 
 pub(super) struct MenuBannerLogo {
-    pub(super) texture: egui::TextureHandle,
+    pub(super) texture_id: egui::TextureId,
     pub(super) crop_uv: egui::Rect,
     pub(super) crop_size: egui::Vec2,
 }
 
 pub(super) struct MenuIllustration {
-    pub(super) texture: egui::TextureHandle,
+    pub(super) texture_id: egui::TextureId,
     pub(super) crop_uv: egui::Rect,
     pub(super) crop_size: egui::Vec2,
 }
 
 pub(super) struct MenuCloudPattern {
-    pub(super) texture: egui::TextureHandle,
+    pub(super) texture_id: egui::TextureId,
     pub(super) size: egui::Vec2,
 }
 
 impl GameUiState {
     pub(super) fn new(
-        settings_store: DisplaySettingsStore,
-        loaded_settings: LoadedDisplaySettings,
+        settings_store: GameSettingsStore,
+        loaded_settings: LoadedGameSettings,
     ) -> Self {
         let json_scenario = ScenarioData::from_path("assets/scenarios/early_three_kingdoms.json")
             .or_else(|_| ScenarioData::default_scenario())
@@ -155,6 +165,10 @@ impl GameUiState {
             main_menu_load_game_open: false,
             main_menu_bgm_enabled: true,
             settings_open: false,
+            settings_tab: SettingsTab::Display,
+            audio_output_devices: Vec::new(),
+            audio_output_devices_refresh_attempted: false,
+            audio_output_devices_error: None,
             officer_settings_open: false,
             officer_settings_game: None,
             officer_settings_filters: OfficerBrowserFilters::default(),
@@ -190,7 +204,7 @@ impl GameUiState {
             save_slot_id: "slot1".to_string(),
             save_display_name: "新存档".to_string(),
             settings_store,
-            applied_settings: loaded_settings.settings,
+            applied_settings: loaded_settings.settings.clone(),
             pending_settings: loaded_settings.settings,
             message,
             egui_font_configured: false,
@@ -207,7 +221,7 @@ impl GameUiState {
 
 impl Default for GameUiState {
     fn default() -> Self {
-        let settings_store = DisplaySettingsStore::with_default_path();
+        let settings_store = GameSettingsStore::with_default_path();
         let loaded_settings = settings_store.load();
         Self::new(settings_store, loaded_settings)
     }

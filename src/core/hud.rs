@@ -1602,15 +1602,15 @@ pub(super) fn report_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, screen
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::display_settings::{DisplaySettings, LoadedDisplaySettings};
+    use crate::core::display_settings::{GameSettings, LoadedGameSettings};
     use crate::core::state::{GameUiState, OfficerGenderFilter, OfficerStatusFilter};
     use crate::game::{OfficerGender, OfficerStatus, ScenarioData};
 
     fn ui_state_with_game() -> GameUiState {
         let mut state = GameUiState::new(
-            crate::core::display_settings::DisplaySettingsStore::with_default_path(),
-            LoadedDisplaySettings {
-                settings: DisplaySettings::default(),
+            crate::core::display_settings::GameSettingsStore::with_default_path(),
+            LoadedGameSettings {
+                settings: GameSettings::default(),
                 message: None,
             },
         );
