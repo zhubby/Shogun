@@ -30,7 +30,8 @@ pub(super) fn in_game(ctx: &egui::Context, ui_state: &mut GameUiState) {
 pub(super) fn in_game_hud(ctx: &egui::Context, ui_state: &mut GameUiState) {
     let screen = ctx.content_rect();
     top_status_hud(ctx, ui_state, screen);
-    left_map_hud(ctx, ui_state);
+    map_controls_hud(ctx, ui_state);
+    left_city_summary_hud(ctx, ui_state);
     city_list_hud(ctx, ui_state, screen);
     save_hud(ctx, ui_state, screen);
     city_drawer_hud(ctx, ui_state, screen);
@@ -107,8 +108,23 @@ pub(super) fn top_status_hud(ctx: &egui::Context, ui_state: &mut GameUiState, sc
         });
 }
 
-pub(super) fn left_map_hud(ctx: &egui::Context, ui_state: &mut GameUiState) {
-    egui::Area::new(egui::Id::new("hud_left_map_tools"))
+pub(super) fn map_controls_hud(ctx: &egui::Context, ui_state: &mut GameUiState) {
+    egui::Area::new(egui::Id::new("hud_map_controls"))
+        .order(egui::Order::Foreground)
+        .anchor(
+            egui::Align2::RIGHT_TOP,
+            egui::vec2(-HUD_MARGIN, HUD_TOP_OFFSET + HUD_TOP_HEIGHT + 14.0),
+        )
+        .show(ctx, |ui| {
+            war_panel_frame().show(ui, |ui| {
+                ui.set_width(270.0);
+                map_controls(ui, ui_state);
+            });
+        });
+}
+
+pub(super) fn left_city_summary_hud(ctx: &egui::Context, ui_state: &mut GameUiState) {
+    egui::Area::new(egui::Id::new("hud_left_city_summary"))
         .order(egui::Order::Foreground)
         .anchor(
             egui::Align2::LEFT_TOP,
@@ -117,8 +133,6 @@ pub(super) fn left_map_hud(ctx: &egui::Context, ui_state: &mut GameUiState) {
         .show(ctx, |ui| {
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(285.0);
-                map_controls(ui, ui_state);
-                ui.separator();
                 selected_city_summary(ui, ui_state);
             });
         });
@@ -653,7 +667,7 @@ pub(super) fn city_list_hud(ctx: &egui::Context, ui_state: &mut GameUiState, scr
         .order(egui::Order::Foreground)
         .anchor(
             egui::Align2::LEFT_TOP,
-            egui::vec2(HUD_MARGIN, HUD_TOP_OFFSET + HUD_TOP_HEIGHT + 210.0),
+            egui::vec2(HUD_MARGIN, HUD_TOP_OFFSET + HUD_TOP_HEIGHT + 338.0),
         )
         .show(ctx, |ui| {
             war_panel_frame().show(ui, |ui| {
@@ -870,27 +884,29 @@ pub(super) fn retainer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, scre
                             &office_id,
                         ) {
                             Ok(()) => {
-                                let officer_name = game
+                                let (officer_name, loyalty) = game
                                     .officers
                                     .get(&officer_id)
-                                    .map(|officer| officer.name.clone())
-                                    .unwrap_or(officer_id);
+                                    .map(|officer| (officer.name.clone(), officer.loyalty))
+                                    .unwrap_or((officer_id, 0));
                                 let office_name = official_post_spec(&office_id)
                                     .map(|spec| spec.name)
                                     .unwrap_or(office_id.as_str());
-                                ui_state.message = format!("{officer_name} 被任命为 {office_name}");
+                                ui_state.message = format!(
+                                    "{officer_name} 被任命为 {office_name}，忠诚 {loyalty}"
+                                );
                             }
                             Err(error) => ui_state.message = error.to_string(),
                         }
                     } else if let Some(officer_id) = response.dismiss_officer_id {
                         match dismiss_official_post(game, &player_faction_id, &officer_id) {
                             Ok(()) => {
-                                let officer_name = game
+                                let (officer_name, loyalty) = game
                                     .officers
                                     .get(&officer_id)
-                                    .map(|officer| officer.name.clone())
-                                    .unwrap_or(officer_id);
-                                ui_state.message = format!("{officer_name} 已免官");
+                                    .map(|officer| (officer.name.clone(), officer.loyalty))
+                                    .unwrap_or((officer_id, 0));
+                                ui_state.message = format!("{officer_name} 已免官，忠诚 {loyalty}");
                             }
                             Err(error) => ui_state.message = error.to_string(),
                         }
@@ -924,12 +940,24 @@ pub(super) fn selected_city_summary(ui: &mut egui::Ui, ui_state: &mut GameUiStat
 }
 
 pub(super) fn map_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
-    ui.heading("地图");
+    ui.horizontal(|ui| {
+        ui.heading(egui::RichText::new("地图").color(war_gold()));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_enabled(
+                ui_state.map_boundaries.is_some(),
+                egui::Checkbox::new(&mut ui_state.map_boundaries_enabled, "州郡边界"),
+            );
+        });
+    });
+    ui.add_space(4.0);
     ui.horizontal(|ui| {
         if ui.button("-").clicked() {
             zoom_map(ui_state, 1.0 / MAP_ZOOM_STEP, None, None);
         }
-        ui.label(format!("{:.0}%", ui_state.map_zoom * 100.0));
+        ui.add_sized(
+            [58.0, 28.0],
+            egui::Label::new(format!("{:.0}%", ui_state.map_zoom * 100.0)),
+        );
         if ui.button("+").clicked() {
             zoom_map(ui_state, MAP_ZOOM_STEP, None, None);
         }
@@ -937,10 +965,6 @@ pub(super) fn map_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
             reset_map_view(ui_state);
         }
     });
-    ui.add_enabled(
-        ui_state.map_boundaries.is_some(),
-        egui::Checkbox::new(&mut ui_state.map_boundaries_enabled, "州郡边界"),
-    );
     if ui_state.map_boundaries.is_none() {
         ui.colored_label(war_text_muted(), "边界资产未加载");
     }
@@ -996,11 +1020,10 @@ pub(super) fn officer_browser_filters(
     filters: &mut OfficerBrowserFilters,
     id_salt: &'static str,
 ) {
-    const FILTER_HEIGHT: f32 = 40.0;
+    const FILTER_HEIGHT: f32 = 30.0;
     ui.horizontal(|ui| {
-        ui.set_min_height(FILTER_HEIGHT);
         ui.spacing_mut().interact_size.y = FILTER_HEIGHT;
-        ui.spacing_mut().item_spacing.x = 16.0;
+        ui.spacing_mut().item_spacing.x = 12.0;
         ui.label("搜索");
         ui.add_sized(
             [260.0, FILTER_HEIGHT],
@@ -1009,7 +1032,6 @@ pub(super) fn officer_browser_filters(
 
         egui::ComboBox::from_id_salt((id_salt, "gender"))
             .width(160.0)
-            .height(FILTER_HEIGHT)
             .selected_text(officer_gender_filter_label(filters.gender))
             .show_ui(ui, |ui| {
                 for filter in [
@@ -1027,7 +1049,6 @@ pub(super) fn officer_browser_filters(
 
         egui::ComboBox::from_id_salt((id_salt, "faction"))
             .width(170.0)
-            .height(FILTER_HEIGHT)
             .selected_text(
                 filters
                     .faction_id
@@ -1049,7 +1070,6 @@ pub(super) fn officer_browser_filters(
 
         egui::ComboBox::from_id_salt((id_salt, "status"))
             .width(170.0)
-            .height(FILTER_HEIGHT)
             .selected_text(officer_status_filter_label(filters.status))
             .show_ui(ui, |ui| {
                 for filter in [
@@ -1069,7 +1089,6 @@ pub(super) fn officer_browser_filters(
 
         egui::ComboBox::from_id_salt((id_salt, "city"))
             .width(170.0)
-            .height(FILTER_HEIGHT)
             .selected_text(
                 filters
                     .city_id
