@@ -37,7 +37,7 @@ pub(super) fn enter_game(ui_state: &mut GameUiState, game: GameState, message: S
     ui_state.selected_diplomacy_target = None;
     ui_state.selected_command_category = CommandCategory::Domestic;
     ui_state.selected_command_action = CommandAction::Develop;
-    ui_state.city_drawer_open = ui_state.selected_city_id.is_some();
+    ui_state.city_drawer_open = false;
     ui_state.city_list_open = false;
     ui_state.reports_open = true;
     ui_state.save_panel_open = false;
@@ -59,7 +59,7 @@ pub(super) fn finish_current_turn(ui_state: &mut GameUiState) {
     let report = finish_turn(game, &provider);
     ui_state.message = format!("完成 {} 条结算记录", report.entries.len());
     ui_state.selected_city_id = first_player_city(game);
-    ui_state.city_drawer_open = ui_state.selected_city_id.is_some();
+    ui_state.city_drawer_open = false;
 }
 
 pub(super) fn clear_pending_commands(ui_state: &mut GameUiState) {

@@ -4,6 +4,7 @@ use bevy_egui::egui;
 use std::collections::BTreeMap;
 
 use super::display_settings::{DisplaySettings, DisplaySettingsStore, LoadedDisplaySettings};
+use super::map::MapBoundaryViewCache;
 
 #[derive(Resource)]
 pub(super) struct GameUiState {
@@ -18,6 +19,7 @@ pub(super) struct GameUiState {
     pub(super) map_pan: egui::Vec2,
     pub(super) map_boundaries_enabled: bool,
     pub(super) map_boundaries: Option<MapBoundaryCatalog>,
+    pub(super) map_boundary_view_cache: MapBoundaryViewCache,
     pub(super) city_drawer_open: bool,
     pub(super) city_list_open: bool,
     pub(super) officer_browser_open: bool,
@@ -98,6 +100,7 @@ impl GameUiState {
             map_pan: egui::Vec2::ZERO,
             map_boundaries_enabled: true,
             map_boundaries,
+            map_boundary_view_cache: MapBoundaryViewCache::default(),
             city_drawer_open: false,
             city_list_open: false,
             officer_browser_open: false,

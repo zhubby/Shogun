@@ -16,8 +16,15 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
     }
     let desired = ui.available_size();
     let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click_and_drag());
+    let response = response.on_hover_cursor(egui::CursorIcon::Grab);
     let painter = ui.painter_at(rect);
     draw_strategy_map_background(&painter, rect);
+
+    let Some(bounds) = ui_state.game.as_ref().and_then(map_bounds) else {
+        return;
+    };
+    let limits = map_pan_limits_for_state(ui_state, bounds, rect);
+    clamp_map_pan(ui_state, limits);
 
     let scroll_delta = ui.input(|input| input.raw_scroll_delta.y);
     if response.hovered() && scroll_delta.abs() > f32::EPSILON {
@@ -28,24 +35,29 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
             response.hover_pos(),
             Some(rect.center()),
         );
+        let limits = map_pan_limits_for_state(ui_state, bounds, rect);
+        clamp_map_pan(ui_state, limits);
     }
 
     if response.dragged_by(egui::PointerButton::Primary) {
         ui_state.map_pan += response.drag_delta();
-        clamp_map_pan(ui_state, rect);
+        let limits = map_pan_limits_for_state(ui_state, bounds, rect);
+        clamp_map_pan(ui_state, limits);
+        ui.output_mut(|output| output.cursor_icon = egui::CursorIcon::Grabbing);
     }
 
     let Some(game) = &ui_state.game else {
-        return;
-    };
-    let Some(bounds) = map_bounds(game) else {
         return;
     };
 
     if ui_state.map_boundaries_enabled
         && let Some(catalog) = &ui_state.map_boundaries
     {
-        draw_map_boundaries(&painter, game, catalog, bounds, rect, ui_state);
+        let view = MapBoundaryView::from_ui_state(ui_state);
+        let (cells, province_segments) = ui_state
+            .map_boundary_view_cache
+            .boundaries_for_year(catalog, game.year);
+        draw_map_boundaries(&painter, game, cells, province_segments, bounds, rect, view);
     }
 
     for road in &game.roads {
@@ -83,22 +95,23 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
         .interact_pointer_pos()
         .and_then(|pointer_pos| city_at_position(game, bounds, rect, pointer_pos, ui_state));
 
-    if (response.clicked() || response.secondary_clicked())
+    if response.clicked()
         && let Some(city_id) = picked_city.clone()
     {
         ui_state.selected_city_id = Some(city_id);
-        ui_state.city_drawer_open = true;
     }
-    if response.double_clicked()
+    if response.secondary_clicked()
         && let Some(city_id) = picked_city.clone()
     {
-        open_city(ui_state, city_id);
+        ui_state.selected_city_id = Some(city_id);
     }
 
-    let context_city_id = ui_state.selected_city_id.clone();
+    let context_city_id = picked_city
+        .clone()
+        .or_else(|| ui_state.selected_city_id.clone());
     response.context_menu(|ui| {
         if let Some(city_id) = context_city_id.clone()
-            && ui.button("打开军令").clicked()
+            && ui.button("打开中军帐").clicked()
         {
             open_city(ui_state, city_id);
             ui.close();
@@ -109,25 +122,25 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
 pub(super) fn draw_map_boundaries(
     painter: &egui::Painter,
     game: &GameState,
-    catalog: &MapBoundaryCatalog,
+    cells: &[TerritoryCell],
+    province_segments: &[(MapPosition, MapPosition)],
     bounds: MapBounds,
     rect: egui::Rect,
-    ui_state: &GameUiState,
+    view: MapBoundaryView,
 ) {
-    let cells = catalog.territory_cells_for_year(game.year);
     if cells.is_empty() {
         return;
     }
 
-    for cell in &cells {
-        let fill = territory_cell_fill_color(cell, game, ui_state);
-        let points = territory_cell_screen_points(cell, bounds, rect, ui_state);
+    for cell in cells {
+        let fill = territory_cell_fill_color_for_selection(cell, game, view.selected_city_id());
+        let points = territory_cell_screen_points(cell, bounds, rect, view.transform);
         paint_boundary_polygon(painter, points, fill, egui::Stroke::NONE);
     }
 
-    for cell in &cells {
-        let selected = selected_city_in_cell(cell, game, ui_state);
-        let points = territory_cell_screen_points(cell, bounds, rect, ui_state);
+    for cell in cells {
+        let selected = selected_city_in_cell_id(cell, game, view.selected_city_id());
+        let points = territory_cell_screen_points(cell, bounds, rect, view.transform);
         let (stroke, dash, gap) = if selected {
             (
                 egui::Stroke::new(
@@ -150,9 +163,9 @@ pub(super) fn draw_map_boundaries(
         draw_dashed_closed_polyline(painter, &points, stroke, dash, gap);
     }
 
-    for (start, end) in province_border_segments(&cells) {
-        let start = map_to_screen(start, bounds, rect, ui_state);
-        let end = map_to_screen(end, bounds, rect, ui_state);
+    for &(start, end) in province_segments {
+        let start = map_to_screen_with_transform(start, bounds, rect, view.transform);
+        let end = map_to_screen_with_transform(end, bounds, rect, view.transform);
         draw_dashed_segment(
             painter,
             start,
@@ -179,11 +192,11 @@ pub(super) fn territory_cell_screen_points(
     cell: &TerritoryCell,
     bounds: MapBounds,
     rect: egui::Rect,
-    ui_state: &GameUiState,
+    transform: MapTransform,
 ) -> Vec<egui::Pos2> {
     cell.points
         .iter()
-        .map(|point| map_to_screen(*point, bounds, rect, ui_state))
+        .map(|point| map_to_screen_with_transform(*point, bounds, rect, transform))
         .collect()
 }
 
@@ -194,6 +207,9 @@ pub(super) fn paint_boundary_polygon(
     stroke: egui::Stroke,
 ) {
     if points.len() < 3 {
+        return;
+    }
+    if points_screen_bounds(&points).is_some_and(|bounds| !bounds.intersects(painter.clip_rect())) {
         return;
     }
     painter.add(egui::Shape::Path(egui::epaint::PathShape {
@@ -217,6 +233,9 @@ pub(super) fn draw_dashed_closed_polyline(
 
     let cycle = dash + gap;
     if cycle <= f32::EPSILON {
+        return;
+    }
+    if points_screen_bounds(points).is_some_and(|bounds| !bounds.intersects(painter.clip_rect())) {
         return;
     }
 
@@ -250,6 +269,10 @@ pub(super) fn draw_dashed_segment(
     if length <= f32::EPSILON {
         return;
     }
+    let bounds = egui::Rect::from_two_pos(start, end).expand(stroke.width);
+    if !bounds.intersects(painter.clip_rect()) {
+        return;
+    }
 
     let direction = delta / length;
     let mut offset = 0.0;
@@ -260,6 +283,41 @@ pub(super) fn draw_dashed_segment(
             stroke,
         );
         offset += cycle;
+    }
+}
+
+pub(super) fn points_screen_bounds(points: &[egui::Pos2]) -> Option<egui::Rect> {
+    let first = points.first().copied()?;
+    let mut bounds = egui::Rect::from_min_max(first, first);
+    for point in &points[1..] {
+        bounds.min.x = bounds.min.x.min(point.x);
+        bounds.min.y = bounds.min.y.min(point.y);
+        bounds.max.x = bounds.max.x.max(point.x);
+        bounds.max.y = bounds.max.y.max(point.y);
+    }
+    Some(bounds)
+}
+
+#[derive(Default)]
+pub(super) struct MapBoundaryViewCache {
+    year: Option<i32>,
+    cells: Vec<TerritoryCell>,
+    province_segments: Vec<(MapPosition, MapPosition)>,
+}
+
+impl MapBoundaryViewCache {
+    pub(super) fn boundaries_for_year(
+        &mut self,
+        catalog: &MapBoundaryCatalog,
+        year: i32,
+    ) -> (&[TerritoryCell], &[(MapPosition, MapPosition)]) {
+        if self.year != Some(year) {
+            self.cells = catalog.territory_cells_for_year(year);
+            self.province_segments = province_border_segments(&self.cells);
+            self.year = Some(year);
+        }
+
+        (&self.cells, &self.province_segments)
     }
 }
 
@@ -329,12 +387,12 @@ pub(super) fn quantized_map_position(position: MapPosition) -> (i64, i64) {
     )
 }
 
-pub(super) fn territory_cell_fill_color(
+pub(super) fn territory_cell_fill_color_for_selection(
     cell: &TerritoryCell,
     game: &GameState,
-    ui_state: &GameUiState,
+    selected_city_id: Option<&str>,
 ) -> egui::Color32 {
-    let selected = selected_city_in_cell(cell, game, ui_state);
+    let selected = selected_city_in_cell_id(cell, game, selected_city_id);
     let alpha = if selected { 44 } else { 18 };
 
     dominant_cell_faction(cell, game)
@@ -364,12 +422,12 @@ pub(super) fn dominant_cell_faction<'a>(
     game.factions.get(faction_id)
 }
 
-pub(super) fn selected_city_in_cell(
+pub(super) fn selected_city_in_cell_id(
     cell: &TerritoryCell,
     game: &GameState,
-    ui_state: &GameUiState,
+    selected_city_id: Option<&str>,
 ) -> bool {
-    let Some(selected_city_id) = ui_state.selected_city_id.as_deref() else {
+    let Some(selected_city_id) = selected_city_id else {
         return false;
     };
     game.cities
@@ -398,62 +456,121 @@ pub(super) fn draw_city_marker(
     ui_state: &GameUiState,
 ) {
     let scale = ui_state.map_zoom.sqrt().clamp(0.85, 1.35);
-    let pole_top = pos + egui::vec2(-13.0 * scale, -31.0 * scale);
-    let pole_bottom = pos + egui::vec2(-13.0 * scale, 18.0 * scale);
-    let flag_fill = if player_owned {
+    let marker_scale = scale * city_marker_rank_scale(city);
+    let marker_center = pos + egui::vec2(0.0, -5.0 * scale);
+    let radius = 20.0 * marker_scale;
+    let faction_fill = if player_owned {
         color
     } else {
-        color.gamma_multiply(0.82)
+        color.gamma_multiply(0.74)
     };
     let shadow = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 120);
+    let ring = if selected { war_gold() } else { faction_fill };
 
-    painter.line_segment(
-        [
-            pole_top + egui::vec2(2.0, 3.0),
-            pole_bottom + egui::vec2(2.0, 3.0),
-        ],
-        egui::Stroke::new(5.0, shadow),
+    painter.circle_filled(
+        marker_center + egui::vec2(2.5 * scale, 3.5 * scale),
+        radius + 5.0 * marker_scale,
+        shadow,
     );
-    painter.line_segment(
-        [pole_top, pole_bottom],
-        egui::Stroke::new(3.0, egui::Color32::from_rgb(34, 26, 18)),
+    painter.circle_filled(
+        marker_center,
+        radius + 4.0 * marker_scale,
+        egui::Color32::from_rgba_unmultiplied(20, 17, 13, 238),
+    );
+    painter.circle_stroke(
+        marker_center,
+        radius + 3.0 * marker_scale,
+        egui::Stroke::new(if selected { 3.0 } else { 1.8 } * marker_scale, ring),
+    );
+    painter.circle_filled(marker_center, radius, faction_fill.gamma_multiply(0.62));
+    painter.circle_filled(
+        marker_center,
+        radius - 5.0 * marker_scale,
+        egui::Color32::from_rgba_unmultiplied(36, 31, 23, 226),
     );
 
-    let banner = egui::Rect::from_min_size(
-        pole_top + egui::vec2(3.0 * scale, 1.0 * scale),
-        egui::vec2(43.0 * scale, 20.0 * scale),
+    let wall_fill = egui::Color32::from_rgb(106, 88, 58);
+    let wall_light = egui::Color32::from_rgb(171, 139, 83);
+    let wall_dark = egui::Color32::from_rgb(48, 38, 25);
+    let wall = egui::Rect::from_center_size(
+        marker_center + egui::vec2(0.0, 4.0 * marker_scale),
+        egui::vec2(32.0 * marker_scale, 16.0 * marker_scale),
     );
     painter.rect(
-        banner.translate(egui::vec2(2.0, 2.0)),
-        2.0,
+        wall.translate(egui::vec2(1.8 * scale, 2.0 * scale)),
+        2.0 * marker_scale,
         shadow,
         egui::Stroke::NONE,
         egui::StrokeKind::Outside,
     );
     painter.rect(
-        banner,
-        2.0,
-        flag_fill,
-        egui::Stroke::new(
-            if selected { 2.5 } else { 1.5 },
-            if selected {
-                war_gold()
-            } else {
-                egui::Color32::from_rgb(35, 28, 20)
-            },
-        ),
+        wall,
+        2.0 * marker_scale,
+        wall_fill,
+        egui::Stroke::new(1.2 * marker_scale, wall_dark),
+        egui::StrokeKind::Outside,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(wall.left(), wall.top() + 5.0 * marker_scale),
+            egui::pos2(wall.right(), wall.top() + 5.0 * marker_scale),
+        ],
+        egui::Stroke::new(1.0 * marker_scale, wall_light),
+    );
+
+    let merlon_width = 5.5 * marker_scale;
+    let merlon_gap = 2.0 * marker_scale;
+    let merlon_height = 5.8 * marker_scale;
+    let total_merlon_width = 4.0 * merlon_width + 3.0 * merlon_gap;
+    let mut merlon_left = marker_center.x - total_merlon_width * 0.5;
+    for _ in 0..4 {
+        let merlon = egui::Rect::from_min_size(
+            egui::pos2(merlon_left, wall.top() - merlon_height + 1.0 * marker_scale),
+            egui::vec2(merlon_width, merlon_height),
+        );
+        painter.rect(
+            merlon,
+            1.0 * marker_scale,
+            wall_light,
+            egui::Stroke::new(0.8 * marker_scale, wall_dark),
+            egui::StrokeKind::Outside,
+        );
+        merlon_left += merlon_width + merlon_gap;
+    }
+
+    let gate = egui::Rect::from_center_size(
+        egui::pos2(marker_center.x, wall.bottom() - 4.4 * marker_scale),
+        egui::vec2(8.5 * marker_scale, 10.2 * marker_scale),
+    );
+    painter.rect(
+        gate,
+        2.0 * marker_scale,
+        egui::Color32::from_rgb(42, 31, 21),
+        egui::Stroke::new(0.9 * marker_scale, egui::Color32::from_rgb(133, 105, 62)),
+        egui::StrokeKind::Outside,
+    );
+
+    let crest = egui::Rect::from_center_size(
+        marker_center + egui::vec2(0.0, -10.5 * marker_scale),
+        egui::vec2(14.0 * marker_scale, 4.0 * marker_scale),
+    );
+    painter.rect(
+        crest,
+        1.0 * marker_scale,
+        faction_fill,
+        egui::Stroke::new(0.8 * marker_scale, wall_dark),
         egui::StrokeKind::Outside,
     );
 
     let base = egui::Rect::from_center_size(
-        pos + egui::vec2(0.0, 12.0 * scale),
-        egui::vec2(42.0 * scale, 17.0 * scale),
+        pos + egui::vec2(0.0, 25.0 * scale),
+        egui::vec2(48.0 * scale, 18.0 * scale),
     );
     painter.rect(
         base,
         4.0,
         egui::Color32::from_rgba_unmultiplied(20, 18, 14, 222),
-        egui::Stroke::new(1.0, flag_fill),
+        egui::Stroke::new(1.0, faction_fill),
         egui::StrokeKind::Outside,
     );
     painter.text(
@@ -464,7 +581,7 @@ pub(super) fn draw_city_marker(
         war_text(),
     );
 
-    let label_center = pos + egui::vec2(0.0, 42.0 * scale);
+    let label_center = pos + egui::vec2(0.0, 54.0 * scale);
     let label_width = (city.name.chars().count() as f32 * 17.0 + 28.0).max(68.0);
     let label_rect =
         egui::Rect::from_center_size(label_center, egui::vec2(label_width, 25.0 * scale));
@@ -487,6 +604,16 @@ pub(super) fn draw_city_marker(
     );
 }
 
+pub(super) fn city_marker_rank_scale(city: &City) -> f32 {
+    match city.profile.as_ref().map(|profile| &profile.scale) {
+        Some(CityScale::ImperialCapital) => 1.18,
+        Some(CityScale::RegionalCapital) => 1.1,
+        Some(CityScale::Commandery) => 1.02,
+        Some(CityScale::County) => 0.94,
+        None => (0.94 + f32::from(city.level) * 0.02).clamp(0.96, 1.14),
+    }
+}
+
 pub(super) fn compact_troops(troops: u32) -> String {
     if troops >= 10_000 {
         format!("{:.1}万", troops as f32 / 10_000.0)
@@ -501,6 +628,40 @@ pub(super) struct MapBounds {
     max_x: f32,
     min_y: f32,
     max_y: f32,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct MapTransform {
+    zoom: f32,
+    pan: egui::Vec2,
+}
+
+impl MapTransform {
+    fn from_ui_state(ui_state: &GameUiState) -> Self {
+        Self {
+            zoom: ui_state.map_zoom,
+            pan: ui_state.map_pan,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct MapBoundaryView {
+    transform: MapTransform,
+    selected_city_id: Option<CityId>,
+}
+
+impl MapBoundaryView {
+    fn from_ui_state(ui_state: &GameUiState) -> Self {
+        Self {
+            transform: MapTransform::from_ui_state(ui_state),
+            selected_city_id: ui_state.selected_city_id.clone(),
+        }
+    }
+
+    fn selected_city_id(&self) -> Option<&str> {
+        self.selected_city_id.as_deref()
+    }
 }
 
 pub(super) fn map_bounds(game: &GameState) -> Option<MapBounds> {
@@ -527,7 +688,21 @@ pub(super) fn map_to_screen(
     rect: egui::Rect,
     ui_state: &GameUiState,
 ) -> egui::Pos2 {
-    let padding = (rect.width().min(rect.height()) * 0.09).clamp(72.0, 118.0);
+    map_to_screen_with_transform(
+        position,
+        bounds,
+        rect,
+        MapTransform::from_ui_state(ui_state),
+    )
+}
+
+pub(super) fn map_to_screen_with_transform(
+    position: MapPosition,
+    bounds: MapBounds,
+    rect: egui::Rect,
+    transform: MapTransform,
+) -> egui::Pos2 {
+    let padding = map_padding(rect);
     let width = (bounds.max_x - bounds.min_x).max(1.0);
     let height = (bounds.max_y - bounds.min_y).max(1.0);
     let x = (position.x - bounds.min_x) / width;
@@ -536,7 +711,74 @@ pub(super) fn map_to_screen(
         rect.left() + padding + x * (rect.width() - padding * 2.0).max(1.0),
         rect.bottom() - padding - y * (rect.height() - padding * 2.0).max(1.0),
     );
-    rect.center() + (base - rect.center()) * ui_state.map_zoom + ui_state.map_pan
+    rect.center() + (base - rect.center()) * transform.zoom + transform.pan
+}
+
+pub(super) fn map_content_screen_bounds(
+    game: &GameState,
+    catalog: Option<&MapBoundaryCatalog>,
+    bounds: MapBounds,
+    rect: egui::Rect,
+    zoom: f32,
+) -> egui::Rect {
+    let transform = MapTransform {
+        zoom,
+        pan: egui::Vec2::ZERO,
+    };
+    let mut screen_bounds = None;
+
+    if let Some(catalog) = catalog {
+        for boundary in catalog.boundaries_for_year(game.year) {
+            for point in &boundary.points {
+                extend_screen_bounds(
+                    &mut screen_bounds,
+                    map_to_screen_with_transform(*point, bounds, rect, transform),
+                );
+            }
+        }
+    }
+
+    for city in game.cities.values() {
+        let position = map_to_screen_with_transform(city.position, bounds, rect, transform);
+        extend_screen_bounds_rect(
+            &mut screen_bounds,
+            city_marker_screen_bounds(position, city, zoom),
+        );
+    }
+
+    screen_bounds.unwrap_or(rect)
+}
+
+pub(super) fn extend_screen_bounds(bounds: &mut Option<egui::Rect>, point: egui::Pos2) {
+    if let Some(bounds) = bounds {
+        bounds.min.x = bounds.min.x.min(point.x);
+        bounds.min.y = bounds.min.y.min(point.y);
+        bounds.max.x = bounds.max.x.max(point.x);
+        bounds.max.y = bounds.max.y.max(point.y);
+    } else {
+        *bounds = Some(egui::Rect::from_min_max(point, point));
+    }
+}
+
+pub(super) fn extend_screen_bounds_rect(bounds: &mut Option<egui::Rect>, rect: egui::Rect) {
+    extend_screen_bounds(bounds, rect.min);
+    extend_screen_bounds(bounds, rect.max);
+}
+
+pub(super) fn city_marker_screen_bounds(
+    position: egui::Pos2,
+    city: &City,
+    zoom: f32,
+) -> egui::Rect {
+    let scale = zoom.sqrt().clamp(0.85, 1.35);
+    let marker_scale = scale * city_marker_rank_scale(city);
+    let radius = 25.0 * marker_scale;
+    let label_half_width = (city.name.chars().count() as f32 * 8.5 + 14.0).max(34.0);
+    let half_width = radius.max(label_half_width);
+    egui::Rect::from_min_max(
+        position + egui::vec2(-half_width, -32.0 * marker_scale),
+        position + egui::vec2(half_width, 67.0 * scale),
+    )
 }
 
 pub(super) fn city_at_position(
@@ -582,15 +824,60 @@ pub(super) fn zoom_map(
     }
 }
 
-pub(super) fn clamp_map_pan(ui_state: &mut GameUiState, rect: egui::Rect) {
-    if ui_state.map_zoom <= 1.0 {
-        ui_state.map_pan = egui::Vec2::ZERO;
-        return;
+pub(super) fn clamp_map_pan(ui_state: &mut GameUiState, limits: MapPanLimits) {
+    ui_state.map_pan.x = ui_state.map_pan.x.clamp(limits.min.x, limits.max.x);
+    ui_state.map_pan.y = ui_state.map_pan.y.clamp(limits.min.y, limits.max.y);
+}
+
+pub(super) fn map_pan_limits_for_state(
+    ui_state: &GameUiState,
+    bounds: MapBounds,
+    rect: egui::Rect,
+) -> MapPanLimits {
+    let catalog = ui_state
+        .map_boundaries_enabled
+        .then_some(ui_state.map_boundaries.as_ref())
+        .flatten();
+    let content_bounds = ui_state.game.as_ref().map_or(rect, |game| {
+        map_content_screen_bounds(game, catalog, bounds, rect, ui_state.map_zoom)
+    });
+    map_pan_limits(content_bounds, rect)
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct MapPanLimits {
+    min: egui::Vec2,
+    max: egui::Vec2,
+}
+
+pub(super) fn map_pan_limits(content: egui::Rect, viewport: egui::Rect) -> MapPanLimits {
+    let (min_x, max_x) =
+        pan_axis_limits(content.min.x, content.max.x, viewport.min.x, viewport.max.x);
+    let (min_y, max_y) =
+        pan_axis_limits(content.min.y, content.max.y, viewport.min.y, viewport.max.y);
+    MapPanLimits {
+        min: egui::vec2(min_x, min_y),
+        max: egui::vec2(max_x, max_y),
     }
-    let max_x = rect.width() * ui_state.map_zoom;
-    let max_y = rect.height() * ui_state.map_zoom;
-    ui_state.map_pan.x = ui_state.map_pan.x.clamp(-max_x, max_x);
-    ui_state.map_pan.y = ui_state.map_pan.y.clamp(-max_y, max_y);
+}
+
+pub(super) fn pan_axis_limits(
+    content_min: f32,
+    content_max: f32,
+    viewport_min: f32,
+    viewport_max: f32,
+) -> (f32, f32) {
+    let align_start = viewport_min - content_min;
+    let align_end = viewport_max - content_max;
+    if content_max - content_min > viewport_max - viewport_min {
+        (align_end, align_start)
+    } else {
+        (align_start, align_end)
+    }
+}
+
+pub(super) fn map_padding(rect: egui::Rect) -> f32 {
+    (rect.width().min(rect.height()) * 0.09).clamp(72.0, 118.0)
 }
 
 pub(super) fn reset_map_view(ui_state: &mut GameUiState) {
@@ -604,4 +891,59 @@ pub(super) fn faction_color(faction: &Faction) -> egui::Color32 {
         (faction.color[1].clamp(0.0, 1.0) * 255.0) as u8,
         (faction.color[2].clamp(0.0, 1.0) * 255.0) as u8,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn map_rect() -> egui::Rect {
+        egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 820.0))
+    }
+
+    #[test]
+    fn pan_limits_allow_dragging_at_default_zoom() {
+        let rect = map_rect();
+        let padding = map_padding(rect);
+        let content = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + padding, rect.top() + padding),
+            egui::pos2(rect.right() - padding, rect.bottom() - padding),
+        );
+        let limits = map_pan_limits(content, rect);
+
+        assert!(limits.min.x < 0.0);
+        assert!(limits.max.x > 0.0);
+        assert!(limits.min.y < 0.0);
+        assert!(limits.max.y > 0.0);
+    }
+
+    #[test]
+    fn pan_limits_reach_edges_of_wide_content() {
+        let rect = map_rect();
+        let content = egui::Rect::from_min_max(
+            egui::pos2(rect.left() - 420.0, rect.top() - 160.0),
+            egui::pos2(rect.right() + 310.0, rect.bottom() + 280.0),
+        );
+        let limits = map_pan_limits(content, rect);
+
+        assert_eq!(limits.min.x, -310.0);
+        assert_eq!(limits.max.x, 420.0);
+        assert_eq!(limits.min.y, -280.0);
+        assert_eq!(limits.max.y, 160.0);
+    }
+
+    #[test]
+    fn pan_limits_allow_narrow_content_to_touch_each_edge() {
+        let rect = map_rect();
+        let content = egui::Rect::from_min_max(
+            egui::pos2(rect.left() + 120.0, rect.top() + 80.0),
+            egui::pos2(rect.right() - 90.0, rect.bottom() - 110.0),
+        );
+        let limits = map_pan_limits(content, rect);
+
+        assert_eq!(limits.min.x, -120.0);
+        assert_eq!(limits.max.x, 90.0);
+        assert_eq!(limits.min.y, -80.0);
+        assert_eq!(limits.max.y, 110.0);
+    }
 }

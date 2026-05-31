@@ -448,7 +448,7 @@ pub(super) fn selected_city_summary(ui: &mut egui::Ui, ui_state: &mut GameUiStat
     ui.label(format!(
         "{level}级 | 人口 {population} | 兵 {troops} | 金 {gold} | 粮 {food} | 建材 {materials}"
     ));
-    if ui.button("打开军令").clicked() {
+    if ui.button("打开中军帐").clicked() {
         open_city(ui_state, city_id);
     }
 }
@@ -506,13 +506,12 @@ pub(super) fn city_list(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
                     ui.selectable_label(selected, format!("{} ({})", city_name, faction_name));
                 if response.clicked() {
                     ui_state.selected_city_id = Some(city_id.clone());
-                    ui_state.city_drawer_open = true;
                 }
-                if response.double_clicked() {
-                    open_city(ui_state, city_id.clone());
+                if response.secondary_clicked() {
+                    ui_state.selected_city_id = Some(city_id.clone());
                 }
                 response.context_menu(|ui| {
-                    if ui.button("打开军令").clicked() {
+                    if ui.button("打开中军帐").clicked() {
                         open_city(ui_state, city_id.clone());
                         ui.close();
                     }
