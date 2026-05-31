@@ -12,8 +12,8 @@ use super::state::{
     GameUiState, OfficerBrowserFilters, OfficerGenderFilter, OfficerStatusFilter, Screen,
 };
 use super::style::{
-    modal_title_bar, war_bar_frame, war_danger, war_gold, war_panel_frame, war_sub_panel_frame,
-    war_success, war_text_muted, war_warning,
+    modal_title_bar, war_bar_frame, war_border, war_danger, war_gold, war_panel_frame,
+    war_sub_panel_frame, war_success, war_text_muted, war_warning,
 };
 use super::{HUD_MARGIN, HUD_TOP_HEIGHT, HUD_TOP_OFFSET, MAP_ZOOM_STEP};
 
@@ -259,26 +259,132 @@ fn technology_tree(
         .show(ui, |ui| {
             for spec in technology_specs_for_branch(ui_state.selected_technology_branch) {
                 let selected = ui_state.selected_technology_id == spec.id;
-                let status = technology_status_label(game, faction_state, spec);
-                let text = format!(
-                    "{}  [{}]  {}回合 / {}金",
-                    spec.name, status, spec.turns, spec.gold_cost
-                );
-                let response = ui.selectable_label(selected, text);
+                let status = technology_node_status(game, faction_state, spec);
+                let response = technology_tree_node(ui, spec, selected, status, faction_state);
                 if response.clicked() {
                     ui_state.selected_technology_id = spec.id;
                 }
                 response.on_hover_text(spec.effect);
-                if !spec.prerequisites.is_empty() {
-                    ui.add_space(1.0);
-                    ui.colored_label(
-                        war_text_muted(),
-                        format!("  前置: {}", prerequisite_names(spec).join("、")),
-                    );
-                }
-                ui.add_space(5.0);
+                ui.add_space(7.0);
             }
         });
+}
+
+fn technology_tree_node(
+    ui: &mut egui::Ui,
+    spec: &TechnologySpec,
+    selected: bool,
+    status: TechnologyNodeStatus,
+    faction_state: Option<&FactionTechnologyState>,
+) -> egui::Response {
+    const ROW_HEIGHT: f32 = 48.0;
+    let depth = technology_depth(spec);
+    let indent = 18.0 + depth as f32 * 34.0;
+    let available = ui.available_width().max(360.0);
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(available, ROW_HEIGHT), egui::Sense::click());
+    let painter = ui.painter_at(rect);
+    let visuals = technology_status_visuals(status);
+    let node_center = egui::pos2(rect.left() + indent + 12.0, rect.center().y);
+    let has_parent = !spec.prerequisites.is_empty();
+
+    if selected || response.hovered() {
+        let fill = if selected {
+            egui::Color32::from_rgba_unmultiplied(122, 59, 39, 170)
+        } else {
+            egui::Color32::from_rgba_unmultiplied(74, 56, 35, 135)
+        };
+        painter.rect(
+            rect.shrink2(egui::vec2(1.0, 3.0)),
+            5.0,
+            fill,
+            egui::Stroke::new(1.0, if selected { war_gold() } else { war_border() }),
+            egui::StrokeKind::Inside,
+        );
+    }
+
+    if depth > 0 {
+        let trunk_x = rect.left() + indent - 18.0;
+        let top = egui::pos2(trunk_x, rect.top() - 7.0);
+        let bottom = egui::pos2(trunk_x, node_center.y);
+        painter.line_segment(
+            [top, bottom],
+            egui::Stroke::new(1.0, tree_line_color(status)),
+        );
+        painter.line_segment(
+            [bottom, egui::pos2(node_center.x - 14.0, node_center.y)],
+            egui::Stroke::new(1.0, tree_line_color(status)),
+        );
+    }
+    if has_parent {
+        painter.circle_filled(
+            egui::pos2(rect.left() + indent - 18.0, node_center.y),
+            2.0,
+            tree_line_color(status),
+        );
+    }
+
+    painter.circle_filled(node_center, 14.0, visuals.fill);
+    painter.circle_stroke(node_center, 14.0, egui::Stroke::new(1.2, visuals.stroke));
+    painter.text(
+        node_center,
+        egui::Align2::CENTER_CENTER,
+        technology_icon(spec),
+        egui::FontId::proportional(18.0),
+        visuals.icon_color,
+    );
+
+    let text_left = node_center.x + 23.0;
+    painter.text(
+        egui::pos2(text_left, rect.top() + 6.0),
+        egui::Align2::LEFT_TOP,
+        spec.name,
+        egui::FontId::proportional(18.0),
+        if status == TechnologyNodeStatus::Locked {
+            war_text_muted()
+        } else {
+            egui::Color32::from_rgb(238, 225, 193)
+        },
+    );
+
+    let progress = faction_state
+        .map(|state| technology_progress(state, spec.id))
+        .unwrap_or_default();
+    let meta = if status == TechnologyNodeStatus::Active {
+        format!("{progress}/{}回合  {}金", spec.turns, spec.gold_cost)
+    } else {
+        format!("{}回合 / {}金", spec.turns, spec.gold_cost)
+    };
+    painter.text(
+        egui::pos2(text_left, rect.top() + 29.0),
+        egui::Align2::LEFT_TOP,
+        meta,
+        egui::FontId::proportional(13.0),
+        war_text_muted(),
+    );
+
+    let badge_text = visuals.label;
+    let badge_width = (badge_text.chars().count() as f32 * 13.0 + 18.0).clamp(54.0, 90.0);
+    let badge_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.right() - badge_width - 8.0, rect.center().y - 13.0),
+        egui::vec2(badge_width, 26.0),
+    );
+    painter.rect(
+        badge_rect,
+        4.0,
+        visuals.badge_fill,
+        egui::Stroke::new(1.0, visuals.stroke),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        badge_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        badge_text,
+        egui::FontId::proportional(13.0),
+        visuals.badge_text,
+    );
+
+    response
 }
 
 fn technology_detail(ui: &mut egui::Ui, ui_state: &mut GameUiState, game: &GameState) {
@@ -376,29 +482,158 @@ fn start_player_research(ui_state: &mut GameUiState, technology_id: TechnologyId
     }
 }
 
-fn technology_status_label(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TechnologyNodeStatus {
+    Completed,
+    Active,
+    Funded,
+    Available,
+    Unaffordable,
+    Locked,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct TechnologyNodeVisuals {
+    label: &'static str,
+    fill: egui::Color32,
+    stroke: egui::Color32,
+    icon_color: egui::Color32,
+    badge_fill: egui::Color32,
+    badge_text: egui::Color32,
+}
+
+fn technology_node_status(
     game: &GameState,
     faction_state: Option<&FactionTechnologyState>,
     spec: &TechnologySpec,
-) -> &'static str {
+) -> TechnologyNodeStatus {
     if faction_state.is_some_and(|state| state.completed.contains(&spec.id)) {
-        return "已完成";
+        return TechnologyNodeStatus::Completed;
     }
     if faction_state.is_some_and(|state| state.active == Some(spec.id)) {
-        return "研发中";
+        return TechnologyNodeStatus::Active;
     }
     if faction_state.is_some_and(|state| state.funded.contains(&spec.id)) {
-        return "已付款暂停";
+        return TechnologyNodeStatus::Funded;
     }
     if !missing_prerequisite_names(faction_state, spec.id).is_empty() {
-        return "未解锁";
+        return TechnologyNodeStatus::Locked;
     }
     if faction_total_gold(game, &game.player_faction_id)
         >= effective_technology_cost(game, &game.player_faction_id, spec.id)
     {
-        "可立项"
+        TechnologyNodeStatus::Available
     } else {
-        "金钱不足"
+        TechnologyNodeStatus::Unaffordable
+    }
+}
+
+fn technology_status_visuals(status: TechnologyNodeStatus) -> TechnologyNodeVisuals {
+    match status {
+        TechnologyNodeStatus::Completed => TechnologyNodeVisuals {
+            label: "已完成",
+            fill: egui::Color32::from_rgba_unmultiplied(39, 86, 51, 220),
+            stroke: war_success(),
+            icon_color: egui::Color32::from_rgb(226, 244, 218),
+            badge_fill: egui::Color32::from_rgba_unmultiplied(45, 92, 55, 180),
+            badge_text: egui::Color32::from_rgb(226, 244, 218),
+        },
+        TechnologyNodeStatus::Active => TechnologyNodeVisuals {
+            label: "研发中",
+            fill: egui::Color32::from_rgba_unmultiplied(122, 59, 39, 230),
+            stroke: war_gold(),
+            icon_color: egui::Color32::from_rgb(255, 235, 180),
+            badge_fill: egui::Color32::from_rgba_unmultiplied(117, 65, 35, 200),
+            badge_text: egui::Color32::from_rgb(255, 236, 190),
+        },
+        TechnologyNodeStatus::Funded => TechnologyNodeVisuals {
+            label: "已付款",
+            fill: egui::Color32::from_rgba_unmultiplied(72, 65, 39, 220),
+            stroke: war_warning(),
+            icon_color: egui::Color32::from_rgb(245, 216, 145),
+            badge_fill: egui::Color32::from_rgba_unmultiplied(87, 67, 34, 180),
+            badge_text: egui::Color32::from_rgb(246, 222, 160),
+        },
+        TechnologyNodeStatus::Available => TechnologyNodeVisuals {
+            label: "可立项",
+            fill: egui::Color32::from_rgba_unmultiplied(54, 48, 34, 220),
+            stroke: war_gold(),
+            icon_color: war_gold(),
+            badge_fill: egui::Color32::from_rgba_unmultiplied(66, 50, 28, 170),
+            badge_text: egui::Color32::from_rgb(247, 224, 173),
+        },
+        TechnologyNodeStatus::Unaffordable => TechnologyNodeVisuals {
+            label: "金不足",
+            fill: egui::Color32::from_rgba_unmultiplied(44, 39, 32, 190),
+            stroke: war_warning(),
+            icon_color: war_warning(),
+            badge_fill: egui::Color32::from_rgba_unmultiplied(61, 45, 28, 150),
+            badge_text: egui::Color32::from_rgb(236, 196, 122),
+        },
+        TechnologyNodeStatus::Locked => TechnologyNodeVisuals {
+            label: "未解锁",
+            fill: egui::Color32::from_rgba_unmultiplied(34, 31, 27, 170),
+            stroke: egui::Color32::from_rgba_unmultiplied(118, 105, 81, 150),
+            icon_color: war_text_muted(),
+            badge_fill: egui::Color32::from_rgba_unmultiplied(42, 37, 31, 140),
+            badge_text: war_text_muted(),
+        },
+    }
+}
+
+fn tree_line_color(status: TechnologyNodeStatus) -> egui::Color32 {
+    match status {
+        TechnologyNodeStatus::Completed => {
+            egui::Color32::from_rgba_unmultiplied(118, 186, 122, 150)
+        }
+        TechnologyNodeStatus::Active | TechnologyNodeStatus::Available => {
+            egui::Color32::from_rgba_unmultiplied(215, 162, 72, 155)
+        }
+        TechnologyNodeStatus::Funded | TechnologyNodeStatus::Unaffordable => {
+            egui::Color32::from_rgba_unmultiplied(218, 174, 88, 130)
+        }
+        TechnologyNodeStatus::Locked => egui::Color32::from_rgba_unmultiplied(118, 105, 81, 92),
+    }
+}
+
+fn technology_depth(spec: &TechnologySpec) -> usize {
+    spec.prerequisites
+        .iter()
+        .map(|id| technology_depth(technology_spec(*id)) + 1)
+        .max()
+        .unwrap_or_default()
+}
+
+fn technology_icon(spec: &TechnologySpec) -> &'static str {
+    match spec.id {
+        TechnologyId::MilitiaDrill => egui_phosphor::regular::USERS,
+        TechnologyId::ArsenalLogistics => egui_phosphor::regular::STACK,
+        TechnologyId::ScoutRoads => egui_phosphor::regular::MAP_TRIFOLD,
+        TechnologyId::IronWeapons => egui_phosphor::regular::SWORD,
+        TechnologyId::StrictDiscipline => egui_phosphor::regular::FLAG,
+        TechnologyId::FortifiedGarrisons => egui_phosphor::regular::SHIELD,
+        TechnologyId::SupplyEscort => egui_phosphor::regular::BARN,
+        TechnologyId::CombinedArms => egui_phosphor::regular::ARROWS_OUT_CARDINAL,
+        TechnologyId::GateFireTactics => egui_phosphor::regular::FIRE,
+        TechnologyId::RotatingDefense => egui_phosphor::regular::ARROWS_CLOCKWISE,
+        TechnologyId::MilitaryGranaries => egui_phosphor::regular::WAREHOUSE,
+        TechnologyId::SiegeEngines => egui_phosphor::regular::HAMMER,
+        TechnologyId::OfficerMerit => egui_phosphor::regular::MEDAL,
+        TechnologyId::GrandCommandery => egui_phosphor::regular::CROWN,
+        TechnologyId::HouseholdRegisters => egui_phosphor::regular::IDENTIFICATION_CARD,
+        TechnologyId::IrrigationSurvey => egui_phosphor::regular::DROP,
+        TechnologyId::MarketRegisters => egui_phosphor::regular::COINS,
+        TechnologyId::GranarySystem => egui_phosphor::regular::BARN,
+        TechnologyId::PriceStabilization => egui_phosphor::regular::SCALES,
+        TechnologyId::ArtisanRegisters => egui_phosphor::regular::HAMMER,
+        TechnologyId::CanalRestoration => egui_phosphor::regular::WAVES,
+        TechnologyId::TradePasses => egui_phosphor::regular::BRIDGE,
+        TechnologyId::BureaucraticRecords => egui_phosphor::regular::SCROLL,
+        TechnologyId::EverNormalGranary => egui_phosphor::regular::WAREHOUSE,
+        TechnologyId::WorkshopGuilds => egui_phosphor::regular::GEAR,
+        TechnologyId::CommanderyReviews => egui_phosphor::regular::CLIPBOARD_TEXT,
+        TechnologyId::CanalTaxation => egui_phosphor::regular::BANK,
+        TechnologyId::MinistryOfFinance => egui_phosphor::regular::SEAL_CHECK,
     }
 }
 
