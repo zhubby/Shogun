@@ -34,6 +34,8 @@ pub(super) fn enter_game(ui_state: &mut GameUiState, game: GameState, message: S
     ui_state.selected_officers.clear();
     ui_state.selected_transfer_target = None;
     ui_state.selected_expedition_target = None;
+    ui_state.expedition_deputy_one = None;
+    ui_state.expedition_deputy_two = None;
     ui_state.selected_diplomacy_target = None;
     ui_state.selected_city_tab = CityPanelTab::Overview;
     ui_state.selected_command_category = CommandCategory::Domestic;

@@ -1,5 +1,5 @@
 use super::ids::{CityId, FactionId, OfficerId};
-use super::model::MapPosition;
+use super::model::{MapPosition, TroopPool};
 use serde::{Deserialize, Serialize};
 
 pub const CITY_MAX_LEVEL: u8 = 10;
@@ -103,7 +103,7 @@ pub struct City {
     pub gold: i32,
     pub food: i32,
     pub materials: i32,
-    pub troops: u32,
+    pub troops: TroopPool,
     pub training: u8,
     pub agriculture: u16,
     pub commerce: u16,
@@ -533,7 +533,7 @@ pub fn project_city_monthly_change_with_effects(
     let food_upkeep_reduction = effects.food_upkeep_reduction_percent.clamp(0, 60);
     let gold_cost =
         (effects.gold_maintenance + officer_salary).max(0) * (100 - gold_upkeep_reduction) / 100;
-    let troop_food_upkeep = (city.troops / 900) as i32;
+    let troop_food_upkeep = (city.troops.total() / 900) as i32;
     let food_cost =
         (effects.food_maintenance + troop_food_upkeep).max(0) * (100 - food_upkeep_reduction) / 100;
     let materials_cost = effects.materials_maintenance.max(0);
@@ -552,7 +552,10 @@ pub fn project_city_monthly_change_with_effects(
         + effects.population_growth
         + net_food.max(0) / 4
         - shortage_penalty;
-    let troop_delta = if effects.troop_recovery > 0 && city.troops > 0 && food_after_income > 0 {
+    let troop_delta = if effects.troop_recovery > 0
+        && !city.troops.is_empty()
+        && food_after_income > 0
+    {
         effects.troop_recovery + (city.population / 50_000) as i32 + i32::from(city.training) / 50
     } else {
         0
@@ -607,7 +610,7 @@ impl CityStateView for City {
     }
 
     fn troops(&self) -> u32 {
-        self.troops
+        self.troops.total()
     }
 
     fn governor_id(&self) -> Option<&str> {

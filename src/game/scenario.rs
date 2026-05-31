@@ -81,7 +81,9 @@ impl ScenarioData {
                 gold: seed.gold,
                 food: seed.food,
                 materials: seed.materials,
-                troops: seed.troops,
+                troops: seed
+                    .troop_pool
+                    .unwrap_or_else(|| TroopPool::from_total(seed.troops)),
                 training: seed.training,
                 agriculture: seed.agriculture,
                 commerce: seed.commerce,
@@ -213,6 +215,8 @@ pub struct CitySeed {
     pub food: i32,
     pub materials: i32,
     pub troops: u32,
+    #[serde(default)]
+    pub troop_pool: Option<TroopPool>,
     pub training: u8,
     pub agriculture: u16,
     pub commerce: u16,

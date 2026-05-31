@@ -2,7 +2,8 @@ use super::city::{
     CITY_MAX_LEVEL, City, FacilityKind, city_core_upgrade_cost, facility_upgrade_cost,
 };
 use super::commands::{
-    resolve_command_batch, resolve_command_batch_with_history, validate_command_for_state,
+    command_capacity_for_officer, resolve_command_batch, resolve_command_batch_with_history,
+    validate_command_for_state,
 };
 use super::history_db::HistoricalCatalog;
 use super::ids::{CityId, FactionId};
@@ -112,6 +113,7 @@ impl AiProvider for RuleBasedAiProvider {
 
             if let Some(target_id) = best_attack_target(&request, city) {
                 let officer = best_leader(&officers);
+                let troop_kind = dominant_troop_kind(city.troops);
                 used_officers.insert(officer.id.clone());
                 commands.push(Command {
                     issuer_faction_id: request.faction_id.clone(),
@@ -119,7 +121,14 @@ impl AiProvider for RuleBasedAiProvider {
                     officer_id: Some(officer.id.clone()),
                     kind: CommandKind::Expedition {
                         target_city_id: target_id,
-                        troops: (city.troops * 45 / 100).max(300),
+                        assignments: vec![ExpeditionAssignment::commander(
+                            officer.id.clone(),
+                            troop_kind,
+                            (city.troops.total() * 45 / 100)
+                                .max(300)
+                                .min(command_capacity_for_officer(officer))
+                                .min(city.troops.get(troop_kind)),
+                        )],
                     },
                 });
                 continue;
@@ -137,7 +146,7 @@ impl AiProvider for RuleBasedAiProvider {
                 continue;
             }
 
-            if city.training < 55 && city.troops > 0 && city.gold >= 40 {
+            if city.training < 55 && !city.troops.is_empty() && city.gold >= 40 {
                 let officer = best_leader(&officers);
                 used_officers.insert(officer.id.clone());
                 commands.push(Command {
@@ -156,7 +165,10 @@ impl AiProvider for RuleBasedAiProvider {
                     issuer_faction_id: request.faction_id.clone(),
                     city_id: city.id.clone(),
                     officer_id: Some(officer.id.clone()),
-                    kind: CommandKind::Recruit { amount: 800 },
+                    kind: CommandKind::Recruit {
+                        kind: TroopKind::Infantry,
+                        amount: 800,
+                    },
                 });
                 continue;
             }
@@ -234,7 +246,7 @@ pub fn legal_ai_commands(state: &GameState, response: &AiDecisionResponse) -> Ve
 }
 
 fn best_attack_target(request: &AiDecisionRequest, city: &City) -> Option<CityId> {
-    if city.troops < 1_200 || city.training < 45 {
+    if city.troops.total() < 1_200 || city.training < 45 {
         return None;
     }
 
@@ -258,8 +270,15 @@ fn best_attack_target(request: &AiDecisionRequest, city: &City) -> Option<CityId
         .filter(|target| target.faction_id != city.faction_id)
         .filter(|target| !has_incoming_expedition(request, &city.faction_id, &target.id))
         .filter(|target| !has_truce(request, &city.faction_id, &target.faction_id))
-        .min_by_key(|target| target.troops + u32::from(target.defense) * 8)
+        .min_by_key(|target| target.troops.total() + u32::from(target.defense) * 8)
         .map(|target| target.id.clone())
+}
+
+fn dominant_troop_kind(troops: TroopPool) -> TroopKind {
+    TroopKind::ALL
+        .into_iter()
+        .max_by_key(|kind| troops.get(*kind))
+        .unwrap_or(TroopKind::Infantry)
 }
 
 fn has_incoming_expedition(request: &AiDecisionRequest, faction_id: &str, city_id: &str) -> bool {
@@ -331,7 +350,7 @@ fn preferred_new_facilities(city: &City) -> Vec<FacilityKind> {
         kinds.push(FacilityKind::Workshop);
         kinds.push(FacilityKind::Quarry);
     }
-    if city.troops >= 3_000 {
+    if city.troops.total() >= 3_000 {
         kinds.push(FacilityKind::Barracks);
         kinds.push(FacilityKind::DrillGround);
     }

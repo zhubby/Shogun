@@ -276,13 +276,14 @@ fn validate_command(
             let cost = facility_upgrade_cost(*kind, target_level);
             ensure_city_can_pay(city, cost, "建设设施")?;
         }
-        CommandKind::Recruit { amount } => {
+        CommandKind::Recruit { kind, amount } => {
             if *amount == 0 || *amount > 5000 {
                 return Err(CommandError::Invalid(
                     "征兵数量必须在 1-5000 之间".to_string(),
                 ));
             }
-            let cost = recruit_cost_for_faction(state, &command.issuer_faction_id, *amount);
+            let cost =
+                recruit_cost_for_faction_kind(state, &command.issuer_faction_id, *kind, *amount);
             if city.gold < cost.gold || city.food < cost.food {
                 return Err(CommandError::Invalid(format!(
                     "征兵需要 {} 金和 {} 粮",
@@ -294,7 +295,7 @@ fn validate_command(
             }
         }
         CommandKind::Train => {
-            if city.troops == 0 {
+            if city.troops.is_empty() {
                 return Err(CommandError::Invalid("没有士兵可训练".to_string()));
             }
             if city.gold < 40 {
@@ -327,10 +328,10 @@ fn validate_command(
             if !state.are_adjacent(&command.city_id, target_city_id) {
                 return Err(CommandError::Invalid("调动目标必须邻接".to_string()));
             }
-            if *troops == 0 && officer_ids.is_empty() {
+            if troops.is_empty() && officer_ids.is_empty() {
                 return Err(CommandError::Invalid("调动必须包含兵力或武将".to_string()));
             }
-            if *troops > city.troops {
+            if city.troops.checked_sub_pool(*troops).is_none() {
                 return Err(CommandError::Invalid("调动兵力超过城池驻军".to_string()));
             }
             for transfer_officer_id in officer_ids {
@@ -345,14 +346,9 @@ fn validate_command(
         }
         CommandKind::Expedition {
             target_city_id,
-            troops,
+            assignments,
         } => {
-            if *troops == 0 {
-                return Err(CommandError::Invalid("出征兵力必须大于 0".to_string()));
-            }
-            if *troops > city.troops {
-                return Err(CommandError::Invalid("出征兵力超过城池驻军".to_string()));
-            }
+            validate_expedition_assignments(state, command, city, assignments, &mut used_officers)?;
             let target = state.cities.get(target_city_id).ok_or_else(|| {
                 CommandError::Invalid(format!("目标城池 {target_city_id} 不存在"))
             })?;
@@ -432,6 +428,91 @@ fn validate_officer_in_city(
     Ok(())
 }
 
+fn validate_expedition_assignments(
+    state: &GameState,
+    command: &Command,
+    city: &City,
+    assignments: &[ExpeditionAssignment],
+    used_officers: &mut BTreeSet<OfficerId>,
+) -> Result<(), CommandError> {
+    if assignments.is_empty() {
+        return Err(CommandError::Invalid("出征必须至少选择主将".to_string()));
+    }
+    if assignments.len() > 3 {
+        return Err(CommandError::Invalid("出征最多选择三名武将".to_string()));
+    }
+
+    let command_officer_id = command
+        .officer_id
+        .as_deref()
+        .ok_or_else(|| CommandError::Invalid("命令必须选择执行武将".to_string()))?;
+    let mut commander_count = 0;
+    let mut assignment_officers = BTreeSet::new();
+    let mut troops = TroopPool::default();
+
+    for assignment in assignments {
+        if assignment.troops == 0 {
+            return Err(CommandError::Invalid("出征兵力必须大于 0".to_string()));
+        }
+        if !assignment_officers.insert(assignment.officer_id.clone()) {
+            return Err(CommandError::Invalid("出征武将不能重复".to_string()));
+        }
+        validate_officer_in_city(
+            state,
+            &assignment.officer_id,
+            &command.city_id,
+            &command.issuer_faction_id,
+        )?;
+        let officer = state.officers.get(&assignment.officer_id).unwrap();
+        let capacity = command_capacity_for_officer(officer);
+        if assignment.troops > capacity {
+            return Err(CommandError::Invalid(format!(
+                "{} 统兵超过官阶上限 {}",
+                officer.name, capacity
+            )));
+        }
+        if assignment.role == ExpeditionRole::Commander {
+            commander_count += 1;
+            if assignment.officer_id != command_officer_id {
+                return Err(CommandError::Invalid(
+                    "出征主将必须与命令执行武将一致".to_string(),
+                ));
+            }
+        }
+        troops.add(assignment.troop_kind, assignment.troops);
+    }
+
+    if commander_count != 1 {
+        return Err(CommandError::Invalid(
+            "出征必须且只能有一名主将".to_string(),
+        ));
+    }
+    if city.troops.checked_sub_pool(troops).is_none() {
+        return Err(CommandError::Invalid("出征兵力超过城池驻军".to_string()));
+    }
+    used_officers.extend(assignment_officers);
+    Ok(())
+}
+
+fn troop_pool_for_assignments(assignments: &[ExpeditionAssignment]) -> TroopPool {
+    let mut troops = TroopPool::default();
+    for assignment in assignments {
+        troops.add(assignment.troop_kind, assignment.troops);
+    }
+    troops
+}
+
+pub fn command_capacity_for_officer(officer: &Officer) -> u32 {
+    let rank_order = officer
+        .office_id
+        .as_deref()
+        .and_then(official_post_spec)
+        .map(|spec| official_rank_order(spec.rank))
+        .unwrap_or(1)
+        .max(1) as u32;
+    2_000 + rank_order * 1_300
+}
+
 fn ensure_city_can_pay(city: &City, cost: ResourceCost, action: &str) -> Result<(), CommandError> {
     if city.gold < cost.gold || city.food < cost.food || city.materials < cost.materials {
         return Err(CommandError::Invalid(format!(
@@ -467,7 +548,9 @@ fn apply_command(state: &mut GameState, command: &Command, report: &mut TurnRepo
         CommandKind::Develop { focus } => apply_develop(state, command, focus, report),
         CommandKind::UpgradeCityCore => apply_upgrade_city_core(state, command, report),
         CommandKind::BuildFacility { kind } => apply_build_facility(state, command, *kind, report),
-        CommandKind::Recruit { amount } => apply_recruit(state, command, *amount, report),
+        CommandKind::Recruit { kind, amount } => {
+            apply_recruit(state, command, *kind, *amount, report)
+        }
         CommandKind::Train => apply_train(state, command, report),
         CommandKind::AppointGovernor { target_officer_id } => {
             apply_appoint_governor(state, command, target_officer_id, report)
@@ -479,8 +562,8 @@ fn apply_command(state: &mut GameState, command: &Command, report: &mut TurnRepo
         } => apply_transfer(state, command, target_city_id, *troops, officer_ids, report),
         CommandKind::Expedition {
             target_city_id,
-            troops,
-        } => apply_expedition(state, command, target_city_id, *troops, report),
+            assignments,
+        } => apply_expedition(state, command, target_city_id, assignments, report),
         CommandKind::Diplomacy {
             target_faction_id,
             proposal,
@@ -580,20 +663,29 @@ fn apply_build_facility(
     ));
 }
 
-fn apply_recruit(state: &mut GameState, command: &Command, amount: u32, report: &mut TurnReport) {
+fn apply_recruit(
+    state: &mut GameState,
+    command: &Command,
+    kind: TroopKind,
+    amount: u32,
+    report: &mut TurnReport,
+) {
     let officer = state
         .officers
         .get(command.officer_id.as_ref().unwrap())
         .unwrap();
-    let cost = recruit_cost_for_faction(state, &command.issuer_faction_id, amount);
+    let cost = recruit_cost_for_faction_kind(state, &command.issuer_faction_id, kind, amount);
     let city = state.cities.get_mut(&command.city_id).unwrap();
     city.gold -= cost.gold;
     city.food -= cost.food;
     city.population = city.population.saturating_sub(amount * 2);
-    city.troops += amount;
+    city.troops.add(kind, amount);
     city.order = city.order.saturating_sub(2);
     city.clamp_fields();
-    report.info(format!("{} 在 {} 征兵 {}", officer.name, city.name, amount));
+    report.info(format!(
+        "{} 在 {} 征募 {:?} {}",
+        officer.name, city.name, kind, amount
+    ));
 }
 
 fn apply_train(state: &mut GameState, command: &Command, report: &mut TurnReport) {
@@ -632,7 +724,7 @@ fn apply_transfer(
     state: &mut GameState,
     command: &Command,
     target_city_id: &str,
-    troops: u32,
+    troops: TroopPool,
     officer_ids: &[OfficerId],
     report: &mut TurnReport,
 ) {
@@ -647,7 +739,7 @@ fn apply_transfer(
     let moving_officer_count = moving_officers.len();
     {
         let source = state.cities.get_mut(&command.city_id).unwrap();
-        source.troops -= troops;
+        source.troops.saturating_sub_pool(troops);
     }
     for officer_id in &moving_officers {
         if let Some(officer) = state.officers.get_mut(officer_id) {
@@ -662,6 +754,7 @@ fn apply_transfer(
         commander_id: command.officer_id.clone().unwrap(),
         officer_ids: moving_officers,
         troops,
+        assignments: Vec::new(),
         training: source_training,
         distance_li,
         departure_turn: state.turn,
@@ -669,7 +762,12 @@ fn apply_transfer(
     });
     report.info(format!(
         "{} 向 {} 调动出发：{} 兵、{} 名武将，距离 {} 里，预计行军 {} 月",
-        source_name, target_name, troops, moving_officer_count, distance_li, travel_months
+        source_name,
+        target_name,
+        troops.total(),
+        moving_officer_count,
+        distance_li,
+        travel_months
     ));
 }
 
@@ -677,9 +775,10 @@ fn apply_expedition(
     state: &mut GameState,
     command: &Command,
     target_city_id: &str,
-    troops: u32,
+    assignments: &[ExpeditionAssignment],
     report: &mut TurnReport,
 ) {
+    let troops = troop_pool_for_assignments(assignments);
     let attacker = state
         .officers
         .get(command.officer_id.as_ref().unwrap())
@@ -693,19 +792,26 @@ fn apply_expedition(
     let travel_months = travel_months_for_faction(state, &command.issuer_faction_id, distance_li);
     {
         let source = state.cities.get_mut(&command.city_id).unwrap();
-        source.troops = source.troops.saturating_sub(troops);
+        source.troops.saturating_sub_pool(troops);
     }
-    if let Some(officer) = state.officers.get_mut(command.officer_id.as_ref().unwrap()) {
-        officer.city_id = None;
+    for assignment in assignments {
+        if let Some(officer) = state.officers.get_mut(&assignment.officer_id) {
+            officer.city_id = None;
+        }
     }
+    let officer_ids: Vec<_> = assignments
+        .iter()
+        .map(|assignment| assignment.officer_id.clone())
+        .collect();
     state.army_movements.push(ArmyMovement {
         kind: ArmyMovementKind::Expedition,
         issuer_faction_id: command.issuer_faction_id.clone(),
         source_city_id: command.city_id.clone(),
         target_city_id: target_city_id.to_string(),
         commander_id: command.officer_id.clone().unwrap(),
-        officer_ids: vec![command.officer_id.clone().unwrap()],
+        officer_ids,
         troops,
+        assignments: assignments.to_vec(),
         training: source_city.training,
         distance_li,
         departure_turn: state.turn,
@@ -713,7 +819,12 @@ fn apply_expedition(
     });
     report.info(format!(
         "{} 率兵从 {} 出征 {}：{} 兵，距离 {} 里，预计行军 {} 月",
-        attacker_name, source_city.name, target_city.name, troops, distance_li, travel_months
+        attacker_name,
+        source_city.name,
+        target_city.name,
+        troops.total(),
+        distance_li,
+        travel_months
     ));
 }
 
@@ -766,7 +877,7 @@ fn resolve_transfer_arrival(
         report.info(format!(
             "调动队抵达 {}：{} 兵、{} 名武将入城",
             target_name,
-            movement.troops,
+            movement.troops.total(),
             movement.officer_ids.len()
         ));
         return;
@@ -801,7 +912,8 @@ fn resolve_expedition_arrival(
         place_movement_at_city(state, &movement, &movement.target_city_id, movement.troops);
         report.info(format!(
             "出征队抵达 {}，目标已属己方，{} 兵入城",
-            target_city.name, movement.troops
+            target_city.name,
+            movement.troops.total()
         ));
         return;
     }
@@ -851,27 +963,17 @@ fn resolve_expedition_battle(
     report: &mut TurnReport,
 ) {
     let attacker = state.officers[&movement.commander_id].clone();
-    let attacker_leadership = u32::from(attacker.stats.leadership);
-    let attacker_strength = u32::from(attacker.stats.strength);
     let defender_governor = target_city
         .governor_id
         .as_ref()
         .and_then(|id| state.officers.get(id));
-    let defender_leadership = defender_governor
-        .map(|officer| u32::from(officer.stats.leadership))
-        .unwrap_or(45);
     let attacker_bonuses = faction_technology_bonuses(state, &movement.issuer_faction_id);
     let defender_bonuses = faction_technology_bonuses(state, &target_city.faction_id);
 
-    let base_attack_score = movement.troops * (60 + u32::from(movement.training)) / 100
-        + attacker_leadership * 18
-        + attacker_strength * 10;
+    let base_attack_score = expedition_attack_score(state, movement, target_city);
     let attack_percent = attacker_bonuses.attack_percent + attacker_bonuses.siege_attack_percent;
     let attack_score = apply_percent_bonus(base_attack_score, attack_percent);
-    let base_defense_score = target_city.troops * (55 + u32::from(target_city.training)) / 100
-        + u32::from(target_city.defense) * 12
-        + defender_leadership * 15
-        + u32::from(target_city.order) * 5;
+    let base_defense_score = city_defense_score(target_city, defender_governor, movement.troops);
     let defense_score = apply_percent_bonus(base_defense_score, defender_bonuses.defense_percent);
     let noise = battle_noise(
         state.turn,
@@ -882,11 +984,14 @@ fn resolve_expedition_battle(
 
     if attacker_wins {
         let attacker_loss = percent_loss(
-            movement.troops,
+            movement.troops.total(),
             35,
             attacker_bonuses.battle_loss_reduction_percent,
         );
-        let surviving_troops = movement.troops.saturating_sub(attacker_loss).max(100);
+        let surviving_troops = ensure_min_troops(
+            movement.troops.surviving_after_loss(attacker_loss),
+            movement.troops.total().min(100),
+        );
         let old_faction = target_city.faction_id.clone();
         {
             let target = state.cities.get_mut(&movement.target_city_id).unwrap();
@@ -901,47 +1006,119 @@ fn resolve_expedition_battle(
         retreat_defenders(state, &movement.target_city_id, &old_faction);
         report.info(format!(
             "{} 攻下 {}，剩余兵力 {}",
-            attacker.name, target_city.name, surviving_troops
+            attacker.name,
+            target_city.name,
+            surviving_troops.total()
         ));
     } else {
         let attacker_loss = percent_loss(
-            movement.troops,
+            movement.troops.total(),
             60,
             attacker_bonuses.battle_loss_reduction_percent,
         );
-        let defender_loss = movement.troops.saturating_mul(30) / 100;
+        let defender_loss = movement.troops.total().saturating_mul(30) / 100;
         {
             let target = state.cities.get_mut(&movement.target_city_id).unwrap();
-            target.troops = target.troops.saturating_sub(defender_loss);
+            target.troops = target.troops.surviving_after_loss(defender_loss);
             target.training = target.training.saturating_sub(4);
         }
         report.info(format!(
             "{} 进攻 {} 失败，损失 {}",
             attacker.name, target_city.name, attacker_loss
         ));
+        let mut retreat_troops = movement.troops.surviving_after_loss(attacker_loss);
+        retreat_troops.add_total_preserving_ratio(
+            movement.troops.total() * attacker_bonuses.retreat_survival_percent as u32 / 100,
+        );
         return_movement_to_friendly_city(
             state,
             movement,
-            movement
-                .troops
-                .saturating_sub(attacker_loss)
-                .saturating_add(
-                    movement.troops * attacker_bonuses.retreat_survival_percent as u32 / 100,
-                ),
+            retreat_troops,
             "败军撤回".to_string(),
             report,
         );
     }
 }
 
+fn expedition_attack_score(state: &GameState, movement: &ArmyMovement, target_city: &City) -> u32 {
+    let mut score = 0u32;
+    let assignments = if movement.assignments.is_empty() {
+        vec![ExpeditionAssignment::commander(
+            movement.commander_id.clone(),
+            TroopKind::Infantry,
+            movement.troops.total(),
+        )]
+    } else {
+        movement.assignments.clone()
+    };
+
+    for assignment in assignments {
+        let Some(officer) = state.officers.get(&assignment.officer_id) else {
+            continue;
+        };
+        let troop_score = assignment.troops * (60 + u32::from(movement.training)) / 100;
+        let matchup_score =
+            troop_score * troop_matchup_percent(assignment.troop_kind, target_city.troops) / 100;
+        let role_score = if assignment.role == ExpeditionRole::Commander {
+            matchup_score * 110 / 100
+                + u32::from(officer.stats.leadership) * 18
+                + u32::from(officer.stats.strength) * 10
+        } else {
+            matchup_score
+                + u32::from(officer.stats.leadership) * 12
+                + u32::from(officer.stats.strength) * 6
+        };
+        score = score.saturating_add(role_score);
+    }
+    score
+}
+
+fn city_defense_score(city: &City, governor: Option<&Officer>, attacking_troops: TroopPool) -> u32 {
+    let mut troop_score = 0u32;
+    for kind in TroopKind::ALL {
+        let count = city.troops.get(kind);
+        let trained = count * (55 + u32::from(city.training)) / 100;
+        troop_score = troop_score
+            .saturating_add(trained * troop_matchup_percent(kind, attacking_troops) / 100);
+    }
+    let leadership = governor
+        .map(|officer| u32::from(officer.stats.leadership))
+        .unwrap_or(45);
+    let strength = governor
+        .map(|officer| u32::from(officer.stats.strength))
+        .unwrap_or(45);
+    troop_score
+        + u32::from(city.defense) * 12
+        + leadership * 15
+        + strength * 6
+        + u32::from(city.order) * 5
+}
+
+fn troop_matchup_percent(kind: TroopKind, opponent: TroopPool) -> u32 {
+    let total = opponent.total();
+    if total == 0 {
+        return 100;
+    }
+    let advantaged = opponent.get(kind.counters()) * 20 / total;
+    let countered = opponent.get(kind.countered_by()) * 20 / total;
+    (100 + advantaged).saturating_sub(countered).clamp(75, 125)
+}
+
+fn ensure_min_troops(mut troops: TroopPool, minimum: u32) -> TroopPool {
+    if troops.total() < minimum {
+        troops.add_total_preserving_ratio(minimum - troops.total());
+    }
+    troops
+}
+
 fn place_movement_at_city(
     state: &mut GameState,
     movement: &ArmyMovement,
     city_id: &str,
-    troops: u32,
+    troops: TroopPool,
 ) {
     if let Some(city) = state.cities.get_mut(city_id) {
-        city.troops = city.troops.saturating_add(troops);
+        city.troops.add_pool(troops);
     }
     place_movement_officers_at_city(state, movement, city_id);
 }
@@ -972,7 +1149,7 @@ fn place_movement_officers_at_city(state: &mut GameState, movement: &ArmyMovemen
 fn return_movement_to_friendly_city(
     state: &mut GameState,
     movement: &ArmyMovement,
-    troops: u32,
+    troops: TroopPool,
     reason: String,
     report: &mut TurnReport,
 ) {
@@ -992,7 +1169,10 @@ fn return_movement_to_friendly_city(
     if let Some(city_id) = fallback_city_id {
         let city_name = city_name(state, &city_id);
         place_movement_at_city(state, movement, &city_id, troops);
-        report.warning(format!("{reason}，队伍退回 {city_name}，保全 {troops} 兵"));
+        report.warning(format!(
+            "{reason}，队伍退回 {city_name}，保全 {} 兵",
+            troops.total()
+        ));
     } else {
         for officer_id in &movement.officer_ids {
             if let Some(officer) = state.officers.get_mut(officer_id)
@@ -1004,7 +1184,10 @@ fn return_movement_to_friendly_city(
                 officer.status = OfficerStatus::Wild;
             }
         }
-        report.warning(format!("{reason}，无己方城池可退，{} 兵溃散", troops));
+        report.warning(format!(
+            "{reason}，无己方城池可退，{} 兵溃散",
+            troops.total()
+        ));
     }
 }
 
@@ -1164,7 +1347,7 @@ fn apply_monthly_income(state: &mut GameState, report: &mut TurnReport) {
         city.food += projection.net_food;
         city.materials += projection.net_materials;
         city.population = apply_i32_to_u32(city.population, projection.population_delta);
-        city.troops = apply_i32_to_u32(city.troops, projection.troop_delta);
+        apply_i32_to_troop_pool(&mut city.troops, projection.troop_delta);
         city.order = apply_i32_to_u8(city.order, projection.order_delta, 0, 100);
         city.training = apply_i32_to_u8(city.training, projection.training_delta, 0, 100);
         city.defense = apply_i32_to_u16(city.defense, projection.defense_delta, 0, 999);
@@ -1260,6 +1443,14 @@ fn apply_i32_to_u32(value: u32, delta: i32) -> u32 {
     }
 }
 
+fn apply_i32_to_troop_pool(troops: &mut TroopPool, delta: i32) {
+    if delta >= 0 {
+        troops.add_total_preserving_ratio(delta as u32);
+    } else {
+        *troops = troops.surviving_after_loss(delta.unsigned_abs());
+    }
+}
+
 fn apply_i32_to_u8(value: u8, delta: i32, min: u8, max: u8) -> u8 {
     (i32::from(value) + delta).clamp(i32::from(min), i32::from(max)) as u8
 }
@@ -1281,7 +1472,7 @@ fn append_turn_summary(state: &GameState, report: &mut TurnReport) {
         .filter(|city| city.faction_id == state.player_faction_id)
     {
         player_city_count += 1;
-        player_troops += city.troops;
+        player_troops += city.troops.total();
         player_gold += city.gold;
         player_food += city.food;
         player_materials += city.materials;
@@ -1453,15 +1644,33 @@ fn resolve_life_event_assignment(
 }
 
 pub fn recruit_cost(amount: u32) -> ResourceCost {
+    recruit_cost_for_kind(TroopKind::Infantry, amount)
+}
+
+pub fn recruit_cost_for_kind(kind: TroopKind, amount: u32) -> ResourceCost {
+    let multiplier = match kind {
+        TroopKind::Infantry => 100,
+        TroopKind::Archers => 120,
+        TroopKind::Cavalry => 150,
+    };
     ResourceCost {
-        gold: (amount / 10) as i32 + 30,
-        food: (amount / 4) as i32 + 80,
+        gold: (((amount / 10) as i32 + 30) * multiplier) / 100,
+        food: (((amount / 4) as i32 + 80) * multiplier) / 100,
         materials: 0,
     }
 }
 
 pub fn recruit_cost_for_faction(state: &GameState, faction_id: &str, amount: u32) -> ResourceCost {
-    let mut cost = recruit_cost(amount);
+    recruit_cost_for_faction_kind(state, faction_id, TroopKind::Infantry, amount)
+}
+
+pub fn recruit_cost_for_faction_kind(
+    state: &GameState,
+    faction_id: &str,
+    kind: TroopKind,
+    amount: u32,
+) -> ResourceCost {
+    let mut cost = recruit_cost_for_kind(kind, amount);
     let discount = faction_technology_bonuses(state, faction_id)
         .recruit_gold_discount_percent
         .clamp(0, 80);

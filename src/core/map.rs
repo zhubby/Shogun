@@ -478,7 +478,7 @@ pub(super) fn dominant_cell_faction<'a>(
     {
         let entry = counts.entry(city.faction_id.as_str()).or_insert((0, 0));
         entry.0 += 1;
-        entry.1 = entry.1.saturating_add(city.troops);
+        entry.1 = entry.1.saturating_add(city.troops.total());
     }
     let faction_id = counts
         .iter()
@@ -641,7 +641,7 @@ pub(super) fn draw_city_marker(
     painter.text(
         base.center(),
         egui::Align2::CENTER_CENTER,
-        compact_troops(city.troops),
+        compact_troops(city.troops.total()),
         egui::FontId::proportional(12.0 * scale),
         war_text(),
     );

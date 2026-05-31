@@ -34,6 +34,14 @@ pub(super) fn facility_kind_label(kind: FacilityKind) -> &'static str {
     }
 }
 
+pub(super) fn troop_kind_label(kind: TroopKind) -> &'static str {
+    match kind {
+        TroopKind::Infantry => "步兵",
+        TroopKind::Cavalry => "骑兵",
+        TroopKind::Archers => "弓兵",
+    }
+}
+
 pub(super) fn technology_branch_label(branch: TechnologyBranch) -> &'static str {
     match branch {
         TechnologyBranch::Military => "军事",

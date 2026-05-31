@@ -5,7 +5,7 @@ use super::technology::FactionTechnologyState;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const SAVE_VERSION: u32 = 4;
+pub const SAVE_VERSION: u32 = 5;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GameState {
@@ -90,10 +90,11 @@ impl GameState {
     }
 
     pub fn pending_officer_ids(&self) -> BTreeSet<&str> {
-        self.pending_commands
-            .iter()
-            .filter_map(|command| command.officer_id.as_deref())
-            .collect()
+        let mut ids = BTreeSet::new();
+        for command in &self.pending_commands {
+            command.collect_officer_ids(&mut ids);
+        }
+        ids
     }
 
     pub fn advance_month(&mut self) {
@@ -169,7 +170,9 @@ pub struct ArmyMovement {
     pub target_city_id: CityId,
     pub commander_id: OfficerId,
     pub officer_ids: Vec<OfficerId>,
-    pub troops: u32,
+    pub troops: TroopPool,
+    #[serde(default)]
+    pub assignments: Vec<ExpeditionAssignment>,
     pub training: u8,
     pub distance_li: u32,
     pub departure_turn: u32,
@@ -180,6 +183,198 @@ pub struct ArmyMovement {
 pub enum ArmyMovementKind {
     Transfer,
     Expedition,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum TroopKind {
+    Infantry,
+    Cavalry,
+    Archers,
+}
+
+impl TroopKind {
+    pub const ALL: [TroopKind; 3] = [TroopKind::Infantry, TroopKind::Cavalry, TroopKind::Archers];
+
+    pub fn counters(self) -> Self {
+        match self {
+            TroopKind::Infantry => TroopKind::Cavalry,
+            TroopKind::Cavalry => TroopKind::Archers,
+            TroopKind::Archers => TroopKind::Infantry,
+        }
+    }
+
+    pub fn countered_by(self) -> Self {
+        match self {
+            TroopKind::Infantry => TroopKind::Archers,
+            TroopKind::Cavalry => TroopKind::Infantry,
+            TroopKind::Archers => TroopKind::Cavalry,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TroopPool {
+    pub infantry: u32,
+    pub cavalry: u32,
+    pub archers: u32,
+}
+
+impl TroopPool {
+    pub const fn new(infantry: u32, cavalry: u32, archers: u32) -> Self {
+        Self {
+            infantry,
+            cavalry,
+            archers,
+        }
+    }
+
+    pub fn from_total(total: u32) -> Self {
+        let infantry = total.saturating_mul(55) / 100;
+        let archers = total.saturating_mul(30) / 100;
+        let cavalry = total.saturating_sub(infantry).saturating_sub(archers);
+        Self {
+            infantry,
+            cavalry,
+            archers,
+        }
+    }
+
+    pub fn total(self) -> u32 {
+        self.infantry
+            .saturating_add(self.cavalry)
+            .saturating_add(self.archers)
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.total() == 0
+    }
+
+    pub fn get(self, kind: TroopKind) -> u32 {
+        match kind {
+            TroopKind::Infantry => self.infantry,
+            TroopKind::Cavalry => self.cavalry,
+            TroopKind::Archers => self.archers,
+        }
+    }
+
+    pub fn set(&mut self, kind: TroopKind, value: u32) {
+        match kind {
+            TroopKind::Infantry => self.infantry = value,
+            TroopKind::Cavalry => self.cavalry = value,
+            TroopKind::Archers => self.archers = value,
+        }
+    }
+
+    pub fn add(&mut self, kind: TroopKind, value: u32) {
+        self.set(kind, self.get(kind).saturating_add(value));
+    }
+
+    pub fn add_pool(&mut self, other: Self) {
+        self.infantry = self.infantry.saturating_add(other.infantry);
+        self.cavalry = self.cavalry.saturating_add(other.cavalry);
+        self.archers = self.archers.saturating_add(other.archers);
+    }
+
+    pub fn checked_sub_pool(&self, other: Self) -> Option<Self> {
+        Some(Self {
+            infantry: self.infantry.checked_sub(other.infantry)?,
+            cavalry: self.cavalry.checked_sub(other.cavalry)?,
+            archers: self.archers.checked_sub(other.archers)?,
+        })
+    }
+
+    pub fn saturating_sub_pool(&mut self, other: Self) {
+        self.infantry = self.infantry.saturating_sub(other.infantry);
+        self.cavalry = self.cavalry.saturating_sub(other.cavalry);
+        self.archers = self.archers.saturating_sub(other.archers);
+    }
+
+    pub fn add_total_preserving_ratio(&mut self, amount: u32) {
+        if amount == 0 {
+            return;
+        }
+        if self.is_empty() {
+            self.add_pool(Self::from_total(amount));
+            return;
+        }
+        let total = self.total();
+        let infantry = amount.saturating_mul(self.infantry) / total;
+        let cavalry = amount.saturating_mul(self.cavalry) / total;
+        let archers = amount.saturating_sub(infantry).saturating_sub(cavalry);
+        self.infantry = self.infantry.saturating_add(infantry);
+        self.cavalry = self.cavalry.saturating_add(cavalry);
+        self.archers = self.archers.saturating_add(archers);
+    }
+
+    pub fn loss_pool(self, loss: u32) -> Self {
+        let loss = loss.min(self.total());
+        if loss == 0 || self.is_empty() {
+            return Self::default();
+        }
+        let total = self.total();
+        let infantry = (self.infantry.saturating_mul(loss) / total).min(self.infantry);
+        let cavalry = (self.cavalry.saturating_mul(loss) / total).min(self.cavalry);
+        let archers = loss
+            .saturating_sub(infantry)
+            .saturating_sub(cavalry)
+            .min(self.archers);
+        let mut allocated = infantry.saturating_add(cavalry).saturating_add(archers);
+        let mut pool = Self {
+            infantry,
+            cavalry,
+            archers,
+        };
+        for kind in TroopKind::ALL {
+            if allocated >= loss {
+                break;
+            }
+            let available = self.get(kind).saturating_sub(pool.get(kind));
+            let extra = available.min(loss - allocated);
+            pool.add(kind, extra);
+            allocated += extra;
+        }
+        pool
+    }
+
+    pub fn surviving_after_loss(self, loss: u32) -> Self {
+        let mut surviving = self;
+        surviving.saturating_sub_pool(self.loss_pool(loss));
+        surviving
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ExpeditionRole {
+    Commander,
+    Deputy,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExpeditionAssignment {
+    pub officer_id: OfficerId,
+    pub role: ExpeditionRole,
+    pub troop_kind: TroopKind,
+    pub troops: u32,
+}
+
+impl ExpeditionAssignment {
+    pub fn commander(officer_id: OfficerId, troop_kind: TroopKind, troops: u32) -> Self {
+        Self {
+            officer_id,
+            role: ExpeditionRole::Commander,
+            troop_kind,
+            troops,
+        }
+    }
+
+    pub fn deputy(officer_id: OfficerId, troop_kind: TroopKind, troops: u32) -> Self {
+        Self {
+            officer_id,
+            role: ExpeditionRole::Deputy,
+            troop_kind,
+            troops,
+        }
+    }
 }
 
 pub const MAP_COORDINATE_LI: f32 = 4.0;
@@ -235,7 +430,7 @@ impl Command {
             CommandKind::Develop { focus } => format!("开发 {focus:?}"),
             CommandKind::UpgradeCityCore => "升级城镇核心".to_string(),
             CommandKind::BuildFacility { kind } => format!("建设设施 {kind:?}"),
-            CommandKind::Recruit { amount } => format!("征兵 {amount}"),
+            CommandKind::Recruit { kind, amount } => format!("征兵 {kind:?} {amount}"),
             CommandKind::Train => "训练".to_string(),
             CommandKind::AppointGovernor { target_officer_id } => {
                 format!("任命太守 {target_officer_id}")
@@ -245,19 +440,43 @@ impl Command {
                 troops,
                 officer_ids,
             } => format!(
-                "调动到 {target_city_id}: 兵力 {troops}, 武将 {}",
+                "调动到 {target_city_id}: 兵力 {}, 武将 {}",
+                troops.total(),
                 officer_ids.len()
             ),
             CommandKind::Expedition {
                 target_city_id,
-                troops,
+                assignments,
             } => {
-                format!("出征 {target_city_id}: {troops}")
+                let troops: u32 = assignments.iter().map(|assignment| assignment.troops).sum();
+                format!(
+                    "出征 {target_city_id}: {troops}, 武将 {}",
+                    assignments.len()
+                )
             }
             CommandKind::Diplomacy {
                 target_faction_id,
                 proposal,
             } => format!("外交 {target_faction_id} {proposal:?}"),
+        }
+    }
+
+    pub fn collect_officer_ids<'a>(&'a self, ids: &mut BTreeSet<&'a str>) {
+        if let Some(officer_id) = self.officer_id.as_deref() {
+            ids.insert(officer_id);
+        }
+        match &self.kind {
+            CommandKind::Transfer { officer_ids, .. } => {
+                for officer_id in officer_ids {
+                    ids.insert(officer_id);
+                }
+            }
+            CommandKind::Expedition { assignments, .. } => {
+                for assignment in assignments {
+                    ids.insert(&assignment.officer_id);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -272,6 +491,7 @@ pub enum CommandKind {
         kind: FacilityKind,
     },
     Recruit {
+        kind: TroopKind,
         amount: u32,
     },
     Train,
@@ -280,12 +500,12 @@ pub enum CommandKind {
     },
     Transfer {
         target_city_id: CityId,
-        troops: u32,
+        troops: TroopPool,
         officer_ids: Vec<OfficerId>,
     },
     Expedition {
         target_city_id: CityId,
-        troops: u32,
+        assignments: Vec<ExpeditionAssignment>,
     },
     Diplomacy {
         target_faction_id: FactionId,

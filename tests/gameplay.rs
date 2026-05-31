@@ -18,6 +18,28 @@ fn command(city_id: &str, officer_id: &str, kind: CommandKind) -> Command {
     }
 }
 
+fn infantry(amount: u32) -> TroopPool {
+    TroopPool::new(amount, 0, 0)
+}
+
+fn expedition(target_city_id: &str, officer_id: &str, kind: TroopKind, troops: u32) -> CommandKind {
+    CommandKind::Expedition {
+        target_city_id: target_city_id.to_string(),
+        assignments: vec![ExpeditionAssignment::commander(
+            officer_id.to_string(),
+            kind,
+            troops,
+        )],
+    }
+}
+
+fn resolve_until_arrival(game: &mut GameState, from: &str, to: &str) {
+    let travel_months = game.travel_months_between(from, to).unwrap();
+    for _ in 0..travel_months {
+        resolve_command_batch(game, Vec::new());
+    }
+}
+
 #[test]
 fn one_city_gets_only_one_command_per_month() {
     let mut game = sample_game();
@@ -69,14 +91,97 @@ fn cannot_attack_non_adjacent_city() {
         &command(
             "pingyuan",
             "guan_yu",
-            CommandKind::Expedition {
-                target_city_id: "jianye".to_string(),
-                troops: 1000,
-            },
+            expedition("jianye", "guan_yu", TroopKind::Infantry, 1000),
         ),
     );
 
     assert!(result.is_err());
+}
+
+#[test]
+fn expedition_requires_one_commander_and_at_most_two_deputies() {
+    let game = sample_game();
+    let no_commander = validate_command_for_state(
+        &game,
+        &command(
+            "pingyuan",
+            "guan_yu",
+            CommandKind::Expedition {
+                target_city_id: "ye".to_string(),
+                assignments: vec![ExpeditionAssignment::deputy(
+                    "zhao_yun".to_string(),
+                    TroopKind::Infantry,
+                    500,
+                )],
+            },
+        ),
+    );
+    let too_many = validate_command_for_state(
+        &game,
+        &command(
+            "pingyuan",
+            "guan_yu",
+            CommandKind::Expedition {
+                target_city_id: "ye".to_string(),
+                assignments: vec![
+                    ExpeditionAssignment::commander(
+                        "guan_yu".to_string(),
+                        TroopKind::Infantry,
+                        500,
+                    ),
+                    ExpeditionAssignment::deputy("zhao_yun".to_string(), TroopKind::Infantry, 500),
+                    ExpeditionAssignment::deputy("liu_bei".to_string(), TroopKind::Archers, 500),
+                    ExpeditionAssignment::deputy("sun_qian".to_string(), TroopKind::Archers, 500),
+                ],
+            },
+        ),
+    );
+    let duplicate = validate_command_for_state(
+        &game,
+        &command(
+            "pingyuan",
+            "guan_yu",
+            CommandKind::Expedition {
+                target_city_id: "ye".to_string(),
+                assignments: vec![
+                    ExpeditionAssignment::commander(
+                        "guan_yu".to_string(),
+                        TroopKind::Infantry,
+                        500,
+                    ),
+                    ExpeditionAssignment::deputy("guan_yu".to_string(), TroopKind::Archers, 500),
+                ],
+            },
+        ),
+    );
+
+    assert!(no_commander.is_err());
+    assert!(too_many.is_err());
+    assert!(duplicate.is_err());
+}
+
+#[test]
+fn expedition_rejects_officer_capacity_and_troop_kind_stock_overages() {
+    let game = sample_game();
+    let over_capacity = validate_command_for_state(
+        &game,
+        &command(
+            "pingyuan",
+            "guan_yu",
+            expedition("ye", "guan_yu", TroopKind::Infantry, 5_000),
+        ),
+    );
+    let over_stock = validate_command_for_state(
+        &game,
+        &command(
+            "pingyuan",
+            "guan_yu",
+            expedition("ye", "guan_yu", TroopKind::Cavalry, 3_300),
+        ),
+    );
+
+    assert!(over_capacity.is_err());
+    assert!(over_stock.is_err());
 }
 
 #[test]
@@ -290,7 +395,7 @@ fn monthly_economy_applies_facilities_upkeep_growth_and_salaries() {
         city.population,
         before.population + projection.population_delta as u32
     );
-    assert!(city.troops > before.troops);
+    assert!(city.troops.total() > before.troops.total());
     assert!(projection.officer_salary > 0);
     assert!(
         report
@@ -579,14 +684,21 @@ fn recruit_consumes_resources_and_adds_troops() {
     let before_gold = game.cities["xiapi"].gold;
     queue_player_command(
         &mut game,
-        command("xiapi", "zhang_fei", CommandKind::Recruit { amount: 500 }),
+        command(
+            "xiapi",
+            "zhang_fei",
+            CommandKind::Recruit {
+                kind: TroopKind::Infantry,
+                amount: 500,
+            },
+        ),
     )
     .unwrap();
 
     let commands = game.pending_commands.clone();
     resolve_command_batch(&mut game, commands);
 
-    assert!(game.cities["xiapi"].troops > before_troops);
+    assert!(game.cities["xiapi"].troops.total() > before_troops.total());
     assert!(game.cities["xiapi"].gold < before_gold);
 }
 
@@ -641,7 +753,7 @@ fn transfer_moves_troops_between_adjacent_owned_cities() {
             "liu_bei",
             CommandKind::Transfer {
                 target_city_id: "xiapi".to_string(),
-                troops: 700,
+                troops: infantry(700),
                 officer_ids: Vec::new(),
             },
         ),
@@ -651,7 +763,9 @@ fn transfer_moves_troops_between_adjacent_owned_cities() {
     let commands = game.pending_commands.clone();
     resolve_command_batch(&mut game, commands);
 
-    assert_eq!(game.cities["pingyuan"].troops, before_source - 700);
+    let mut expected_source = before_source;
+    expected_source.saturating_sub_pool(infantry(700));
+    assert_eq!(game.cities["pingyuan"].troops, expected_source);
     assert_eq!(game.cities["xiapi"].troops, before_target);
     assert_eq!(game.officers["liu_bei"].city_id, None);
     assert_eq!(game.army_movements.len(), 1);
@@ -660,9 +774,39 @@ fn transfer_moves_troops_between_adjacent_owned_cities() {
         resolve_command_batch(&mut game, Vec::new());
     }
 
-    assert_eq!(game.cities["xiapi"].troops, before_target + 700);
+    let mut expected_target = before_target;
+    expected_target.add_pool(infantry(700));
+    assert_eq!(game.cities["xiapi"].troops, expected_target);
     assert_eq!(game.officers["liu_bei"].city_id.as_deref(), Some("xiapi"));
     assert!(game.army_movements.is_empty());
+}
+
+#[test]
+fn pending_expedition_reserves_deputy_officers() {
+    let mut game = sample_game();
+    queue_player_command(
+        &mut game,
+        command(
+            "xiapi",
+            "zhang_fei",
+            CommandKind::Expedition {
+                target_city_id: "xuchang".to_string(),
+                assignments: vec![
+                    ExpeditionAssignment::commander(
+                        "zhang_fei".to_string(),
+                        TroopKind::Infantry,
+                        1_000,
+                    ),
+                    ExpeditionAssignment::deputy("chen_dao".to_string(), TroopKind::Archers, 800),
+                ],
+            },
+        ),
+    )
+    .unwrap();
+
+    let pending_officers = game.pending_officer_ids();
+    assert!(pending_officers.contains("zhang_fei"));
+    assert!(pending_officers.contains("chen_dao"));
 }
 
 #[test]
@@ -670,9 +814,11 @@ fn strong_expedition_can_capture_city() {
     let mut game = sample_game();
     {
         let source = game.cities.get_mut("xiapi").unwrap();
-        source.troops = 30_000;
+        source.troops = TroopPool::new(20_000, 5_000, 5_000);
         source.training = 100;
     }
+    appoint_official_post(&mut game, "liu_bei", "zhang_fei", "da_jiangjun").unwrap();
+    appoint_official_post(&mut game, "liu_bei", "chen_dao", "taiwei").unwrap();
     let travel_months = game.travel_months_between("xiapi", "xuchang").unwrap();
     queue_player_command(
         &mut game,
@@ -681,7 +827,14 @@ fn strong_expedition_can_capture_city() {
             "zhang_fei",
             CommandKind::Expedition {
                 target_city_id: "xuchang".to_string(),
-                troops: 25_000,
+                assignments: vec![
+                    ExpeditionAssignment::commander(
+                        "zhang_fei".to_string(),
+                        TroopKind::Infantry,
+                        15_000,
+                    ),
+                    ExpeditionAssignment::deputy("chen_dao".to_string(), TroopKind::Cavalry, 5_000),
+                ],
             },
         ),
     )
@@ -703,7 +856,143 @@ fn strong_expedition_can_capture_city() {
         game.officers["zhang_fei"].city_id.as_deref(),
         Some("xuchang")
     );
+    assert_eq!(
+        game.officers["chen_dao"].city_id.as_deref(),
+        Some("xuchang")
+    );
     assert!(game.army_movements.is_empty());
+}
+
+#[test]
+fn troop_kind_matchups_change_battle_outcome() {
+    let mut cavalry_game = sample_game();
+    let mut infantry_game = sample_game();
+    for game in [&mut cavalry_game, &mut infantry_game] {
+        appoint_official_post(game, "liu_bei", "zhang_fei", "da_jiangjun").unwrap();
+        let source = game.cities.get_mut("xiapi").unwrap();
+        source.troops = TroopPool::new(8_000, 8_000, 0);
+        source.training = 100;
+        source.facilities.clear();
+        let target = game.cities.get_mut("xuchang").unwrap();
+        target.troops = TroopPool::new(0, 0, 8_500);
+        target.training = 40;
+        target.defense = 20;
+        target.order = 60;
+        target.governor_id = None;
+        target.facilities.clear();
+    }
+
+    queue_player_command(
+        &mut cavalry_game,
+        command(
+            "xiapi",
+            "zhang_fei",
+            expedition("xuchang", "zhang_fei", TroopKind::Cavalry, 6_000),
+        ),
+    )
+    .unwrap();
+    let commands = cavalry_game.pending_commands.clone();
+    resolve_command_batch(&mut cavalry_game, commands);
+    resolve_until_arrival(&mut cavalry_game, "xiapi", "xuchang");
+
+    queue_player_command(
+        &mut infantry_game,
+        command(
+            "xiapi",
+            "zhang_fei",
+            expedition("xuchang", "zhang_fei", TroopKind::Infantry, 6_000),
+        ),
+    )
+    .unwrap();
+    let commands = infantry_game.pending_commands.clone();
+    resolve_command_batch(&mut infantry_game, commands);
+    resolve_until_arrival(&mut infantry_game, "xiapi", "xuchang");
+
+    assert_eq!(cavalry_game.cities["xuchang"].faction_id, "liu_bei");
+    assert_eq!(infantry_game.cities["xuchang"].faction_id, "cao_cao");
+}
+
+#[test]
+fn defending_governor_can_prevent_borderline_capture() {
+    let mut no_governor_game = sample_game();
+    let mut governor_game = sample_game();
+    for game in [&mut no_governor_game, &mut governor_game] {
+        appoint_official_post(game, "liu_bei", "zhang_fei", "da_jiangjun").unwrap();
+        let source = game.cities.get_mut("xiapi").unwrap();
+        source.troops = TroopPool::new(5_000, 0, 0);
+        source.training = 100;
+        source.facilities.clear();
+        let target = game.cities.get_mut("xuchang").unwrap();
+        target.troops = TroopPool::new(0, 7_500, 0);
+        target.training = 50;
+        target.defense = 50;
+        target.order = 70;
+        target.facilities.clear();
+    }
+    no_governor_game
+        .cities
+        .get_mut("xuchang")
+        .unwrap()
+        .governor_id = None;
+    governor_game.cities.get_mut("xuchang").unwrap().governor_id = Some("cao_cao".to_string());
+    {
+        let governor = governor_game.officers.get_mut("cao_cao").unwrap();
+        governor.stats.leadership = 100;
+        governor.stats.strength = 100;
+    }
+
+    for game in [&mut no_governor_game, &mut governor_game] {
+        queue_player_command(
+            game,
+            command(
+                "xiapi",
+                "zhang_fei",
+                expedition("xuchang", "zhang_fei", TroopKind::Infantry, 3_200),
+            ),
+        )
+        .unwrap();
+        let commands = game.pending_commands.clone();
+        resolve_command_batch(game, commands);
+        resolve_until_arrival(game, "xiapi", "xuchang");
+    }
+
+    assert_eq!(no_governor_game.cities["xuchang"].faction_id, "liu_bei");
+    assert_eq!(governor_game.cities["xuchang"].faction_id, "cao_cao");
+}
+
+#[test]
+fn failed_expedition_returns_surviving_troop_pool_and_officers() {
+    let mut game = sample_game();
+    {
+        let source = game.cities.get_mut("xiapi").unwrap();
+        source.troops = TroopPool::new(2_000, 0, 0);
+        source.training = 40;
+        source.facilities.clear();
+        let target = game.cities.get_mut("xuchang").unwrap();
+        target.troops = TroopPool::new(12_000, 0, 0);
+        target.training = 80;
+        target.defense = 200;
+        target.facilities.clear();
+    }
+    queue_player_command(
+        &mut game,
+        command(
+            "xiapi",
+            "zhang_fei",
+            expedition("xuchang", "zhang_fei", TroopKind::Infantry, 1_000),
+        ),
+    )
+    .unwrap();
+    let commands = game.pending_commands.clone();
+    resolve_command_batch(&mut game, commands);
+    assert_eq!(game.officers["zhang_fei"].city_id, None);
+
+    resolve_until_arrival(&mut game, "xiapi", "xuchang");
+
+    assert_eq!(game.cities["xuchang"].faction_id, "cao_cao");
+    assert_eq!(game.officers["zhang_fei"].city_id.as_deref(), Some("xiapi"));
+    assert!(game.cities["xiapi"].troops.total() > 0);
+    assert!(game.cities["xiapi"].troops.infantry > 0);
 }
 
 #[test]

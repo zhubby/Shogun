@@ -5,7 +5,7 @@ use super::city::{
 use super::ids::{CityId, FactionId, OfficerId, ScenarioId};
 use super::model::{
     Controller, DiplomaticRelation, Faction, GameState, GameStatus, MapPosition, Road,
-    SAVE_VERSION, diplomacy_key,
+    SAVE_VERSION, TroopPool, diplomacy_key,
 };
 use super::officer::{
     Officer, OfficerCatalog, OfficerGender, OfficerProfile, OfficerProfileUpdate,
@@ -552,7 +552,7 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
                 gold: row.get::<i64, _>("gold") as i32,
                 food: row.get::<i64, _>("food") as i32,
                 materials: derive_city_materials(&profile),
-                troops: row.get::<i64, _>("troops") as u32,
+                troops: TroopPool::from_total(row.get::<i64, _>("troops") as u32),
                 training: row.get::<i64, _>("training") as u8,
                 agriculture: row.get::<i64, _>("agriculture") as u16,
                 commerce: row.get::<i64, _>("commerce") as u16,

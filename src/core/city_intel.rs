@@ -39,7 +39,7 @@ pub(super) fn city_summary_intel(ui: &mut egui::Ui, city: &City, faction_name: &
         ui,
         &[
             MetricTile::new(egui_phosphor::regular::USERS, "人口", city.population),
-            MetricTile::new(egui_phosphor::regular::SWORD, "兵力", city.troops),
+            MetricTile::new(egui_phosphor::regular::SWORD, "兵力", city.troops.total()),
             MetricTile::new(egui_phosphor::regular::COINS, "金", city.gold),
             MetricTile::new(egui_phosphor::regular::BARN, "粮", city.food),
             MetricTile::new(egui_phosphor::regular::STACK, "建材", city.materials),
@@ -64,13 +64,14 @@ pub(super) fn city_resource_intel(ui: &mut egui::Ui, city: &City) {
                 MetricTile::new(egui_phosphor::regular::BARN, "粮", city.food),
                 MetricTile::new(egui_phosphor::regular::STACK, "建材", city.materials),
                 MetricTile::new(egui_phosphor::regular::USERS, "人口", city.population),
-                MetricTile::new(egui_phosphor::regular::SWORD, "兵力", city.troops),
+                MetricTile::new(egui_phosphor::regular::SWORD, "兵力", city.troops.total()),
             ],
             2,
             TILE_HEIGHT,
             TILE_GAP,
             false,
         );
+        muted_label(ui, troop_pool_summary(city));
     });
 }
 
@@ -383,6 +384,13 @@ fn facility_list(city: &City) -> String {
         .map(|facility| format!("{}{}级", facility_kind_label(facility.kind), facility.level))
         .collect::<Vec<_>>()
         .join(" / ")
+}
+
+fn troop_pool_summary(city: &City) -> String {
+    format!(
+        "步 {} / 骑 {} / 弓 {}",
+        city.troops.infantry, city.troops.cavalry, city.troops.archers
+    )
 }
 
 struct MetricTile {

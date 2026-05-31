@@ -7,7 +7,7 @@ use super::city_intel::{
 };
 use super::labels::{
     confidence_label, development_focus_label, diplomacy_label, facility_kind_label,
-    officer_gender_label, officer_relationship_label,
+    officer_gender_label, officer_relationship_label, troop_kind_label,
 };
 use super::state::{CityPanelTab, CommandAction, CommandCategory, GameUiState};
 use super::style::{
@@ -70,7 +70,10 @@ fn command_tent_header(
         ui.separator();
         ui.label(format!(
             "金 {}  粮 {}  建材 {}  兵 {}",
-            city.gold, city.food, city.materials, city.troops
+            city.gold,
+            city.food,
+            city.materials,
+            city.troops.total()
         ));
         ui.separator();
         match pending_command {
@@ -165,6 +168,8 @@ fn command_tab(
             game,
             city,
             selected_officer,
+            selected_officer_id.as_ref(),
+            &available_officers,
             pending_command,
         );
 
@@ -279,6 +284,8 @@ fn command_parameter_column(
     game: &GameState,
     city: &City,
     selected_officer: Option<&Officer>,
+    selected_officer_id: Option<&OfficerId>,
+    available_officers: &[Officer],
     pending_command: Option<&Command>,
 ) {
     war_sub_panel_frame().show(ui, |ui| {
@@ -314,7 +321,14 @@ fn command_parameter_column(
                 appoint_parameter_controls(ui, city, selected_officer)
             }
             CommandAction::Transfer => transfer_parameter_controls(ui, ui_state, game, city),
-            CommandAction::Expedition => expedition_parameter_controls(ui, ui_state, game, city),
+            CommandAction::Expedition => expedition_parameter_controls(
+                ui,
+                ui_state,
+                game,
+                city,
+                selected_officer_id,
+                available_officers,
+            ),
             CommandAction::Diplomacy => diplomacy_parameter_controls(ui, ui_state, game),
         }
     });
@@ -583,9 +597,25 @@ fn recruit_parameter_controls(
     game: &GameState,
     city: &City,
 ) {
+    egui::ComboBox::from_id_salt("command_recruit_kind")
+        .selected_text(troop_kind_label(ui_state.selected_recruit_kind))
+        .show_ui(ui, |ui| {
+            for kind in TroopKind::ALL {
+                ui.selectable_value(
+                    &mut ui_state.selected_recruit_kind,
+                    kind,
+                    troop_kind_label(kind),
+                );
+            }
+        });
     ui_state.recruit_amount = ui_state.recruit_amount.clamp(100, 5000);
     ui.add(egui::Slider::new(&mut ui_state.recruit_amount, 100..=5000).text("征兵数"));
-    let cost = recruit_cost_for_faction(game, &city.faction_id, ui_state.recruit_amount);
+    let cost = recruit_cost_for_faction_kind(
+        game,
+        &city.faction_id,
+        ui_state.selected_recruit_kind,
+        ui_state.recruit_amount,
+    );
     ui.label(format!(
         "消耗 金 {} / 粮 {} / 人口 {}。",
         cost.gold,
@@ -594,7 +624,8 @@ fn recruit_parameter_controls(
     ));
     ui.label(format!(
         "当前人口 {}，驻军 {}。",
-        city.population, city.troops
+        city.population,
+        troop_pool_summary(city.troops)
     ));
 }
 
@@ -644,12 +675,35 @@ fn transfer_parameter_controls(
             }
         });
     ui.label(travel_summary_line(game, &city.id, &selected_target_id));
-    if city.troops == 0 {
-        ui_state.transfer_troops = 0;
+    if city.troops.is_empty() {
+        ui_state.transfer_troops = TroopPool::default();
         ui.colored_label(war_text_muted(), "本城无可调动兵力。");
     } else {
-        ui_state.transfer_troops = ui_state.transfer_troops.clamp(1, city.troops);
-        ui.add(egui::Slider::new(&mut ui_state.transfer_troops, 1..=city.troops).text("兵力"));
+        ui.label(format!("本城驻军 {}", troop_pool_summary(city.troops)));
+        troop_pool_sliders(ui, &mut ui_state.transfer_troops, city.troops, false);
+    }
+}
+
+fn troop_pool_sliders(
+    ui: &mut egui::Ui,
+    selected: &mut TroopPool,
+    available: TroopPool,
+    allow_zero_total: bool,
+) {
+    for kind in TroopKind::ALL {
+        let max = available.get(kind);
+        let mut value = selected.get(kind).min(max);
+        ui.add(egui::Slider::new(&mut value, 0..=max).text(troop_kind_label(kind)));
+        selected.set(kind, value);
+    }
+    if !allow_zero_total && selected.is_empty() && !available.is_empty() {
+        for fallback in TroopKind::ALL {
+            let amount = available.get(fallback).min(1);
+            if amount > 0 {
+                selected.add(fallback, amount);
+                break;
+            }
+        }
     }
 }
 
@@ -658,6 +712,8 @@ fn expedition_parameter_controls(
     ui_state: &mut GameUiState,
     game: &GameState,
     city: &City,
+    selected_officer_id: Option<&OfficerId>,
+    available_officers: &[Officer],
 ) {
     let targets = adjacent_cities(game, city, false);
     if targets.is_empty() {
@@ -690,13 +746,206 @@ fn expedition_parameter_controls(
             }
         });
     ui.label(travel_summary_line(game, &city.id, &selected_target_id));
-    if city.troops == 0 {
-        ui_state.expedition_troops = 0;
-        ui.colored_label(war_text_muted(), "本城无可出征兵力。");
-    } else {
-        ui_state.expedition_troops = ui_state.expedition_troops.clamp(1, city.troops);
-        ui.add(egui::Slider::new(&mut ui_state.expedition_troops, 1..=city.troops).text("兵力"));
+    if let Some(target) = game.cities.get(&selected_target_id) {
+        ui.label(format!(
+            "目标守军 {}，城防 {}，太守 {}。",
+            troop_pool_summary(target.troops),
+            target.defense,
+            target
+                .governor_id
+                .as_deref()
+                .map(|officer_id| officer_name(game, officer_id))
+                .unwrap_or_else(|| "无".to_string())
+        ));
     }
+    if city.troops.is_empty() {
+        ui_state.expedition_main_troops = 0;
+        ui_state.expedition_deputy_one_troops = 0;
+        ui_state.expedition_deputy_two_troops = 0;
+        ui.colored_label(war_text_muted(), "本城无可出征兵力。");
+        return;
+    }
+
+    let Some(main_id) = selected_officer_id else {
+        return;
+    };
+    ui.separator();
+    ui.label(format!("本城驻军 {}", troop_pool_summary(city.troops)));
+    if let Some(main) = game.officers.get(main_id) {
+        expedition_assignment_controls(
+            ui,
+            "主将",
+            main,
+            city.troops,
+            &mut ui_state.expedition_main_kind,
+            &mut ui_state.expedition_main_troops,
+            true,
+        );
+    }
+
+    normalize_deputy_selection(
+        &mut ui_state.expedition_deputy_one,
+        available_officers,
+        &[
+            Some(main_id.as_str()),
+            ui_state.expedition_deputy_two.as_deref(),
+        ],
+    );
+    normalize_deputy_selection(
+        &mut ui_state.expedition_deputy_two,
+        available_officers,
+        &[
+            Some(main_id.as_str()),
+            ui_state.expedition_deputy_one.as_deref(),
+        ],
+    );
+    officer_option_combo(
+        ui,
+        "副将一",
+        "command_expedition_deputy_one",
+        &mut ui_state.expedition_deputy_one,
+        available_officers,
+        &[
+            Some(main_id.as_str()),
+            ui_state.expedition_deputy_two.as_deref(),
+        ],
+    );
+    if let Some(officer) = ui_state
+        .expedition_deputy_one
+        .as_ref()
+        .and_then(|id| game.officers.get(id))
+    {
+        expedition_assignment_controls(
+            ui,
+            "副将一",
+            officer,
+            city.troops,
+            &mut ui_state.expedition_deputy_one_kind,
+            &mut ui_state.expedition_deputy_one_troops,
+            false,
+        );
+    } else {
+        ui_state.expedition_deputy_one_troops = 0;
+    }
+    officer_option_combo(
+        ui,
+        "副将二",
+        "command_expedition_deputy_two",
+        &mut ui_state.expedition_deputy_two,
+        available_officers,
+        &[
+            Some(main_id.as_str()),
+            ui_state.expedition_deputy_one.as_deref(),
+        ],
+    );
+    if let Some(officer) = ui_state
+        .expedition_deputy_two
+        .as_ref()
+        .and_then(|id| game.officers.get(id))
+    {
+        expedition_assignment_controls(
+            ui,
+            "副将二",
+            officer,
+            city.troops,
+            &mut ui_state.expedition_deputy_two_kind,
+            &mut ui_state.expedition_deputy_two_troops,
+            false,
+        );
+    } else {
+        ui_state.expedition_deputy_two_troops = 0;
+    }
+}
+
+fn expedition_assignment_controls(
+    ui: &mut egui::Ui,
+    label: &str,
+    officer: &Officer,
+    available: TroopPool,
+    kind: &mut TroopKind,
+    troops: &mut u32,
+    required: bool,
+) {
+    let capacity = command_capacity_for_officer(officer);
+    ui.group(|ui| {
+        ui.horizontal(|ui| {
+            ui.label(format!("{label}: {}", officer.name));
+            ui.colored_label(war_text_muted(), format!("上限 {capacity}"));
+        });
+        egui::ComboBox::from_id_salt(("expedition_kind", label, &officer.id))
+            .selected_text(troop_kind_label(*kind))
+            .show_ui(ui, |ui| {
+                for troop_kind in TroopKind::ALL {
+                    ui.selectable_value(kind, troop_kind, troop_kind_label(troop_kind));
+                }
+            });
+        let max_troops = available.get(*kind).min(capacity);
+        if max_troops == 0 {
+            *troops = 0;
+            ui.colored_label(war_text_muted(), "该兵种无可用兵力。");
+            return;
+        }
+        let min_troops = u32::from(required);
+        *troops = (*troops).clamp(min_troops, max_troops);
+        ui.add(
+            egui::Slider::new(troops, min_troops..=max_troops)
+                .text(format!("{}兵力", troop_kind_label(*kind))),
+        );
+    });
+}
+
+fn normalize_deputy_selection(
+    selected: &mut Option<OfficerId>,
+    available_officers: &[Officer],
+    excluded: &[Option<&str>],
+) {
+    let Some(selected_id) = selected.as_deref() else {
+        return;
+    };
+    let valid = available_officers.iter().any(|officer| {
+        officer.id == selected_id
+            && !excluded
+                .iter()
+                .flatten()
+                .any(|excluded_id| *excluded_id == officer.id)
+    });
+    if !valid {
+        *selected = None;
+    }
+}
+
+fn officer_option_combo(
+    ui: &mut egui::Ui,
+    label: &str,
+    id_salt: &'static str,
+    selected: &mut Option<OfficerId>,
+    available_officers: &[Officer],
+    excluded: &[Option<&str>],
+) {
+    let selected_text = selected
+        .as_deref()
+        .and_then(|id| available_officers.iter().find(|officer| officer.id == id))
+        .map(|officer| officer.name.as_str())
+        .unwrap_or("不选择");
+    egui::ComboBox::from_id_salt(id_salt)
+        .selected_text(format!("{label}: {selected_text}"))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(selected, None, "不选择");
+            for officer in available_officers {
+                if excluded
+                    .iter()
+                    .flatten()
+                    .any(|excluded_id| *excluded_id == officer.id)
+                {
+                    continue;
+                }
+                ui.selectable_value(
+                    selected,
+                    Some(officer.id.clone()),
+                    officer_command_label(officer),
+                );
+            }
+        });
 }
 
 fn diplomacy_parameter_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, game: &GameState) {
@@ -819,6 +1068,7 @@ fn build_candidate_command(
             kind: ui_state.selected_facility_kind,
         },
         CommandAction::Recruit => CommandKind::Recruit {
+            kind: ui_state.selected_recruit_kind,
             amount: ui_state.recruit_amount,
         },
         CommandAction::Train => CommandKind::Train,
@@ -832,7 +1082,7 @@ fn build_candidate_command(
         },
         CommandAction::Expedition => CommandKind::Expedition {
             target_city_id: ui_state.selected_expedition_target.clone()?,
-            troops: ui_state.expedition_troops,
+            assignments: expedition_assignments_from_ui(ui_state, &officer_id),
         },
         CommandAction::Diplomacy => CommandKind::Diplomacy {
             target_faction_id: ui_state.selected_diplomacy_target.clone()?,
@@ -845,6 +1095,36 @@ fn build_candidate_command(
         officer_id: Some(officer_id),
         kind,
     })
+}
+
+fn expedition_assignments_from_ui(
+    ui_state: &GameUiState,
+    commander_id: &OfficerId,
+) -> Vec<ExpeditionAssignment> {
+    let mut assignments = vec![ExpeditionAssignment::commander(
+        commander_id.clone(),
+        ui_state.expedition_main_kind,
+        ui_state.expedition_main_troops,
+    )];
+    if let Some(officer_id) = &ui_state.expedition_deputy_one
+        && ui_state.expedition_deputy_one_troops > 0
+    {
+        assignments.push(ExpeditionAssignment::deputy(
+            officer_id.clone(),
+            ui_state.expedition_deputy_one_kind,
+            ui_state.expedition_deputy_one_troops,
+        ));
+    }
+    if let Some(officer_id) = &ui_state.expedition_deputy_two
+        && ui_state.expedition_deputy_two_troops > 0
+    {
+        assignments.push(ExpeditionAssignment::deputy(
+            officer_id.clone(),
+            ui_state.expedition_deputy_two_kind,
+            ui_state.expedition_deputy_two_troops,
+        ));
+    }
+    assignments
 }
 
 fn preview_command(game: &GameState, command: &Command) -> Result<(), String> {
@@ -924,11 +1204,12 @@ fn command_preview_lines(
             }
             Err(message) => lines.push(message.to_string()),
         },
-        CommandKind::Recruit { amount } => {
+        CommandKind::Recruit { kind, amount } => {
+            lines.push(format!("兵种: {}", troop_kind_label(*kind)));
             lines.push(format!("兵力: +{amount}"));
             lines.push(resource_cost_line(
                 "消耗",
-                recruit_cost_for_faction(game, &command.issuer_faction_id, *amount),
+                recruit_cost_for_faction_kind(game, &command.issuer_faction_id, *kind, *amount),
             ));
             lines.push(format!("人口: -{}", amount * 2));
         }
@@ -949,11 +1230,11 @@ fn command_preview_lines(
         } => {
             lines.push(format!("目标: {}", city_name(game, target_city_id)));
             lines.push(travel_summary_line(game, &command.city_id, target_city_id));
-            lines.push(format!("出发兵力: {troops}"));
+            lines.push(format!("出发兵力: {}", troop_pool_summary(*troops)));
         }
         CommandKind::Expedition {
             target_city_id,
-            troops,
+            assignments,
         } => {
             let target = game.cities.get(target_city_id);
             lines.push(format!("目标: {}", city_name(game, target_city_id)));
@@ -961,7 +1242,18 @@ fn command_preview_lines(
                 lines.push(format!("敌方: {}", faction_name(game, &target.faction_id)));
             }
             lines.push(travel_summary_line(game, &command.city_id, target_city_id));
-            lines.push(format!("出发兵力: {troops}"));
+            lines.push(format!(
+                "出发兵力: {}",
+                troop_pool_summary(expedition_assignment_pool(assignments))
+            ));
+            for assignment in assignments {
+                lines.push(format!(
+                    "{} {} {}兵",
+                    officer_name(game, &assignment.officer_id),
+                    troop_kind_label(assignment.troop_kind),
+                    assignment.troops
+                ));
+            }
         }
         CommandKind::Diplomacy {
             target_faction_id,
@@ -979,6 +1271,24 @@ fn resource_cost_line(prefix: &str, cost: ResourceCost) -> String {
         "{prefix}: 金 {} / 粮 {} / 建材 {}",
         cost.gold, cost.food, cost.materials
     )
+}
+
+fn troop_pool_summary(troops: TroopPool) -> String {
+    format!(
+        "合计 {}（步 {} / 骑 {} / 弓 {}）",
+        troops.total(),
+        troops.infantry,
+        troops.cavalry,
+        troops.archers
+    )
+}
+
+fn expedition_assignment_pool(assignments: &[ExpeditionAssignment]) -> TroopPool {
+    let mut troops = TroopPool::default();
+    for assignment in assignments {
+        troops.add(assignment.troop_kind, assignment.troops);
+    }
+    troops
 }
 
 fn command_summary(game: &GameState, command: &Command) -> String {
@@ -1008,11 +1318,16 @@ fn command_title(command: &Command) -> String {
         CommandKind::Develop { focus } => format!("开发{}", development_focus_label(focus)),
         CommandKind::UpgradeCityCore => "扩建核心".to_string(),
         CommandKind::BuildFacility { kind } => format!("建设{}", facility_kind_label(*kind)),
-        CommandKind::Recruit { amount } => format!("征兵 {amount}"),
+        CommandKind::Recruit { kind, amount } => {
+            format!("征{} {amount}", troop_kind_label(*kind))
+        }
         CommandKind::Train => "训练".to_string(),
         CommandKind::AppointGovernor { .. } => "任命太守".to_string(),
-        CommandKind::Transfer { troops, .. } => format!("调动出发 {troops}"),
-        CommandKind::Expedition { troops, .. } => format!("出征出发 {troops}"),
+        CommandKind::Transfer { troops, .. } => format!("调动出发 {}", troops.total()),
+        CommandKind::Expedition { assignments, .. } => {
+            let total: u32 = assignments.iter().map(|assignment| assignment.troops).sum();
+            format!("出征出发 {total}")
+        }
         CommandKind::Diplomacy { proposal, .. } => format!("外交{}", diplomacy_label(proposal)),
     }
 }
