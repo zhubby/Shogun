@@ -248,7 +248,7 @@ pub(super) fn city_drawer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, s
 }
 
 pub(super) fn report_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
-    let width = (screen.width() * 0.62).clamp(420.0, 880.0);
+    let width = screen.width() * 0.5;
     egui::Area::new(egui::Id::new("hud_report_panel"))
         .order(egui::Order::Foreground)
         .anchor(
