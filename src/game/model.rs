@@ -21,6 +21,8 @@ pub struct GameState {
     pub roads: Vec<Road>,
     pub diplomacy: BTreeMap<String, DiplomaticRelation>,
     pub pending_commands: Vec<Command>,
+    #[serde(default)]
+    pub army_movements: Vec<ArmyMovement>,
     pub applied_event_ids: BTreeSet<String>,
     pub reports: Vec<TurnReport>,
     pub status: GameStatus,
@@ -51,6 +53,19 @@ impl GameState {
         self.roads
             .iter()
             .any(|road| (road.from == a && road.to == b) || (road.from == b && road.to == a))
+    }
+
+    pub fn road_distance_li(&self, a: &str, b: &str) -> Option<u32> {
+        if !self.are_adjacent(a, b) {
+            return None;
+        }
+        let from = self.cities.get(a)?;
+        let to = self.cities.get(b)?;
+        Some(map_distance_li(from.position, to.position))
+    }
+
+    pub fn travel_months_between(&self, a: &str, b: &str) -> Option<u32> {
+        self.road_distance_li(a, b).map(travel_months_for_distance)
     }
 
     pub fn relation(&self, a: &str, b: &str) -> Option<&DiplomaticRelation> {
@@ -141,6 +156,43 @@ pub struct MapPosition {
 pub struct Road {
     pub from: CityId,
     pub to: CityId,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ArmyMovement {
+    pub kind: ArmyMovementKind,
+    pub issuer_faction_id: FactionId,
+    pub source_city_id: CityId,
+    pub target_city_id: CityId,
+    pub commander_id: OfficerId,
+    pub officer_ids: Vec<OfficerId>,
+    pub troops: u32,
+    pub training: u8,
+    pub distance_li: u32,
+    pub departure_turn: u32,
+    pub arrival_turn: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ArmyMovementKind {
+    Transfer,
+    Expedition,
+}
+
+pub const MAP_COORDINATE_LI: f32 = 4.0;
+pub const MARCH_LI_PER_MONTH: u32 = 500;
+pub const MAX_TRAVEL_MONTHS: u32 = 3;
+
+pub fn map_distance_li(a: MapPosition, b: MapPosition) -> u32 {
+    (((a.x - b.x).hypot(a.y - b.y)) * MAP_COORDINATE_LI)
+        .round()
+        .max(1.0) as u32
+}
+
+pub fn travel_months_for_distance(distance_li: u32) -> u32 {
+    distance_li
+        .div_ceil(MARCH_LI_PER_MONTH)
+        .clamp(1, MAX_TRAVEL_MONTHS)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

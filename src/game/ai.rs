@@ -24,6 +24,7 @@ pub struct AiDecisionRequest {
     pub cities: Vec<City>,
     pub officers: Vec<Officer>,
     pub roads: Vec<Road>,
+    pub army_movements: Vec<ArmyMovement>,
     pub diplomacy: Vec<DiplomaticRelation>,
 }
 
@@ -37,6 +38,7 @@ impl AiDecisionRequest {
             cities: state.cities.values().cloned().collect(),
             officers: state.officers.values().cloned().collect(),
             roads: state.roads.clone(),
+            army_movements: state.army_movements.clone(),
             diplomacy: state.diplomacy.values().cloned().collect(),
         }
     }
@@ -251,9 +253,18 @@ fn best_attack_target(request: &AiDecisionRequest, city: &City) -> Option<CityId
                 .find(|candidate| candidate.id == city_id)
         })
         .filter(|target| target.faction_id != city.faction_id)
+        .filter(|target| !has_incoming_expedition(request, &city.faction_id, &target.id))
         .filter(|target| !has_truce(request, &city.faction_id, &target.faction_id))
         .min_by_key(|target| target.troops + u32::from(target.defense) * 8)
         .map(|target| target.id.clone())
+}
+
+fn has_incoming_expedition(request: &AiDecisionRequest, faction_id: &str, city_id: &str) -> bool {
+    request.army_movements.iter().any(|movement| {
+        movement.kind == ArmyMovementKind::Expedition
+            && movement.issuer_faction_id == faction_id
+            && movement.target_city_id == city_id
+    })
 }
 
 fn best_construction_command(city: &City) -> Option<CommandKind> {

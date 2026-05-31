@@ -437,8 +437,8 @@ fn command_action_hint(action: CommandAction) -> &'static str {
         CommandAction::Recruit => "消耗人口、金钱和粮草补充兵力。",
         CommandAction::Train => "提高驻军训练度，增强战斗表现。",
         CommandAction::AppointGovernor => "让当前武将接任太守。",
-        CommandAction::Transfer => "向邻接己方城池调动兵力。",
-        CommandAction::Expedition => "攻击邻接敌方城池。",
+        CommandAction::Transfer => "向邻接己方城池调动兵力，按道路距离行军。",
+        CommandAction::Expedition => "攻击邻接敌方城池，按道路距离行军后交战。",
         CommandAction::Diplomacy => "对存续势力提出外交行动。",
     }
 }
@@ -639,16 +639,17 @@ fn transfer_parameter_controls(
         return;
     };
     egui::ComboBox::from_id_salt("command_transfer_target")
-        .selected_text(city_name(game, &selected_target_id))
+        .selected_text(target_travel_label(game, &city.id, &selected_target_id))
         .show_ui(ui, |ui| {
             for target in &targets {
                 ui.selectable_value(
                     &mut ui_state.selected_transfer_target,
                     Some(target.id.clone()),
-                    &target.name,
+                    target_travel_label(game, &city.id, &target.id),
                 );
             }
         });
+    ui.label(travel_summary_line(game, &city.id, &selected_target_id));
     if city.troops == 0 {
         ui_state.transfer_troops = 0;
         ui.colored_label(war_text_muted(), "本城无可调动兵力。");
@@ -675,7 +676,7 @@ fn expedition_parameter_controls(
         return;
     };
     egui::ComboBox::from_id_salt("command_expedition_target")
-        .selected_text(city_name(game, &selected_target_id))
+        .selected_text(target_travel_label(game, &city.id, &selected_target_id))
         .show_ui(ui, |ui| {
             for target in &targets {
                 let faction_name = game
@@ -686,10 +687,15 @@ fn expedition_parameter_controls(
                 ui.selectable_value(
                     &mut ui_state.selected_expedition_target,
                     Some(target.id.clone()),
-                    format!("{} ({faction_name})", target.name),
+                    format!(
+                        "{} ({faction_name}) · {}",
+                        target.name,
+                        travel_summary(game, &city.id, &target.id)
+                    ),
                 );
             }
         });
+    ui.label(travel_summary_line(game, &city.id, &selected_target_id));
     if city.troops == 0 {
         ui_state.expedition_troops = 0;
         ui.colored_label(war_text_muted(), "本城无可出征兵力。");
@@ -770,6 +776,31 @@ fn ensure_selected_target(selected: &mut Option<CityId>, targets: &[City]) -> Op
         *selected = Some(targets[0].id.clone());
     }
     selected.clone()
+}
+
+fn target_travel_label(game: &GameState, from_city_id: &str, target_city_id: &str) -> String {
+    format!(
+        "{} · {}",
+        city_name(game, target_city_id),
+        travel_summary(game, from_city_id, target_city_id)
+    )
+}
+
+fn travel_summary_line(game: &GameState, from_city_id: &str, target_city_id: &str) -> String {
+    format!(
+        "路程: {}，到达后执行目标行动。",
+        travel_summary(game, from_city_id, target_city_id)
+    )
+}
+
+fn travel_summary(game: &GameState, from_city_id: &str, target_city_id: &str) -> String {
+    match (
+        game.road_distance_li(from_city_id, target_city_id),
+        game.travel_months_between(from_city_id, target_city_id),
+    ) {
+        (Some(distance), Some(months)) => format!("距离 {distance} 里 / 行军 {months} 月"),
+        _ => "距离未知".to_string(),
+    }
 }
 
 fn build_candidate_command(
@@ -914,7 +945,8 @@ fn command_preview_lines(
             ..
         } => {
             lines.push(format!("目标: {}", city_name(game, target_city_id)));
-            lines.push(format!("调动兵力: {troops}"));
+            lines.push(travel_summary_line(game, &command.city_id, target_city_id));
+            lines.push(format!("出发兵力: {troops}"));
         }
         CommandKind::Expedition {
             target_city_id,
@@ -925,7 +957,8 @@ fn command_preview_lines(
             if let Some(target) = target {
                 lines.push(format!("敌方: {}", faction_name(game, &target.faction_id)));
             }
-            lines.push(format!("出征兵力: {troops}"));
+            lines.push(travel_summary_line(game, &command.city_id, target_city_id));
+            lines.push(format!("出发兵力: {troops}"));
         }
         CommandKind::Diplomacy {
             target_faction_id,
@@ -946,7 +979,7 @@ fn resource_cost_line(prefix: &str, cost: ResourceCost) -> String {
 }
 
 fn command_summary(game: &GameState, command: &Command) -> String {
-    format!(
+    let mut summary = format!(
         "{} | {} | {}",
         city_name(game, &command.city_id),
         command
@@ -955,7 +988,16 @@ fn command_summary(game: &GameState, command: &Command) -> String {
             .map(|officer_id| officer_name(game, officer_id))
             .unwrap_or_else(|| "未选武将".to_string()),
         command_title(command)
-    )
+    );
+    match &command.kind {
+        CommandKind::Transfer { target_city_id, .. }
+        | CommandKind::Expedition { target_city_id, .. } => {
+            summary.push_str(" | ");
+            summary.push_str(&travel_summary(game, &command.city_id, target_city_id));
+        }
+        _ => {}
+    }
+    summary
 }
 
 fn command_title(command: &Command) -> String {
@@ -966,8 +1008,8 @@ fn command_title(command: &Command) -> String {
         CommandKind::Recruit { amount } => format!("征兵 {amount}"),
         CommandKind::Train => "训练".to_string(),
         CommandKind::AppointGovernor { .. } => "任命太守".to_string(),
-        CommandKind::Transfer { troops, .. } => format!("调动 {troops}"),
-        CommandKind::Expedition { troops, .. } => format!("出征 {troops}"),
+        CommandKind::Transfer { troops, .. } => format!("调动出发 {troops}"),
+        CommandKind::Expedition { troops, .. } => format!("出征出发 {troops}"),
         CommandKind::Diplomacy { proposal, .. } => format!("外交{}", diplomacy_label(proposal)),
     }
 }

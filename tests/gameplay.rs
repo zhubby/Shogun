@@ -458,6 +458,7 @@ fn transfer_moves_troops_between_adjacent_owned_cities() {
     game.cities.get_mut("xiapi").unwrap().facilities.clear();
     let before_source = game.cities["pingyuan"].troops;
     let before_target = game.cities["xiapi"].troops;
+    let travel_months = game.travel_months_between("pingyuan", "xiapi").unwrap();
     queue_player_command(
         &mut game,
         command(
@@ -476,7 +477,17 @@ fn transfer_moves_troops_between_adjacent_owned_cities() {
     resolve_command_batch(&mut game, commands);
 
     assert_eq!(game.cities["pingyuan"].troops, before_source - 700);
+    assert_eq!(game.cities["xiapi"].troops, before_target);
+    assert_eq!(game.officers["liu_bei"].city_id, None);
+    assert_eq!(game.army_movements.len(), 1);
+
+    for _ in 0..travel_months {
+        resolve_command_batch(&mut game, Vec::new());
+    }
+
     assert_eq!(game.cities["xiapi"].troops, before_target + 700);
+    assert_eq!(game.officers["liu_bei"].city_id.as_deref(), Some("xiapi"));
+    assert!(game.army_movements.is_empty());
 }
 
 #[test]
@@ -487,6 +498,7 @@ fn strong_expedition_can_capture_city() {
         source.troops = 30_000;
         source.training = 100;
     }
+    let travel_months = game.travel_months_between("xiapi", "xuchang").unwrap();
     queue_player_command(
         &mut game,
         command(
@@ -503,7 +515,33 @@ fn strong_expedition_can_capture_city() {
     let commands = game.pending_commands.clone();
     resolve_command_batch(&mut game, commands);
 
+    assert_eq!(game.cities["xuchang"].faction_id, "cao_cao");
+    assert_eq!(game.officers["zhang_fei"].city_id, None);
+    assert_eq!(game.army_movements.len(), 1);
+
+    for _ in 0..travel_months {
+        resolve_command_batch(&mut game, Vec::new());
+    }
+
     assert_eq!(game.cities["xuchang"].faction_id, "liu_bei");
+    assert_eq!(
+        game.officers["zhang_fei"].city_id.as_deref(),
+        Some("xuchang")
+    );
+    assert!(game.army_movements.is_empty());
+}
+
+#[test]
+fn adjacent_city_distance_controls_travel_months() {
+    let game = sample_game();
+    let short_distance = game.road_distance_li("xiapi", "xuchang").unwrap();
+    let long_distance = game.road_distance_li("jiangxia", "jianye").unwrap();
+    let short_months = game.travel_months_between("xiapi", "xuchang").unwrap();
+    let long_months = game.travel_months_between("jiangxia", "jianye").unwrap();
+
+    assert!(short_distance < long_distance);
+    assert!(short_months < long_months);
+    assert!(game.road_distance_li("pingyuan", "jianye").is_none());
 }
 
 #[test]
@@ -691,6 +729,16 @@ fn old_save_json_missing_profile_extensions_still_deserializes() {
     assert_eq!(profile.gender, OfficerGender::Male);
     assert!(profile.biography.is_empty());
     assert!(profile.relationships.is_empty());
+}
+
+#[test]
+fn old_save_json_missing_army_movements_still_deserializes() {
+    let mut game_json = serde_json::to_value(sample_game()).unwrap();
+    game_json.as_object_mut().unwrap().remove("army_movements");
+
+    let loaded: GameState = serde_json::from_value(game_json).unwrap();
+
+    assert!(loaded.army_movements.is_empty());
 }
 
 #[test]

@@ -637,6 +637,7 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
             roads,
             diplomacy,
             pending_commands: Vec::new(),
+            army_movements: Vec::new(),
             applied_event_ids,
             reports: Vec::new(),
             status: GameStatus::Running,

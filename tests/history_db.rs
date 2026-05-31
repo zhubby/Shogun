@@ -374,6 +374,13 @@ fn fixed_scenarios_build_with_valid_selectable_factions_and_governors() {
                     assert_eq!(governor.city_id.as_deref(), Some(city.id.as_str()));
                 }
             }
+
+            for road in &game.roads {
+                let distance = game.road_distance_li(&road.from, &road.to).unwrap();
+                let months = game.travel_months_between(&road.from, &road.to).unwrap();
+                assert!(distance > 0);
+                assert!((1..=MAX_TRAVEL_MONTHS).contains(&months));
+            }
         }
     }
 }

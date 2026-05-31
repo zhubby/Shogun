@@ -179,6 +179,7 @@ impl ScenarioData {
             roads: self.roads.clone(),
             diplomacy,
             pending_commands: Vec::new(),
+            army_movements: Vec::new(),
             applied_event_ids: BTreeSet::new(),
             reports: Vec::new(),
             status: GameStatus::Running,
