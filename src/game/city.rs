@@ -508,7 +508,16 @@ pub fn city_facility_effects(city: &City) -> CityEconomyEffects {
 }
 
 pub fn project_city_monthly_change(city: &City, officer_salary: i32) -> CityMonthlyProjection {
-    let effects = city_facility_effects(city);
+    project_city_monthly_change_with_effects(city, officer_salary, CityEconomyEffects::default())
+}
+
+pub fn project_city_monthly_change_with_effects(
+    city: &City,
+    officer_salary: i32,
+    extra_effects: CityEconomyEffects,
+) -> CityMonthlyProjection {
+    let mut effects = city_facility_effects(city);
+    effects.add(extra_effects);
     let level = i32::from(city.level.clamp(1, CITY_MAX_LEVEL));
     let base_gold = i32::from(city.commerce) / 4 + (city.population / 20_000) as i32 + level * 4;
     let base_food = i32::from(city.agriculture) / 3 + (city.population / 18_000) as i32 + level * 3;

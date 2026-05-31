@@ -4,7 +4,7 @@ use super::officer::Officer;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const SAVE_VERSION: u32 = 3;
+pub const SAVE_VERSION: u32 = 4;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GameState {

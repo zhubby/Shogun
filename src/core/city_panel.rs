@@ -48,7 +48,11 @@ pub(super) fn selected_city_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState)
         .filter(|officer| officer.faction_id == city.faction_id)
         .map(officer_monthly_salary)
         .sum();
-    let projection = project_city_monthly_change(&city, officer_salary);
+    let projection = project_city_monthly_change_with_effects(
+        &city,
+        officer_salary,
+        city_official_effects(game, &city.id),
+    );
     ui.label(format!(
         "预计月净 金 {:+} | 粮 {:+} | 建材 {:+} | 人口 {:+} | 兵 {:+}",
         projection.net_gold,

@@ -1,11 +1,14 @@
 use super::city::{
-    CITY_MAX_LEVEL, City, FACILITY_MAX_LEVEL, FacilityKind, ResourceCost, city_core_upgrade_cost,
-    facility_upgrade_cost, project_city_monthly_change,
+    CITY_MAX_LEVEL, City, CityEconomyEffects, FACILITY_MAX_LEVEL, FacilityKind, ResourceCost,
+    city_core_upgrade_cost, facility_upgrade_cost, project_city_monthly_change_with_effects,
 };
 use super::history_db::{HistoricalCatalog, LifeEventKind};
 use super::ids::{CityId, OfficerId};
 use super::model::*;
-use super::officer::{Officer, OfficerStats, OfficerStatus};
+use super::officer::{
+    Officer, OfficerStats, OfficerStatus, OfficialPostEffect, official_post_spec,
+    official_rank_salary_bonus,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Default)]
@@ -91,6 +94,67 @@ pub fn validate_command_for_state(
 ) -> Result<(), CommandError> {
     let mut reservations = CommandReservations::default();
     validate_command(state, command, &mut reservations)
+}
+
+pub fn appoint_official_post(
+    state: &mut GameState,
+    faction_id: &str,
+    officer_id: &str,
+    office_id: &str,
+) -> Result<(), CommandError> {
+    if official_post_spec(office_id).is_none() {
+        return Err(CommandError::Invalid(format!("官职 {office_id} 不存在")));
+    }
+    let officer = state
+        .officers
+        .get(officer_id)
+        .ok_or_else(|| CommandError::Invalid(format!("武将 {officer_id} 不存在")))?;
+    if officer.faction_id != faction_id {
+        return Err(CommandError::Invalid(format!(
+            "{} 不是己方武将",
+            officer.name
+        )));
+    }
+    if !officer.is_active() {
+        return Err(CommandError::Invalid(format!(
+            "{} 当前不可授官",
+            officer.name
+        )));
+    }
+
+    for other in state.officers.values_mut() {
+        if other.faction_id == faction_id
+            && other.id != officer_id
+            && other.office_id.as_deref() == Some(office_id)
+        {
+            other.office_id = None;
+        }
+    }
+    state
+        .officers
+        .get_mut(officer_id)
+        .ok_or_else(|| CommandError::Invalid(format!("武将 {officer_id} 不存在")))?
+        .office_id = Some(office_id.to_string());
+    Ok(())
+}
+
+pub fn dismiss_official_post(
+    state: &mut GameState,
+    faction_id: &str,
+    officer_id: &str,
+) -> Result<(), CommandError> {
+    let officer = state
+        .officers
+        .get_mut(officer_id)
+        .ok_or_else(|| CommandError::Invalid(format!("武将 {officer_id} 不存在")))?;
+    if officer.faction_id != faction_id {
+        return Err(CommandError::Invalid(format!(
+            "{} 不是己方武将",
+            officer.name
+        )));
+    }
+    officer.office_id = None;
+    Ok(())
 }
 
 fn validate_command(
@@ -656,6 +720,14 @@ fn retreat_defenders(state: &mut GameState, captured_city_id: &str, old_faction_
 }
 
 pub fn officer_monthly_salary(officer: &Officer) -> i32 {
+    let mut salary = officer_base_monthly_salary(officer);
+    if let Some(spec) = officer.office_id.as_deref().and_then(official_post_spec) {
+        salary += official_rank_salary_bonus(spec.rank);
+    }
+    salary
+}
+
+pub fn officer_base_monthly_salary(officer: &Officer) -> i32 {
     let stats = officer.stats;
     10 + (i32::from(stats.leadership)
         + i32::from(stats.strength)
@@ -665,9 +737,45 @@ pub fn officer_monthly_salary(officer: &Officer) -> i32 {
         / 50
 }
 
+pub fn city_official_effects(state: &GameState, city_id: &str) -> CityEconomyEffects {
+    let Some(city) = state.cities.get(city_id) else {
+        return CityEconomyEffects::default();
+    };
+    let mut effects = CityEconomyEffects::default();
+    for officer in state.officers.values().filter(|officer| {
+        officer.is_active()
+            && officer.city_id.as_deref() == Some(city_id)
+            && officer.faction_id == city.faction_id
+    }) {
+        let Some(spec) = officer.office_id.as_deref().and_then(official_post_spec) else {
+            continue;
+        };
+        effects.add(official_effect_to_city_effect(spec.effect));
+    }
+    effects
+}
+
+fn official_effect_to_city_effect(effect: OfficialPostEffect) -> CityEconomyEffects {
+    CityEconomyEffects {
+        gold_income: effect.gold_income,
+        food_income: effect.food_income,
+        materials_income: effect.materials_income,
+        gold_percent: effect.gold_percent,
+        food_percent: effect.food_percent,
+        materials_percent: effect.materials_percent,
+        population_growth: effect.population_growth,
+        troop_recovery: effect.troop_recovery,
+        order: effect.order,
+        training: effect.training,
+        defense: effect.defense,
+        ..CityEconomyEffects::default()
+    }
+}
+
 fn apply_monthly_income(state: &mut GameState, report: &mut TurnReport) {
     let player_faction_id = state.player_faction_id.clone();
     let salaries = city_salary_totals(state);
+    let official_effects = city_official_effect_totals(state);
     let mut total_gold_delta = 0;
     let mut total_food_delta = 0;
     let mut total_materials_delta = 0;
@@ -684,7 +792,8 @@ fn apply_monthly_income(state: &mut GameState, report: &mut TurnReport) {
 
     for city in state.cities.values_mut() {
         let salary = salaries.get(&city.id).copied().unwrap_or_default();
-        let projection = project_city_monthly_change(city, salary);
+        let extra_effects = official_effects.get(&city.id).copied().unwrap_or_default();
+        let projection = project_city_monthly_change_with_effects(city, salary, extra_effects);
         city.gold += projection.net_gold;
         city.food += projection.net_food;
         city.materials += projection.net_materials;
@@ -735,6 +844,33 @@ fn city_salary_totals(state: &GameState) -> BTreeMap<CityId, i32> {
         *salaries.entry(city_id.clone()).or_insert(0) += officer_monthly_salary(officer);
     }
     salaries
+}
+
+fn city_official_effect_totals(state: &GameState) -> BTreeMap<CityId, CityEconomyEffects> {
+    let mut effects_by_city = BTreeMap::new();
+    for officer in state
+        .officers
+        .values()
+        .filter(|officer| officer.is_active())
+    {
+        let Some(city_id) = &officer.city_id else {
+            continue;
+        };
+        let Some(city) = state.cities.get(city_id) else {
+            continue;
+        };
+        if city.faction_id != officer.faction_id {
+            continue;
+        }
+        let Some(spec) = officer.office_id.as_deref().and_then(official_post_spec) else {
+            continue;
+        };
+        effects_by_city
+            .entry(city_id.clone())
+            .or_insert_with(CityEconomyEffects::default)
+            .add(official_effect_to_city_effect(spec.effect));
+    }
+    effects_by_city
 }
 
 fn apply_i32_to_u32(value: u32, delta: i32) -> u32 {
@@ -862,6 +998,7 @@ fn apply_due_life_events(
                         name: officer_name.clone(),
                         faction_id: target_faction_id.clone(),
                         city_id: city_id.clone(),
+                        office_id: None,
                         stats,
                         loyalty: event.loyalty.unwrap_or(75),
                         gender: officer_profile
@@ -880,6 +1017,7 @@ fn apply_due_life_events(
             LifeEventKind::BecomeUnavailable | LifeEventKind::Die => {
                 if let Some(officer) = state.officers.get_mut(&event.officer_id) {
                     officer.city_id = None;
+                    officer.office_id = None;
                     officer.status = if event.kind == LifeEventKind::Die {
                         OfficerStatus::Dead
                     } else {

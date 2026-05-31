@@ -1,6 +1,431 @@
 use super::city::SourceConfidence;
-use super::ids::{CityId, FactionId, OfficerId};
+use super::ids::{CityId, FactionId, OfficerId, OfficialPostId};
 use serde::{Deserialize, Deserializer, Serialize};
+
+pub const ALL_OFFICIAL_POST_SPECS: [OfficialPostSpec; 32] = [
+    OfficialPostSpec {
+        id: "taifu",
+        name: "太傅",
+        rank: OfficialRank::WanShi,
+        effect: OfficialPostEffect {
+            gold_percent: 4,
+            order: 2,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "da_jiangjun",
+        name: "大将军",
+        rank: OfficialRank::WanShi,
+        effect: OfficialPostEffect {
+            training: 3,
+            troop_recovery: 120,
+            defense: 4,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "taiwei",
+        name: "太尉",
+        rank: OfficialRank::ZhongErQianShi,
+        effect: OfficialPostEffect {
+            training: 2,
+            defense: 6,
+            troop_recovery: 80,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "situ",
+        name: "司徒",
+        rank: OfficialRank::ZhongErQianShi,
+        effect: OfficialPostEffect {
+            food_percent: 3,
+            order: 2,
+            population_growth: 10,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "sikong",
+        name: "司空",
+        rank: OfficialRank::ZhongErQianShi,
+        effect: OfficialPostEffect {
+            materials_income: 8,
+            materials_percent: 4,
+            defense: 4,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "taichang",
+        name: "太常",
+        rank: OfficialRank::ZhongErQianShi,
+        effect: OfficialPostEffect {
+            order: 2,
+            gold_income: 4,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "guangluxun",
+        name: "光禄勋",
+        rank: OfficialRank::ZhongErQianShi,
+        effect: OfficialPostEffect {
+            training: 1,
+            order: 1,
+            troop_recovery: 40,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "weiwei",
+        name: "卫尉",
+        rank: OfficialRank::ZhongErQianShi,
+        effect: OfficialPostEffect {
+            defense: 8,
+            training: 1,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "taipu",
+        name: "太仆",
+        rank: OfficialRank::ZhongErQianShi,
+        effect: OfficialPostEffect {
+            troop_recovery: 60,
+            training: 1,
+            food_income: 4,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "tingwei",
+        name: "廷尉",
+        rank: OfficialRank::ZhongErQianShi,
+        effect: OfficialPostEffect {
+            order: 3,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "dahonglu",
+        name: "大鸿胪",
+        rank: OfficialRank::ZhongErQianShi,
+        effect: OfficialPostEffect {
+            gold_income: 8,
+            gold_percent: 1,
+            order: 1,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "dasinong",
+        name: "大司农",
+        rank: OfficialRank::ZhongErQianShi,
+        effect: OfficialPostEffect {
+            food_income: 12,
+            food_percent: 3,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "shaofu",
+        name: "少府",
+        rank: OfficialRank::ZhongErQianShi,
+        effect: OfficialPostEffect {
+            gold_income: 10,
+            materials_income: 4,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "zhijinwu",
+        name: "执金吾",
+        rank: OfficialRank::ZhongErQianShi,
+        effect: OfficialPostEffect {
+            order: 2,
+            defense: 5,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "piaoqi_jiangjun",
+        name: "骠骑将军",
+        rank: OfficialRank::BiErQianShi,
+        effect: OfficialPostEffect {
+            training: 2,
+            troop_recovery: 90,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "cheqi_jiangjun",
+        name: "车骑将军",
+        rank: OfficialRank::BiErQianShi,
+        effect: OfficialPostEffect {
+            training: 2,
+            troop_recovery: 80,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "wei_jiangjun",
+        name: "卫将军",
+        rank: OfficialRank::BiErQianShi,
+        effect: OfficialPostEffect {
+            defense: 6,
+            troop_recovery: 70,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "qian_jiangjun",
+        name: "前将军",
+        rank: OfficialRank::BiErQianShi,
+        effect: OfficialPostEffect {
+            training: 1,
+            troop_recovery: 55,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "zuo_jiangjun",
+        name: "左将军",
+        rank: OfficialRank::BiErQianShi,
+        effect: OfficialPostEffect {
+            training: 1,
+            troop_recovery: 50,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "you_jiangjun",
+        name: "右将军",
+        rank: OfficialRank::BiErQianShi,
+        effect: OfficialPostEffect {
+            defense: 4,
+            troop_recovery: 50,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "hou_jiangjun",
+        name: "后将军",
+        rank: OfficialRank::BiErQianShi,
+        effect: OfficialPostEffect {
+            defense: 5,
+            training: 1,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "polu_jiangjun",
+        name: "破虏将军",
+        rank: OfficialRank::QianShi,
+        effect: OfficialPostEffect {
+            training: 1,
+            troop_recovery: 35,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "xiaowei",
+        name: "校尉",
+        rank: OfficialRank::LiuBaiShi,
+        effect: OfficialPostEffect {
+            training: 1,
+            troop_recovery: 20,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "duwei",
+        name: "都尉",
+        rank: OfficialRank::BiLiuBaiShi,
+        effect: OfficialPostEffect {
+            defense: 3,
+            troop_recovery: 18,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "zhoumu",
+        name: "州牧",
+        rank: OfficialRank::ErQianShi,
+        effect: OfficialPostEffect {
+            gold_percent: 2,
+            food_percent: 2,
+            order: 2,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "cishi",
+        name: "刺史",
+        rank: OfficialRank::LiuBaiShi,
+        effect: OfficialPostEffect {
+            order: 2,
+            gold_income: 4,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "sili_xiaowei",
+        name: "司隶校尉",
+        rank: OfficialRank::BiErQianShi,
+        effect: OfficialPostEffect {
+            order: 3,
+            defense: 3,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "changshi",
+        name: "长史",
+        rank: OfficialRank::QianShi,
+        effect: OfficialPostEffect {
+            gold_income: 5,
+            order: 1,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "biejia",
+        name: "别驾从事",
+        rank: OfficialRank::LiuBaiShi,
+        effect: OfficialPostEffect {
+            food_income: 6,
+            order: 1,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "zhizhong",
+        name: "治中从事",
+        rank: OfficialRank::LiuBaiShi,
+        effect: OfficialPostEffect {
+            order: 2,
+            materials_income: 2,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "gongcao",
+        name: "功曹从事",
+        rank: OfficialRank::SanBaiShi,
+        effect: OfficialPostEffect {
+            gold_income: 3,
+            order: 1,
+            ..OfficialPostEffect::empty()
+        },
+    },
+    OfficialPostSpec {
+        id: "zhubu",
+        name: "主簿",
+        rank: OfficialRank::ErBaiShi,
+        effect: OfficialPostEffect {
+            materials_income: 2,
+            gold_income: 2,
+            ..OfficialPostEffect::empty()
+        },
+    },
+];
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum OfficialRank {
+    WanShi,
+    ZhongErQianShi,
+    ErQianShi,
+    BiErQianShi,
+    QianShi,
+    LiuBaiShi,
+    BiLiuBaiShi,
+    SanBaiShi,
+    ErBaiShi,
+    BaiShi,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OfficialPostSpec {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub rank: OfficialRank,
+    pub effect: OfficialPostEffect,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OfficialPostEffect {
+    pub gold_income: i32,
+    pub food_income: i32,
+    pub materials_income: i32,
+    pub gold_percent: i32,
+    pub food_percent: i32,
+    pub materials_percent: i32,
+    pub population_growth: i32,
+    pub troop_recovery: i32,
+    pub order: i32,
+    pub training: i32,
+    pub defense: i32,
+}
+
+impl OfficialPostEffect {
+    pub const fn empty() -> Self {
+        Self {
+            gold_income: 0,
+            food_income: 0,
+            materials_income: 0,
+            gold_percent: 0,
+            food_percent: 0,
+            materials_percent: 0,
+            population_growth: 0,
+            troop_recovery: 0,
+            order: 0,
+            training: 0,
+            defense: 0,
+        }
+    }
+}
+
+pub fn official_post_specs() -> &'static [OfficialPostSpec] {
+    &ALL_OFFICIAL_POST_SPECS
+}
+
+pub fn official_post_spec(office_id: &str) -> Option<&'static OfficialPostSpec> {
+    official_post_specs()
+        .iter()
+        .find(|spec| spec.id == office_id)
+}
+
+pub fn official_rank_salary_bonus(rank: OfficialRank) -> i32 {
+    match rank {
+        OfficialRank::WanShi => 88,
+        OfficialRank::ZhongErQianShi => 45,
+        OfficialRank::ErQianShi => 30,
+        OfficialRank::BiErQianShi => 25,
+        OfficialRank::QianShi => 20,
+        OfficialRank::LiuBaiShi => 17,
+        OfficialRank::BiLiuBaiShi => 12,
+        OfficialRank::SanBaiShi => 10,
+        OfficialRank::ErBaiShi => 7,
+        OfficialRank::BaiShi => 4,
+    }
+}
+
+pub fn official_rank_label(rank: OfficialRank) -> &'static str {
+    match rank {
+        OfficialRank::WanShi => "万石",
+        OfficialRank::ZhongErQianShi => "中二千石",
+        OfficialRank::ErQianShi => "二千石",
+        OfficialRank::BiErQianShi => "比二千石",
+        OfficialRank::QianShi => "千石",
+        OfficialRank::LiuBaiShi => "六百石",
+        OfficialRank::BiLiuBaiShi => "比六百石",
+        OfficialRank::SanBaiShi => "三百石",
+        OfficialRank::ErBaiShi => "二百石",
+        OfficialRank::BaiShi => "百石",
+    }
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum OfficerStatus {
@@ -155,6 +580,7 @@ pub struct Officer {
     pub name: String,
     pub faction_id: FactionId,
     pub city_id: Option<CityId>,
+    pub office_id: Option<OfficialPostId>,
     pub stats: OfficerStats,
     pub loyalty: u8,
     #[serde(default)]

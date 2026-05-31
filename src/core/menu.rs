@@ -390,6 +390,7 @@ fn officer_from_profile(profile: OfficerProfile, faction_id: &str) -> Officer {
         name: profile.name.clone(),
         faction_id: faction_id.to_string(),
         city_id: None,
+        office_id: None,
         stats: profile.stats,
         loyalty: 80,
         gender: profile.gender.clone(),
@@ -447,6 +448,7 @@ pub(super) fn officer_settings_modal(ctx: &egui::Context, ui_state: &mut GameUiS
                         "main_menu_officer_settings_table",
                         ui_state.officer_settings_selected_id.as_deref(),
                         ui_state.officer_settings_editable,
+                        None,
                     );
                     if let Some(officer_id) = response.selected_officer_id {
                         ui_state.officer_settings_selected_id = Some(officer_id);

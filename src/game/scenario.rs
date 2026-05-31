@@ -1,7 +1,7 @@
 use super::city::{City, CityFacility};
-use super::ids::{CityId, FactionId, OfficerId};
+use super::ids::{CityId, FactionId, OfficerId, OfficialPostId};
 use super::model::*;
-use super::officer::{Officer, OfficerGender, OfficerStats, OfficerStatus};
+use super::officer::{Officer, OfficerGender, OfficerStats, OfficerStatus, official_post_spec};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -103,6 +103,7 @@ impl ScenarioData {
                     name: seed.name.clone(),
                     faction_id: seed.faction_id.clone(),
                     city_id: seed.city_id.clone(),
+                    office_id: seed.office_id.clone(),
                     stats: seed.stats,
                     loyalty: seed.loyalty,
                     gender: OfficerGender::Male,
@@ -121,6 +122,7 @@ impl ScenarioData {
             }
         }
 
+        let mut assigned_offices = BTreeSet::new();
         for officer in officers.values() {
             if !factions.contains_key(&officer.faction_id) {
                 return Err(ScenarioError::Invalid(format!(
@@ -135,6 +137,20 @@ impl ScenarioData {
                     "武将 {} 引用了不存在的城池 {}",
                     officer.id, city_id
                 )));
+            }
+            if let Some(office_id) = &officer.office_id {
+                if official_post_spec(office_id).is_none() {
+                    return Err(ScenarioError::Invalid(format!(
+                        "武将 {} 引用了不存在的官职 {}",
+                        officer.id, office_id
+                    )));
+                }
+                if !assigned_offices.insert((officer.faction_id.clone(), office_id.clone())) {
+                    return Err(ScenarioError::Invalid(format!(
+                        "势力 {} 重复任命官职 {}",
+                        officer.faction_id, office_id
+                    )));
+                }
             }
         }
 
@@ -205,6 +221,8 @@ pub struct OfficerSeed {
     pub name: String,
     pub faction_id: FactionId,
     pub city_id: Option<CityId>,
+    #[serde(default)]
+    pub office_id: Option<OfficialPostId>,
     pub stats: OfficerStats,
     pub loyalty: u8,
 }

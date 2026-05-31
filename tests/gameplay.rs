@@ -301,6 +301,103 @@ fn monthly_economy_applies_facilities_upkeep_growth_and_salaries() {
 }
 
 #[test]
+fn officer_without_office_uses_ability_salary() {
+    let game = sample_game();
+    let officer = &game.officers["liu_bei"];
+    let expected = 10
+        + (i32::from(officer.stats.leadership)
+            + i32::from(officer.stats.strength)
+            + i32::from(officer.stats.intelligence)
+            + i32::from(officer.stats.politics)
+            + i32::from(officer.stats.charm))
+            / 50;
+
+    assert_eq!(officer_base_monthly_salary(officer), expected);
+    assert_eq!(officer_monthly_salary(officer), expected);
+}
+
+#[test]
+fn official_post_increases_salary_and_affects_monthly_city_economy() {
+    let mut game = sample_game();
+    {
+        let city = game.cities.get_mut("pingyuan").unwrap();
+        city.gold = 1_000;
+        city.food = 1_000;
+        city.materials = 500;
+        city.facilities.clear();
+    }
+    let base_salary = officer_monthly_salary(&game.officers["liu_bei"]);
+    appoint_official_post(&mut game, "liu_bei", "liu_bei", "taifu").unwrap();
+    let appointed_salary = officer_monthly_salary(&game.officers["liu_bei"]);
+    assert_eq!(
+        appointed_salary,
+        base_salary + official_rank_salary_bonus(OfficialRank::WanShi)
+    );
+
+    let before = game.cities["pingyuan"].clone();
+    let salary = game
+        .officers_in_city("pingyuan")
+        .into_iter()
+        .map(officer_monthly_salary)
+        .sum();
+    let projection = project_city_monthly_change_with_effects(
+        &before,
+        salary,
+        city_official_effects(&game, "pingyuan"),
+    );
+
+    resolve_command_batch(&mut game, Vec::new());
+
+    assert_eq!(
+        game.cities["pingyuan"].gold,
+        before.gold + projection.net_gold
+    );
+    assert_eq!(
+        game.cities["pingyuan"].order,
+        (i32::from(before.order) + projection.order_delta).clamp(0, 100) as u8
+    );
+}
+
+#[test]
+fn official_posts_are_unique_within_faction() {
+    let mut game = sample_game();
+
+    appoint_official_post(&mut game, "liu_bei", "liu_bei", "taifu").unwrap();
+    appoint_official_post(&mut game, "liu_bei", "guan_yu", "taifu").unwrap();
+
+    assert_eq!(game.officers["liu_bei"].office_id, None);
+    assert_eq!(game.officers["guan_yu"].office_id.as_deref(), Some("taifu"));
+}
+
+#[test]
+fn official_posts_reject_enemy_dead_and_unavailable_officers() {
+    let mut game = sample_game();
+    assert!(appoint_official_post(&mut game, "liu_bei", "cao_cao", "taifu").is_err());
+
+    game.officers.get_mut("zhao_yun").unwrap().status = OfficerStatus::Dead;
+    assert!(appoint_official_post(&mut game, "liu_bei", "zhao_yun", "taifu").is_err());
+
+    game.officers.get_mut("jian_yong").unwrap().status = OfficerStatus::Unavailable;
+    assert!(appoint_official_post(&mut game, "liu_bei", "jian_yong", "taifu").is_err());
+}
+
+#[test]
+fn dismiss_official_post_restores_base_salary() {
+    let mut game = sample_game();
+    appoint_official_post(&mut game, "liu_bei", "liu_bei", "taifu").unwrap();
+    assert!(game.officers["liu_bei"].office_id.is_some());
+
+    dismiss_official_post(&mut game, "liu_bei", "liu_bei").unwrap();
+
+    let officer = &game.officers["liu_bei"];
+    assert_eq!(officer.office_id, None);
+    assert_eq!(
+        officer_monthly_salary(officer),
+        officer_base_monthly_salary(officer)
+    );
+}
+
+#[test]
 fn recruit_consumes_resources_and_adds_troops() {
     let mut game = sample_game();
     let before_troops = game.cities["xiapi"].troops;
@@ -452,6 +549,22 @@ fn save_manager_round_trips_multiple_slots() {
 
     manager.delete_slot("slot1").unwrap();
     assert_eq!(manager.list_slots().unwrap().len(), 1);
+}
+
+#[test]
+fn save_load_preserves_official_post_assignment() {
+    let temp = tempfile::tempdir().unwrap();
+    let manager = SaveManager::new(temp.path());
+    let mut game = sample_game();
+    appoint_official_post(&mut game, "liu_bei", "guan_yu", "taifu").unwrap();
+
+    manager.save_slot("official_post", "官职", &game).unwrap();
+    let loaded = manager.load_slot("official_post").unwrap();
+
+    assert_eq!(
+        loaded.officers["guan_yu"].office_id.as_deref(),
+        Some("taifu")
+    );
 }
 
 #[test]

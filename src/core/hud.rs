@@ -33,6 +33,7 @@ pub(super) fn in_game_hud(ctx: &egui::Context, ui_state: &mut GameUiState) {
     report_hud(ctx, ui_state, screen);
     bottom_map_actions_hud(ctx, ui_state);
     officer_browser_hud(ctx, ui_state, screen);
+    retainer_hud(ctx, ui_state, screen);
 }
 
 pub(super) fn top_status_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
@@ -144,6 +145,15 @@ pub(super) fn bottom_map_actions_hud(ctx: &egui::Context, ui_state: &mut GameUiS
                     };
                     if ui.button(officer_label).clicked() {
                         ui_state.officer_browser_open = !ui_state.officer_browser_open;
+                    }
+
+                    let retainer_label = if ui_state.retainers_open {
+                        "收起幕僚"
+                    } else {
+                        "幕僚"
+                    };
+                    if ui.button(retainer_label).clicked() {
+                        ui_state.retainers_open = !ui_state.retainers_open;
                     }
                 });
             });
@@ -315,7 +325,96 @@ pub(super) fn officer_browser_hud(
                         "hud_officer_browser_table",
                         None,
                         false,
+                        None,
                     );
+                }
+            });
+        });
+}
+
+pub(super) fn retainer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
+    if !ui_state.retainers_open {
+        return;
+    }
+
+    let width = (screen.width() * 0.82).clamp(760.0, 1120.0);
+    let height = (screen.height() * 0.76).clamp(420.0, 680.0);
+    egui::Area::new(egui::Id::new("hud_retainers"))
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            war_panel_frame().show(ui, |ui| {
+                ui.set_width(width);
+                ui.set_min_height(height);
+                if modal_title_bar(ui, "幕僚") {
+                    ui_state.retainers_open = false;
+                }
+                ui.separator();
+                if let Some(game) = &ui_state.game {
+                    officer_browser_filters(
+                        ui,
+                        game,
+                        &mut ui_state.retainer_filters,
+                        "hud_retainer_filters",
+                    );
+                } else {
+                    ui.label("当前没有剧本局面。");
+                }
+                ui.separator();
+                let Some(game) = ui_state.game.as_ref() else {
+                    return;
+                };
+                let player_faction_id = game.player_faction_id.clone();
+                let response = officer_browser_table(
+                    ui,
+                    game,
+                    &ui_state.retainer_filters,
+                    height - 142.0,
+                    "hud_retainer_table",
+                    None,
+                    false,
+                    Some(player_faction_id.as_str()),
+                );
+
+                if response.appoint_officer_id.is_some() || response.dismiss_officer_id.is_some() {
+                    let Some(game) = ui_state.game.as_mut() else {
+                        return;
+                    };
+                    if let Some((officer_id, office_id)) =
+                        response.appoint_officer_id.zip(response.appoint_office_id)
+                    {
+                        match appoint_official_post(
+                            game,
+                            &player_faction_id,
+                            &officer_id,
+                            &office_id,
+                        ) {
+                            Ok(()) => {
+                                let officer_name = game
+                                    .officers
+                                    .get(&officer_id)
+                                    .map(|officer| officer.name.clone())
+                                    .unwrap_or(officer_id);
+                                let office_name = official_post_spec(&office_id)
+                                    .map(|spec| spec.name)
+                                    .unwrap_or(office_id.as_str());
+                                ui_state.message = format!("{officer_name} 被任命为 {office_name}");
+                            }
+                            Err(error) => ui_state.message = error.to_string(),
+                        }
+                    } else if let Some(officer_id) = response.dismiss_officer_id {
+                        match dismiss_official_post(game, &player_faction_id, &officer_id) {
+                            Ok(()) => {
+                                let officer_name = game
+                                    .officers
+                                    .get(&officer_id)
+                                    .map(|officer| officer.name.clone())
+                                    .unwrap_or(officer_id);
+                                ui_state.message = format!("{officer_name} 已免官");
+                            }
+                            Err(error) => ui_state.message = error.to_string(),
+                        }
+                    }
                 }
             });
         });
@@ -541,8 +640,12 @@ pub(super) fn officer_browser_table(
     id_salt: &'static str,
     selected_officer_id: Option<&str>,
     editable: bool,
+    retainer_faction_id: Option<&str>,
 ) -> OfficerBrowserTableResponse {
-    let rows = filtered_officer_rows(filters, game);
+    let rows = retainer_faction_id.map_or_else(
+        || filtered_officer_rows(filters, game),
+        |faction_id| retainer_officer_rows(filters, game, faction_id),
+    );
     let mut table_response = OfficerBrowserTableResponse::default();
     ui.label(format!("共 {} 名武将", rows.len()));
     egui::ScrollArea::vertical()
@@ -552,7 +655,7 @@ pub(super) fn officer_browser_table(
         .show(ui, |ui| {
             egui::Grid::new((id_salt, "grid"))
                 .striped(true)
-                .num_columns(11)
+                .num_columns(13)
                 .min_col_width(42.0)
                 .spacing(egui::vec2(12.0, 6.0))
                 .show(ui, |ui| {
@@ -560,6 +663,8 @@ pub(super) fn officer_browser_table(
                     ui.strong("性别");
                     ui.strong("势力");
                     ui.strong("城池");
+                    ui.strong("官职");
+                    ui.strong("俸禄");
                     ui.strong("状态");
                     ui.strong("忠诚");
                     ui.strong("统");
@@ -578,6 +683,8 @@ pub(super) fn officer_browser_table(
                             editable,
                             &row.name,
                             &mut table_response,
+                            game,
+                            retainer_faction_id,
                         );
                         officer_row_cell(
                             ui,
@@ -586,6 +693,8 @@ pub(super) fn officer_browser_table(
                             editable,
                             row.gender,
                             &mut table_response,
+                            game,
+                            retainer_faction_id,
                         );
                         officer_row_cell(
                             ui,
@@ -594,6 +703,8 @@ pub(super) fn officer_browser_table(
                             editable,
                             &row.faction_name,
                             &mut table_response,
+                            game,
+                            retainer_faction_id,
                         );
                         officer_row_cell(
                             ui,
@@ -602,6 +713,28 @@ pub(super) fn officer_browser_table(
                             editable,
                             &row.city_name,
                             &mut table_response,
+                            game,
+                            retainer_faction_id,
+                        );
+                        officer_row_cell(
+                            ui,
+                            &row,
+                            selected,
+                            editable,
+                            &row.office_name,
+                            &mut table_response,
+                            game,
+                            retainer_faction_id,
+                        );
+                        officer_row_cell(
+                            ui,
+                            &row,
+                            selected,
+                            editable,
+                            row.salary.to_string(),
+                            &mut table_response,
+                            game,
+                            retainer_faction_id,
                         );
                         officer_row_cell(
                             ui,
@@ -610,6 +743,8 @@ pub(super) fn officer_browser_table(
                             editable,
                             row.status,
                             &mut table_response,
+                            game,
+                            retainer_faction_id,
                         );
                         officer_row_cell(
                             ui,
@@ -618,6 +753,8 @@ pub(super) fn officer_browser_table(
                             editable,
                             row.loyalty.to_string(),
                             &mut table_response,
+                            game,
+                            retainer_faction_id,
                         );
                         officer_row_cell(
                             ui,
@@ -626,6 +763,8 @@ pub(super) fn officer_browser_table(
                             editable,
                             row.leadership.to_string(),
                             &mut table_response,
+                            game,
+                            retainer_faction_id,
                         );
                         officer_row_cell(
                             ui,
@@ -634,6 +773,8 @@ pub(super) fn officer_browser_table(
                             editable,
                             row.strength.to_string(),
                             &mut table_response,
+                            game,
+                            retainer_faction_id,
                         );
                         officer_row_cell(
                             ui,
@@ -642,6 +783,8 @@ pub(super) fn officer_browser_table(
                             editable,
                             row.intelligence.to_string(),
                             &mut table_response,
+                            game,
+                            retainer_faction_id,
                         );
                         officer_row_cell(
                             ui,
@@ -650,6 +793,8 @@ pub(super) fn officer_browser_table(
                             editable,
                             row.politics.to_string(),
                             &mut table_response,
+                            game,
+                            retainer_faction_id,
                         );
                         officer_row_cell(
                             ui,
@@ -658,6 +803,8 @@ pub(super) fn officer_browser_table(
                             editable,
                             row.charm.to_string(),
                             &mut table_response,
+                            game,
+                            retainer_faction_id,
                         );
                         ui.end_row();
                     }
@@ -670,9 +817,12 @@ pub(super) fn officer_browser_table(
 pub(super) struct OfficerBrowserRow {
     id: OfficerId,
     name: String,
+    faction_id: FactionId,
     gender: &'static str,
     faction_name: String,
     city_name: String,
+    office_name: String,
+    salary: i32,
     status: &'static str,
     loyalty: u8,
     leadership: u8,
@@ -686,6 +836,9 @@ pub(super) struct OfficerBrowserRow {
 pub(super) struct OfficerBrowserTableResponse {
     pub(super) selected_officer_id: Option<OfficerId>,
     pub(super) edit_officer_id: Option<OfficerId>,
+    pub(super) appoint_officer_id: Option<OfficerId>,
+    pub(super) appoint_office_id: Option<OfficialPostId>,
+    pub(super) dismiss_officer_id: Option<OfficerId>,
 }
 
 fn officer_row_cell(
@@ -695,17 +848,54 @@ fn officer_row_cell(
     editable: bool,
     text: impl Into<egui::WidgetText>,
     table_response: &mut OfficerBrowserTableResponse,
+    game: &GameState,
+    retainer_faction_id: Option<&str>,
 ) {
     let response = ui.selectable_label(selected, text);
     if response.clicked() || response.secondary_clicked() {
         table_response.selected_officer_id = Some(row.id.clone());
     }
-    if editable {
+    if editable || retainer_faction_id.is_some() {
         response.context_menu(|ui| {
-            if ui.button("编辑").clicked() {
+            if editable && ui.button("编辑").clicked() {
                 table_response.selected_officer_id = Some(row.id.clone());
                 table_response.edit_officer_id = Some(row.id.clone());
                 ui.close();
+            }
+            if retainer_faction_id.is_some() {
+                ui.menu_button("授官", |ui| {
+                    for spec in official_post_specs() {
+                        let occupant = game.officers.values().find(|officer| {
+                            officer.faction_id == row.faction_id
+                                && officer.office_id.as_deref() == Some(spec.id)
+                        });
+                        let label = if let Some(occupant) = occupant {
+                            if occupant.id == row.id {
+                                format!("{} ({}, 当前)", spec.name, official_rank_label(spec.rank))
+                            } else {
+                                format!(
+                                    "{} ({}, 现任: {})",
+                                    spec.name,
+                                    official_rank_label(spec.rank),
+                                    occupant.name
+                                )
+                            }
+                        } else {
+                            format!("{} ({})", spec.name, official_rank_label(spec.rank))
+                        };
+                        if ui.button(label).clicked() {
+                            table_response.selected_officer_id = Some(row.id.clone());
+                            table_response.appoint_officer_id = Some(row.id.clone());
+                            table_response.appoint_office_id = Some(spec.id.to_string());
+                            ui.close();
+                        }
+                    }
+                });
+                if row.office_name != "无" && ui.button("免官").clicked() {
+                    table_response.selected_officer_id = Some(row.id.clone());
+                    table_response.dismiss_officer_id = Some(row.id.clone());
+                    ui.close();
+                }
             }
         });
     }
@@ -763,12 +953,21 @@ pub(super) fn filtered_officer_rows(
                 .and_then(|city_id| game.cities.get(city_id))
                 .map(|city| city.name.clone())
                 .unwrap_or_else(|| "未配置".to_string());
+            let office_name = officer
+                .office_id
+                .as_deref()
+                .and_then(official_post_spec)
+                .map(|spec| spec.name.to_string())
+                .unwrap_or_else(|| "无".to_string());
             OfficerBrowserRow {
                 id: officer.id.clone(),
                 name: officer.name.clone(),
+                faction_id: officer.faction_id.clone(),
                 gender: officer_gender_label(&officer.gender),
                 faction_name,
                 city_name,
+                office_name,
+                salary: officer_monthly_salary(officer),
                 status: officer_status_label(&officer.status),
                 loyalty: officer.loyalty,
                 leadership: officer.stats.leadership,
@@ -779,6 +978,17 @@ pub(super) fn filtered_officer_rows(
             }
         })
         .collect()
+}
+
+pub(super) fn retainer_officer_rows(
+    filters: &OfficerBrowserFilters,
+    game: &GameState,
+    faction_id: &str,
+) -> Vec<OfficerBrowserRow> {
+    let mut locked_filters = filters.clone();
+    locked_filters.faction_id = Some(faction_id.to_string());
+    locked_filters.status = OfficerStatusFilter::Active;
+    filtered_officer_rows(&locked_filters, game)
 }
 
 fn officer_matches_filters(
@@ -835,6 +1045,12 @@ fn officer_search_text(officer: &Officer, game: &GameState) -> String {
             text.push(' ');
             text.push_str(native_place);
         }
+    }
+    if let Some(spec) = officer.office_id.as_deref().and_then(official_post_spec) {
+        text.push(' ');
+        text.push_str(spec.name);
+        text.push(' ');
+        text.push_str(official_rank_label(spec.rank));
     }
     text.to_lowercase()
 }
@@ -981,7 +1197,7 @@ mod tests {
     use super::*;
     use crate::core::display_settings::{DisplaySettings, LoadedDisplaySettings};
     use crate::core::state::{GameUiState, OfficerGenderFilter, OfficerStatusFilter};
-    use crate::game::{OfficerGender, ScenarioData};
+    use crate::game::{OfficerGender, OfficerStatus, ScenarioData};
 
     fn ui_state_with_game() -> GameUiState {
         let mut state = GameUiState::new(
@@ -1092,5 +1308,48 @@ mod tests {
         assert_eq!(rows[0].gender, "女");
         assert_eq!(rows[0].leadership, 91);
         assert_eq!(rows[0].strength, 92);
+    }
+
+    #[test]
+    fn officer_browser_rows_include_office_and_salary() {
+        let mut state = ui_state_with_game();
+        let base_salary;
+        {
+            let game = state.game.as_mut().unwrap();
+            base_salary = officer_base_monthly_salary(&game.officers["guan_yu"]);
+            appoint_official_post(game, "liu_bei", "guan_yu", "taifu").unwrap();
+        }
+        state.officer_browser_filters.search = "万石".to_string();
+
+        let game = state.game.as_ref().unwrap();
+        let rows = filtered_officer_rows(&state.officer_browser_filters, game);
+
+        assert!(rows.iter().any(|row| {
+            row.id == "guan_yu"
+                && row.office_name == "太傅"
+                && row.salary == base_salary + official_rank_salary_bonus(OfficialRank::WanShi)
+        }));
+    }
+
+    #[test]
+    fn retainer_rows_only_return_player_active_officers() {
+        let mut state = ui_state_with_game();
+        state.retainer_filters.faction_id = Some("cao_cao".to_string());
+        state.retainer_filters.status = OfficerStatusFilter::Dead;
+        {
+            let game = state.game.as_mut().unwrap();
+            game.officers.get_mut("jian_yong").unwrap().status = OfficerStatus::Unavailable;
+        }
+
+        let game = state.game.as_ref().unwrap();
+        let rows = retainer_officer_rows(&state.retainer_filters, game, &game.player_faction_id);
+
+        assert!(!rows.is_empty());
+        assert!(
+            rows.iter()
+                .all(|row| row.faction_id == game.player_faction_id && row.status == "在任")
+        );
+        assert!(rows.iter().all(|row| row.id != "cao_cao"));
+        assert!(rows.iter().all(|row| row.id != "jian_yong"));
     }
 }

@@ -702,6 +702,7 @@ fn apply_initial_life_event(
                         name: profile.name.clone(),
                         faction_id,
                         city_id,
+                        office_id: None,
                         stats: profile.stats,
                         loyalty: event.loyalty.unwrap_or(80),
                         gender: profile.gender.clone(),
