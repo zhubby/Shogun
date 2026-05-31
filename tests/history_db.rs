@@ -360,6 +360,13 @@ fn fixed_scenarios_build_with_valid_selectable_factions_and_governors() {
             );
 
             for city in game.cities.values() {
+                assert!((1..=CITY_MAX_LEVEL).contains(&city.level));
+                assert!(city.materials >= 0);
+                assert!(city.facilities.len() <= city.facility_slots());
+                for facility in &city.facilities {
+                    assert!((1..=FACILITY_MAX_LEVEL).contains(&facility.level));
+                    assert!(facility.level <= city.level);
+                }
                 if let Some(governor_id) = &city.governor_id {
                     let governor = game.officers.get(governor_id).unwrap();
                     assert!(governor.is_active());

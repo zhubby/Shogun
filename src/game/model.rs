@@ -1,10 +1,10 @@
-use super::city::City;
+use super::city::{City, FacilityKind};
 use super::ids::{CityId, FactionId, OfficerId};
 use super::officer::Officer;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const SAVE_VERSION: u32 = 2;
+pub const SAVE_VERSION: u32 = 3;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GameState {
@@ -178,6 +178,8 @@ impl Command {
     pub fn summary(&self) -> String {
         match &self.kind {
             CommandKind::Develop { focus } => format!("开发 {focus:?}"),
+            CommandKind::UpgradeCityCore => "升级城镇核心".to_string(),
+            CommandKind::BuildFacility { kind } => format!("建设设施 {kind:?}"),
             CommandKind::Recruit { amount } => format!("征兵 {amount}"),
             CommandKind::Train => "训练".to_string(),
             CommandKind::AppointGovernor { target_officer_id } => {
@@ -209,6 +211,10 @@ impl Command {
 pub enum CommandKind {
     Develop {
         focus: DevelopmentFocus,
+    },
+    UpgradeCityCore,
+    BuildFacility {
+        kind: FacilityKind,
     },
     Recruit {
         amount: u32,

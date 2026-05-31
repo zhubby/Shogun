@@ -1,8 +1,12 @@
+use super::city::{
+    CITY_MAX_LEVEL, City, FACILITY_MAX_LEVEL, FacilityKind, ResourceCost, city_core_upgrade_cost,
+    facility_upgrade_cost, project_city_monthly_change,
+};
 use super::history_db::{HistoricalCatalog, LifeEventKind};
 use super::ids::{CityId, OfficerId};
 use super::model::*;
 use super::officer::{Officer, OfficerStats, OfficerStatus};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Default)]
 struct CommandReservations {
@@ -126,6 +130,23 @@ fn validate_command(
             if city.gold < 80 {
                 return Err(CommandError::Invalid("开发需要至少 80 金".to_string()));
             }
+        }
+        CommandKind::UpgradeCityCore => {
+            if city.level >= CITY_MAX_LEVEL {
+                return Err(CommandError::Invalid("城镇核心已达最高等级".to_string()));
+            }
+            if city.order < 45 {
+                return Err(CommandError::Invalid(
+                    "治安低于 45，不能升级城镇核心".to_string(),
+                ));
+            }
+            let cost = city_core_upgrade_cost(city.level + 1);
+            ensure_city_can_pay(city, cost, "升级城镇核心")?;
+        }
+        CommandKind::BuildFacility { kind } => {
+            let target_level = next_facility_level(city, *kind)?;
+            let cost = facility_upgrade_cost(*kind, target_level);
+            ensure_city_can_pay(city, cost, "建设设施")?;
         }
         CommandKind::Recruit { amount } => {
             if *amount == 0 || *amount > 5000 {
@@ -283,9 +304,41 @@ fn validate_officer_in_city(
     Ok(())
 }
 
+fn ensure_city_can_pay(city: &City, cost: ResourceCost, action: &str) -> Result<(), CommandError> {
+    if city.gold < cost.gold || city.food < cost.food || city.materials < cost.materials {
+        return Err(CommandError::Invalid(format!(
+            "{action}需要 {} 金、{} 粮、{} 建材",
+            cost.gold, cost.food, cost.materials
+        )));
+    }
+    Ok(())
+}
+
+fn next_facility_level(city: &City, kind: FacilityKind) -> Result<u8, CommandError> {
+    if let Some(facility) = city.facility(kind) {
+        if facility.level >= FACILITY_MAX_LEVEL {
+            return Err(CommandError::Invalid("设施已达最高等级".to_string()));
+        }
+        let target_level = facility.level + 1;
+        if target_level > city.level {
+            return Err(CommandError::Invalid(
+                "设施等级不能超过城镇核心等级".to_string(),
+            ));
+        }
+        return Ok(target_level);
+    }
+
+    if city.facilities.len() >= city.facility_slots() {
+        return Err(CommandError::Invalid("城镇设施槽位已满".to_string()));
+    }
+    Ok(1)
+}
+
 fn apply_command(state: &mut GameState, command: &Command, report: &mut TurnReport) {
     match &command.kind {
         CommandKind::Develop { focus } => apply_develop(state, command, focus, report),
+        CommandKind::UpgradeCityCore => apply_upgrade_city_core(state, command, report),
+        CommandKind::BuildFacility { kind } => apply_build_facility(state, command, *kind, report),
         CommandKind::Recruit { amount } => apply_recruit(state, command, *amount, report),
         CommandKind::Train => apply_train(state, command, report),
         CommandKind::AppointGovernor { target_officer_id } => {
@@ -332,6 +385,62 @@ fn apply_develop(
     }
     city.clamp_fields();
     report.info(format!("{} 执行开发，{} 有所提升", officer.name, city.name));
+}
+
+fn apply_upgrade_city_core(state: &mut GameState, command: &Command, report: &mut TurnReport) {
+    let officer = state
+        .officers
+        .get(command.officer_id.as_ref().unwrap())
+        .unwrap();
+    let city = state.cities.get_mut(&command.city_id).unwrap();
+    let next_level = city.level + 1;
+    let cost = city_core_upgrade_cost(next_level);
+    city.gold -= cost.gold;
+    city.food -= cost.food;
+    city.materials -= cost.materials;
+    city.level = next_level.min(CITY_MAX_LEVEL);
+    city.order = city.order.saturating_sub(2);
+    city.clamp_fields();
+    report.info(format!(
+        "{} 主持扩建，{} 城镇核心升至 {} 级",
+        officer.name, city.name, city.level
+    ));
+}
+
+fn apply_build_facility(
+    state: &mut GameState,
+    command: &Command,
+    kind: FacilityKind,
+    report: &mut TurnReport,
+) {
+    let officer = state
+        .officers
+        .get(command.officer_id.as_ref().unwrap())
+        .unwrap();
+    let city = state.cities.get_mut(&command.city_id).unwrap();
+    let target_level = next_facility_level(city, kind).unwrap();
+    let cost = facility_upgrade_cost(kind, target_level);
+    city.gold -= cost.gold;
+    city.food -= cost.food;
+    city.materials -= cost.materials;
+    if let Some(facility) = city
+        .facilities
+        .iter_mut()
+        .find(|facility| facility.kind == kind)
+    {
+        facility.level = target_level;
+    } else {
+        city.facilities.push(super::city::CityFacility {
+            kind,
+            level: target_level,
+        });
+    }
+    city.order = city.order.saturating_sub(1);
+    city.clamp_fields();
+    report.info(format!(
+        "{} 主持建设，{} 的 {:?} 达到 {} 级",
+        officer.name, city.name, kind, target_level
+    ));
 }
 
 fn apply_recruit(state: &mut GameState, command: &Command, amount: u32, report: &mut TurnReport) {
@@ -546,33 +655,102 @@ fn retreat_defenders(state: &mut GameState, captured_city_id: &str, old_faction_
     }
 }
 
+pub fn officer_monthly_salary(officer: &Officer) -> i32 {
+    let stats = officer.stats;
+    10 + (i32::from(stats.leadership)
+        + i32::from(stats.strength)
+        + i32::from(stats.intelligence)
+        + i32::from(stats.politics)
+        + i32::from(stats.charm))
+        / 50
+}
+
 fn apply_monthly_income(state: &mut GameState, report: &mut TurnReport) {
     let player_faction_id = state.player_faction_id.clone();
-    let mut total_gold_income = 0;
-    let mut total_food_income = 0;
-    let mut player_gold_income = 0;
-    let mut player_food_income = 0;
+    let salaries = city_salary_totals(state);
+    let mut total_gold_delta = 0;
+    let mut total_food_delta = 0;
+    let mut total_materials_delta = 0;
+    let mut total_population_delta = 0;
+    let mut total_troop_delta = 0;
+    let mut total_salary = 0;
+    let mut player_gold_delta = 0;
+    let mut player_food_delta = 0;
+    let mut player_materials_delta = 0;
+    let mut player_population_delta = 0;
+    let mut player_troop_delta = 0;
+    let mut player_salary = 0;
     let mut player_city_count = 0;
 
     for city in state.cities.values_mut() {
-        let gold_income = i32::from(city.commerce) / 4 + (city.population / 20_000) as i32;
-        let food_income = i32::from(city.agriculture) / 3 + (city.population / 18_000) as i32;
-        city.gold += gold_income;
-        city.food += food_income;
-        city.order = city.order.saturating_add(1).min(100);
+        let salary = salaries.get(&city.id).copied().unwrap_or_default();
+        let projection = project_city_monthly_change(city, salary);
+        city.gold += projection.net_gold;
+        city.food += projection.net_food;
+        city.materials += projection.net_materials;
+        city.population = apply_i32_to_u32(city.population, projection.population_delta);
+        city.troops = apply_i32_to_u32(city.troops, projection.troop_delta);
+        city.order = apply_i32_to_u8(city.order, projection.order_delta, 0, 100);
+        city.training = apply_i32_to_u8(city.training, projection.training_delta, 0, 100);
+        city.defense = apply_i32_to_u16(city.defense, projection.defense_delta, 0, 999);
         city.clamp_fields();
 
-        total_gold_income += gold_income;
-        total_food_income += food_income;
+        total_gold_delta += projection.net_gold;
+        total_food_delta += projection.net_food;
+        total_materials_delta += projection.net_materials;
+        total_population_delta += projection.population_delta;
+        total_troop_delta += projection.troop_delta;
+        total_salary += salary;
         if city.faction_id == player_faction_id {
             player_city_count += 1;
-            player_gold_income += gold_income;
-            player_food_income += food_income;
+            player_gold_delta += projection.net_gold;
+            player_food_delta += projection.net_food;
+            player_materials_delta += projection.net_materials;
+            player_population_delta += projection.population_delta;
+            player_troop_delta += projection.troop_delta;
+            player_salary += salary;
         }
     }
     report.info(format!(
-        "各城完成月度税粮结算：全图金 +{total_gold_income}、粮 +{total_food_income}；玩家 {player_city_count} 城收入金 +{player_gold_income}、粮 +{player_food_income}"
+        "各城完成月度经济结算：全图金 {total_gold_delta:+}、粮 {total_food_delta:+}、建材 {total_materials_delta:+}、人口 {total_population_delta:+}、兵 {total_troop_delta:+}、俸禄 -{total_salary}；玩家 {player_city_count} 城金 {player_gold_delta:+}、粮 {player_food_delta:+}、建材 {player_materials_delta:+}、人口 {player_population_delta:+}、兵 {player_troop_delta:+}、俸禄 -{player_salary}"
     ));
+}
+
+fn city_salary_totals(state: &GameState) -> BTreeMap<CityId, i32> {
+    let mut salaries = BTreeMap::new();
+    for officer in state
+        .officers
+        .values()
+        .filter(|officer| officer.is_active())
+    {
+        let Some(city_id) = &officer.city_id else {
+            continue;
+        };
+        let Some(city) = state.cities.get(city_id) else {
+            continue;
+        };
+        if city.faction_id != officer.faction_id {
+            continue;
+        }
+        *salaries.entry(city_id.clone()).or_insert(0) += officer_monthly_salary(officer);
+    }
+    salaries
+}
+
+fn apply_i32_to_u32(value: u32, delta: i32) -> u32 {
+    if delta >= 0 {
+        value.saturating_add(delta as u32)
+    } else {
+        value.saturating_sub(delta.unsigned_abs())
+    }
+}
+
+fn apply_i32_to_u8(value: u8, delta: i32, min: u8, max: u8) -> u8 {
+    (i32::from(value) + delta).clamp(i32::from(min), i32::from(max)) as u8
+}
+
+fn apply_i32_to_u16(value: u16, delta: i32, min: u16, max: u16) -> u16 {
+    (i32::from(value) + delta).clamp(i32::from(min), i32::from(max)) as u16
 }
 
 fn append_turn_summary(state: &GameState, report: &mut TurnReport) {
@@ -580,6 +758,7 @@ fn append_turn_summary(state: &GameState, report: &mut TurnReport) {
     let mut player_troops = 0;
     let mut player_gold = 0;
     let mut player_food = 0;
+    let mut player_materials = 0;
 
     for city in state
         .cities
@@ -590,6 +769,7 @@ fn append_turn_summary(state: &GameState, report: &mut TurnReport) {
         player_troops += city.troops;
         player_gold += city.gold;
         player_food += city.food;
+        player_materials += city.materials;
     }
 
     let alive_factions = state
@@ -599,14 +779,15 @@ fn append_turn_summary(state: &GameState, report: &mut TurnReport) {
         .count();
 
     report.info(format!(
-        "进入 {}年{}月，存续势力 {} 个；玩家控制 {} 城，兵力 {}，金 {}，粮 {}",
+        "进入 {}年{}月，存续势力 {} 个；玩家控制 {} 城，兵力 {}，金 {}，粮 {}，建材 {}",
         state.year,
         state.month,
         alive_factions,
         player_city_count,
         player_troops,
         player_gold,
-        player_food
+        player_food,
+        player_materials
     ));
 
     match &state.status {

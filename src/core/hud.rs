@@ -333,14 +333,18 @@ pub(super) fn selected_city_summary(ui: &mut egui::Ui, ui_state: &mut GameUiStat
             city.id.clone(),
             city.name.clone(),
             faction_name,
+            city.level,
             city.population,
             city.troops,
             city.gold,
             city.food,
+            city.materials,
         ))
     });
 
-    let Some((city_id, city_name, faction_name, population, troops, gold, food)) = summary else {
+    let Some((city_id, city_name, faction_name, level, population, troops, gold, food, materials)) =
+        summary
+    else {
         ui.label("未选择城池");
         return;
     };
@@ -348,7 +352,7 @@ pub(super) fn selected_city_summary(ui: &mut egui::Ui, ui_state: &mut GameUiStat
     ui.heading(city_name);
     ui.label(format!("归属: {faction_name}"));
     ui.label(format!(
-        "人口 {population} | 兵 {troops} | 金 {gold} | 粮 {food}"
+        "{level}级 | 人口 {population} | 兵 {troops} | 金 {gold} | 粮 {food} | 建材 {materials}"
     ));
     if ui.button("打开军令").clicked() {
         open_city(ui_state, city_id);
@@ -916,7 +920,12 @@ pub(super) fn save_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
                 Ok(game) => {
                     enter_game(ui_state, game, "读取当前槽位".to_string());
                 }
-                Err(error) => ui_state.message = error.to_string(),
+                Err(error) => {
+                    let slot_id = ui_state.save_slot_id.clone();
+                    let _ = ui_state.save_manager.delete_slot(&slot_id);
+                    refresh_saves(ui_state);
+                    ui_state.message = format!("存档已失效，已丢弃: {error}");
+                }
             }
         }
     });

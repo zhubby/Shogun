@@ -4,7 +4,7 @@ use bevy_egui::egui;
 use super::actions::queue_selected_city_command;
 use super::labels::{
     city_scale_label, confidence_label, development_focus_label, diplomacy_label,
-    officer_gender_label, officer_relationship_label,
+    facility_kind_label, officer_gender_label, officer_relationship_label,
 };
 use super::state::{CityTab, GameUiState};
 
@@ -29,13 +29,53 @@ pub(super) fn selected_city_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState)
     ui.heading(&city.name);
     ui.label(format!("归属: {faction_name}"));
     ui.label(format!(
-        "人口 {} | 金 {} | 粮 {} | 兵 {}",
-        city.population, city.gold, city.food, city.troops
+        "{}级城镇 | 槽位 {}/{}",
+        city.level,
+        city.facilities.len(),
+        city.facility_slots()
+    ));
+    ui.label(format!(
+        "人口 {} | 金 {} | 粮 {} | 建材 {} | 兵 {}",
+        city.population, city.gold, city.food, city.materials, city.troops
     ));
     ui.label(format!(
         "农业 {} | 商业 {} | 城防 {} | 训练 {} | 治安 {}",
         city.agriculture, city.commerce, city.defense, city.training, city.order
     ));
+    let officer_salary = game
+        .officers_in_city(&city.id)
+        .into_iter()
+        .filter(|officer| officer.faction_id == city.faction_id)
+        .map(officer_monthly_salary)
+        .sum();
+    let projection = project_city_monthly_change(&city, officer_salary);
+    ui.label(format!(
+        "预计月净 金 {:+} | 粮 {:+} | 建材 {:+} | 人口 {:+} | 兵 {:+}",
+        projection.net_gold,
+        projection.net_food,
+        projection.net_materials,
+        projection.population_delta,
+        projection.troop_delta
+    ));
+    ui.label(format!(
+        "维护 金 -{} | 粮 -{} | 建材 -{} | 驻军粮 -{} | 俸禄 -{}",
+        projection.facility_gold_maintenance,
+        projection.facility_food_maintenance,
+        projection.facility_materials_maintenance,
+        projection.troop_food_upkeep,
+        projection.officer_salary
+    ));
+    if city.facilities.is_empty() {
+        ui.label("设施: 无");
+    } else {
+        let facilities = city
+            .facilities
+            .iter()
+            .map(|facility| format!("{}{}级", facility_kind_label(facility.kind), facility.level))
+            .collect::<Vec<_>>()
+            .join(" / ");
+        ui.label(format!("设施: {facilities}"));
+    }
     if let Some(profile) = &city.profile {
         ui.label(format!(
             "{}{} | 规模 {} | 战略 {} | 可信度 {}",
@@ -126,6 +166,8 @@ pub(super) fn selected_city_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState)
     match ui_state.city_tab {
         CityTab::Construction => {
             ui.heading("建设");
+            city_core_controls(ui, ui_state, &city);
+            facility_controls(ui, ui_state, &city);
             develop_controls(ui, ui_state, &city);
             recruit_controls(ui, ui_state, &city);
             train_controls(ui, ui_state, &city);
@@ -151,6 +193,89 @@ pub(super) fn officer_roster(ui: &mut egui::Ui, game: &GameState, city: &City) {
     for officer in officers {
         officer_row(ui, officer);
     }
+}
+
+pub(super) fn city_core_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, city: &City) {
+    ui.collapsing("城镇核心", |ui| {
+        ui.label(format!(
+            "当前 {} 级，设施槽位 {}",
+            city.level,
+            city.facility_slots()
+        ));
+        if city.level >= CITY_MAX_LEVEL {
+            ui.label("已达最高等级");
+            return;
+        }
+        let next_level = city.level + 1;
+        let cost = city_core_upgrade_cost(next_level);
+        ui.label(format!(
+            "升至 {} 级需要 金 {} / 粮 {} / 建材 {}，治安至少 45",
+            next_level, cost.gold, cost.food, cost.materials
+        ));
+        if ui.button("升级城镇核心").clicked() {
+            queue_selected_city_command(ui_state, city, CommandKind::UpgradeCityCore);
+        }
+    });
+}
+
+pub(super) fn facility_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, city: &City) {
+    ui.collapsing("设施建设", |ui| {
+        egui::ComboBox::from_id_salt("facility_kind")
+            .selected_text(facility_kind_label(ui_state.selected_facility_kind))
+            .show_ui(ui, |ui| {
+                for kind in ALL_FACILITY_KINDS {
+                    ui.selectable_value(
+                        &mut ui_state.selected_facility_kind,
+                        kind,
+                        facility_kind_label(kind),
+                    );
+                }
+            });
+
+        let kind = ui_state.selected_facility_kind;
+        match facility_build_preview(city, kind) {
+            Ok((target_level, cost, action)) => {
+                ui.label(format!(
+                    "{action}至 {} 级需要 金 {} / 粮 {} / 建材 {}",
+                    target_level, cost.gold, cost.food, cost.materials
+                ));
+                if ui.button(action).clicked() {
+                    queue_selected_city_command(
+                        ui_state,
+                        city,
+                        CommandKind::BuildFacility { kind },
+                    );
+                }
+            }
+            Err(message) => {
+                ui.label(message);
+            }
+        }
+    });
+}
+
+fn facility_build_preview(
+    city: &City,
+    kind: FacilityKind,
+) -> Result<(u8, ResourceCost, &'static str), &'static str> {
+    if let Some(facility) = city.facility(kind) {
+        if facility.level >= FACILITY_MAX_LEVEL {
+            return Err("该设施已达最高等级");
+        }
+        let target_level = facility.level + 1;
+        if target_level > city.level {
+            return Err("设施等级不能超过城镇核心等级");
+        }
+        return Ok((
+            target_level,
+            facility_upgrade_cost(kind, target_level),
+            "升级设施",
+        ));
+    }
+    if city.facilities.len() >= city.facility_slots() {
+        return Err("设施槽位已满，请先升级城镇核心");
+    }
+    Ok((1, facility_upgrade_cost(kind, 1), "建设设施"))
 }
 
 pub(super) fn develop_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, city: &City) {

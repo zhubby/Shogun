@@ -26,6 +26,23 @@ pub(super) fn city_scale_label(scale: &CityScale) -> &'static str {
     }
 }
 
+pub(super) fn facility_kind_label(kind: FacilityKind) -> &'static str {
+    match kind {
+        FacilityKind::Farmland => "农田",
+        FacilityKind::Irrigation => "水利",
+        FacilityKind::Market => "市集",
+        FacilityKind::TradeDepot => "商站",
+        FacilityKind::Workshop => "工坊",
+        FacilityKind::Quarry => "采石场",
+        FacilityKind::Barracks => "兵营",
+        FacilityKind::DrillGround => "校场",
+        FacilityKind::Walls => "城墙",
+        FacilityKind::Administration => "官署",
+        FacilityKind::Granary => "粮仓",
+        FacilityKind::RelayStation => "驿站",
+    }
+}
+
 pub(super) fn confidence_label(confidence: &SourceConfidence) -> &'static str {
     match confidence {
         SourceConfidence::High => "高",

@@ -16,15 +16,22 @@
       "name": "平原",
       "faction_id": "liu_bei",
       "position": { "x": -420.0, "y": 190.0 },
+      "level": 3,
       "population": 78000,
       "gold": 520,
       "food": 1400,
+      "materials": 520,
       "troops": 4200,
       "training": 52,
       "agriculture": 190,
       "commerce": 130,
       "defense": 120,
       "order": 78,
+      "facilities": [
+        { "kind": "Farmland", "level": 2 },
+        { "kind": "Granary", "level": 1 },
+        { "kind": "Barracks", "level": 1 }
+      ],
       "governor_id": "guan_yu"
     },
     {
@@ -32,15 +39,22 @@
       "name": "下邳",
       "faction_id": "liu_bei",
       "position": { "x": -230.0, "y": 35.0 },
+      "level": 4,
       "population": 91000,
       "gold": 620,
       "food": 1600,
+      "materials": 640,
       "troops": 5000,
       "training": 48,
       "agriculture": 220,
       "commerce": 165,
       "defense": 145,
       "order": 75,
+      "facilities": [
+        { "kind": "Farmland", "level": 2 },
+        { "kind": "Market", "level": 2 },
+        { "kind": "Barracks", "level": 1 }
+      ],
       "governor_id": "zhang_fei"
     },
     {
@@ -48,15 +62,23 @@
       "name": "邺",
       "faction_id": "yuan_shao",
       "position": { "x": -140.0, "y": 255.0 },
+      "level": 5,
       "population": 128000,
       "gold": 880,
       "food": 2200,
+      "materials": 780,
       "troops": 7600,
       "training": 58,
       "agriculture": 260,
       "commerce": 230,
       "defense": 180,
       "order": 72,
+      "facilities": [
+        { "kind": "Farmland", "level": 3 },
+        { "kind": "Market", "level": 2 },
+        { "kind": "Administration", "level": 2 },
+        { "kind": "Barracks", "level": 2 }
+      ],
       "governor_id": "ju_shou"
     },
     {
@@ -64,15 +86,21 @@
       "name": "北海",
       "faction_id": "yuan_shao",
       "position": { "x": 70.0, "y": 165.0 },
+      "level": 3,
       "population": 83000,
       "gold": 500,
       "food": 1320,
+      "materials": 500,
       "troops": 4300,
       "training": 42,
       "agriculture": 205,
       "commerce": 150,
       "defense": 115,
       "order": 70,
+      "facilities": [
+        { "kind": "Farmland", "level": 2 },
+        { "kind": "Granary", "level": 1 }
+      ],
       "governor_id": "zhang_he"
     },
     {
@@ -80,15 +108,23 @@
       "name": "许昌",
       "faction_id": "cao_cao",
       "position": { "x": -45.0, "y": 15.0 },
+      "level": 6,
       "population": 146000,
       "gold": 1050,
       "food": 2600,
+      "materials": 920,
       "troops": 8200,
       "training": 64,
       "agriculture": 255,
       "commerce": 310,
       "defense": 220,
       "order": 82,
+      "facilities": [
+        { "kind": "Market", "level": 3 },
+        { "kind": "Administration", "level": 3 },
+        { "kind": "Workshop", "level": 2 },
+        { "kind": "Walls", "level": 2 }
+      ],
       "governor_id": "xun_yu"
     },
     {
@@ -96,15 +132,23 @@
       "name": "洛阳",
       "faction_id": "cao_cao",
       "position": { "x": -225.0, "y": -155.0 },
+      "level": 6,
       "population": 102000,
       "gold": 760,
       "food": 1700,
+      "materials": 900,
       "troops": 5600,
       "training": 55,
       "agriculture": 190,
       "commerce": 240,
       "defense": 260,
       "order": 68,
+      "facilities": [
+        { "kind": "Market", "level": 2 },
+        { "kind": "Walls", "level": 3 },
+        { "kind": "Administration", "level": 2 },
+        { "kind": "RelayStation", "level": 2 }
+      ],
       "governor_id": "xiahou_dun"
     },
     {
@@ -112,15 +156,22 @@
       "name": "寿春",
       "faction_id": "cao_cao",
       "position": { "x": 125.0, "y": -95.0 },
+      "level": 4,
       "population": 99000,
       "gold": 690,
       "food": 1650,
+      "materials": 610,
       "troops": 5300,
       "training": 50,
       "agriculture": 215,
       "commerce": 190,
       "defense": 150,
       "order": 73,
+      "facilities": [
+        { "kind": "Market", "level": 2 },
+        { "kind": "Workshop", "level": 1 },
+        { "kind": "Barracks", "level": 1 }
+      ],
       "governor_id": "zhang_liao"
     },
     {
@@ -128,15 +179,22 @@
       "name": "江夏",
       "faction_id": "sun_quan",
       "position": { "x": -40.0, "y": -285.0 },
+      "level": 3,
       "population": 87000,
       "gold": 540,
       "food": 1580,
+      "materials": 540,
       "troops": 4800,
       "training": 46,
       "agriculture": 245,
       "commerce": 155,
       "defense": 130,
       "order": 74,
+      "facilities": [
+        { "kind": "Farmland", "level": 2 },
+        { "kind": "Granary", "level": 1 },
+        { "kind": "RelayStation", "level": 1 }
+      ],
       "governor_id": "lu_su"
     },
     {
@@ -144,15 +202,23 @@
       "name": "建业",
       "faction_id": "sun_quan",
       "position": { "x": 320.0, "y": -180.0 },
+      "level": 5,
       "population": 116000,
       "gold": 840,
       "food": 2100,
+      "materials": 760,
       "troops": 6900,
       "training": 57,
       "agriculture": 260,
       "commerce": 260,
       "defense": 165,
       "order": 80,
+      "facilities": [
+        { "kind": "Market", "level": 3 },
+        { "kind": "TradeDepot", "level": 2 },
+        { "kind": "Workshop", "level": 2 },
+        { "kind": "Barracks", "level": 1 }
+      ],
       "governor_id": "zhou_yu"
     },
     {
@@ -160,15 +226,21 @@
       "name": "长沙",
       "faction_id": "sun_quan",
       "position": { "x": 125.0, "y": -410.0 },
+      "level": 3,
       "population": 76000,
       "gold": 500,
       "food": 1500,
+      "materials": 500,
       "troops": 3900,
       "training": 44,
       "agriculture": 230,
       "commerce": 145,
       "defense": 120,
       "order": 76,
+      "facilities": [
+        { "kind": "Farmland", "level": 2 },
+        { "kind": "Irrigation", "level": 1 }
+      ],
       "governor_id": "huang_gai"
     }
   ],

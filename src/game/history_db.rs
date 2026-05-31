@@ -1,4 +1,7 @@
-use super::city::{City, CityCatalog, CityProfile, CityScale, SourceConfidence};
+use super::city::{
+    City, CityCatalog, CityFacility, CityProfile, CityScale, FacilityKind, SourceConfidence,
+    city_facility_slots,
+};
 use super::ids::{CityId, FactionId, OfficerId, ScenarioId};
 use super::model::{
     Controller, DiplomaticRelation, Faction, GameState, GameStatus, MapPosition, Road,
@@ -538,23 +541,27 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
                 confidence: parse_confidence(row.get::<String, _>("confidence").as_str()),
                 notes: row.get("notes"),
             };
-            let city = City {
+            let mut city = City {
                 id: profile.id.clone(),
                 name: profile.name.clone(),
                 faction_id: row.get("faction_id"),
                 position: profile.position,
+                level: derive_city_level(&profile),
                 population: row.get::<i64, _>("population") as u32,
                 gold: row.get::<i64, _>("gold") as i32,
                 food: row.get::<i64, _>("food") as i32,
+                materials: derive_city_materials(&profile),
                 troops: row.get::<i64, _>("troops") as u32,
                 training: row.get::<i64, _>("training") as u8,
                 agriculture: row.get::<i64, _>("agriculture") as u16,
                 commerce: row.get::<i64, _>("commerce") as u16,
                 defense: row.get::<i64, _>("defense") as u16,
                 order: row.get::<i64, _>("city_order") as u8,
+                facilities: derive_city_facilities(&profile),
                 governor_id: row.get("governor_id"),
                 profile: Some(profile),
             };
+            city.clamp_fields();
             cities.insert(city.id.clone(), city);
         }
 
@@ -747,6 +754,67 @@ async fn officer_relationships(
     .await
     .map_err(HistoryDbError::Sqlx)?;
     rows.into_iter().map(relationship_from_row).collect()
+}
+
+fn derive_city_level(profile: &CityProfile) -> u8 {
+    let scale_base = match profile.scale {
+        CityScale::County => 2,
+        CityScale::Commandery => 4,
+        CityScale::RegionalCapital => 6,
+        CityScale::ImperialCapital => 8,
+    };
+    (scale_base + profile.strategic_rank / 4).clamp(1, 10)
+}
+
+fn derive_city_materials(profile: &CityProfile) -> i32 {
+    let level = i32::from(derive_city_level(profile));
+    220 + level * 90 + i32::from(profile.strategic_rank) * 25
+}
+
+fn derive_city_facilities(profile: &CityProfile) -> Vec<CityFacility> {
+    let level = derive_city_level(profile);
+    let mut kinds = Vec::new();
+    if profile.agriculture_base >= profile.commerce_base {
+        kinds.push(FacilityKind::Farmland);
+        kinds.push(FacilityKind::Granary);
+    } else {
+        kinds.push(FacilityKind::Market);
+        kinds.push(FacilityKind::TradeDepot);
+    }
+    if profile.defense_base >= profile.agriculture_base.max(profile.commerce_base) {
+        kinds.push(FacilityKind::Walls);
+    }
+    if profile.strategic_rank >= 6 {
+        kinds.push(FacilityKind::Barracks);
+    }
+    if profile.commerce_base >= 220 {
+        kinds.push(FacilityKind::Workshop);
+    } else if profile.defense_base >= 180 {
+        kinds.push(FacilityKind::Quarry);
+    }
+    if matches!(
+        profile.scale,
+        CityScale::RegionalCapital | CityScale::ImperialCapital
+    ) {
+        kinds.push(FacilityKind::Administration);
+        kinds.push(FacilityKind::RelayStation);
+    }
+    if kinds.len() < 2 {
+        kinds.push(FacilityKind::Irrigation);
+    }
+
+    let target_count =
+        (2 + usize::from(profile.strategic_rank / 4)).min(city_facility_slots(level));
+    kinds.sort();
+    kinds.dedup();
+    kinds
+        .into_iter()
+        .take(target_count.max(2).min(city_facility_slots(level)))
+        .map(|kind| CityFacility {
+            kind,
+            level: ((level + 1) / 3).clamp(1, 5),
+        })
+        .collect()
 }
 
 fn city_profile_from_row(row: SqliteRow) -> Result<CityProfile, HistoryDbError> {

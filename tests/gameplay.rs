@@ -1,5 +1,6 @@
 use shogun::game::*;
 use std::collections::BTreeMap;
+use std::fs;
 
 fn sample_game() -> GameState {
     ScenarioData::default_scenario()
@@ -117,6 +118,189 @@ fn development_changes_city_values() {
 }
 
 #[test]
+fn city_core_upgrade_consumes_resources_and_unlocks_growth() {
+    let mut game = sample_game();
+    {
+        let city = game.cities.get_mut("pingyuan").unwrap();
+        city.gold = 2_000;
+        city.food = 2_000;
+        city.materials = 2_000;
+        city.order = 80;
+    }
+    let before = game.cities["pingyuan"].clone();
+    queue_player_command(
+        &mut game,
+        command("pingyuan", "liu_bei", CommandKind::UpgradeCityCore),
+    )
+    .unwrap();
+
+    let commands = game.pending_commands.clone();
+    resolve_command_batch(&mut game, commands);
+
+    let city = &game.cities["pingyuan"];
+    assert_eq!(city.level, before.level + 1);
+    assert!(city.facility_slots() >= before.facility_slots());
+    assert!(city.gold < before.gold);
+    assert!(city.materials < before.materials);
+}
+
+#[test]
+fn build_facility_adds_or_upgrades_facility() {
+    let mut game = sample_game();
+    {
+        let city = game.cities.get_mut("pingyuan").unwrap();
+        city.level = 4;
+        city.gold = 2_000;
+        city.food = 2_000;
+        city.materials = 2_000;
+        city.facilities = vec![CityFacility {
+            kind: FacilityKind::Farmland,
+            level: 1,
+        }];
+    }
+
+    queue_player_command(
+        &mut game,
+        command(
+            "pingyuan",
+            "liu_bei",
+            CommandKind::BuildFacility {
+                kind: FacilityKind::Market,
+            },
+        ),
+    )
+    .unwrap();
+    let commands = game.pending_commands.clone();
+    resolve_command_batch(&mut game, commands);
+
+    assert_eq!(
+        game.cities["pingyuan"]
+            .facility(FacilityKind::Market)
+            .map(|facility| facility.level),
+        Some(1)
+    );
+
+    queue_player_command(
+        &mut game,
+        command(
+            "pingyuan",
+            "liu_bei",
+            CommandKind::BuildFacility {
+                kind: FacilityKind::Farmland,
+            },
+        ),
+    )
+    .unwrap();
+    let commands = game.pending_commands.clone();
+    resolve_command_batch(&mut game, commands);
+
+    assert_eq!(
+        game.cities["pingyuan"]
+            .facility(FacilityKind::Farmland)
+            .map(|facility| facility.level),
+        Some(2)
+    );
+}
+
+#[test]
+fn facility_construction_respects_slots_and_level_caps() {
+    let mut game = sample_game();
+    {
+        let city = game.cities.get_mut("pingyuan").unwrap();
+        city.level = 1;
+        city.gold = 2_000;
+        city.food = 2_000;
+        city.materials = 2_000;
+        city.facilities = vec![
+            CityFacility {
+                kind: FacilityKind::Farmland,
+                level: 1,
+            },
+            CityFacility {
+                kind: FacilityKind::Granary,
+                level: 1,
+            },
+        ];
+    }
+
+    let no_slot = validate_command_for_state(
+        &game,
+        &command(
+            "pingyuan",
+            "liu_bei",
+            CommandKind::BuildFacility {
+                kind: FacilityKind::Market,
+            },
+        ),
+    );
+    assert!(no_slot.is_err());
+
+    game.cities.get_mut("pingyuan").unwrap().facilities.pop();
+    let over_city_level = validate_command_for_state(
+        &game,
+        &command(
+            "pingyuan",
+            "liu_bei",
+            CommandKind::BuildFacility {
+                kind: FacilityKind::Farmland,
+            },
+        ),
+    );
+    assert!(over_city_level.is_err());
+}
+
+#[test]
+fn monthly_economy_applies_facilities_upkeep_growth_and_salaries() {
+    let mut game = sample_game();
+    {
+        let city = game.cities.get_mut("pingyuan").unwrap();
+        city.gold = 1_000;
+        city.food = 1_000;
+        city.materials = 500;
+        city.facilities = vec![
+            CityFacility {
+                kind: FacilityKind::Market,
+                level: 2,
+            },
+            CityFacility {
+                kind: FacilityKind::Workshop,
+                level: 2,
+            },
+            CityFacility {
+                kind: FacilityKind::Barracks,
+                level: 1,
+            },
+        ];
+    }
+    let before = game.cities["pingyuan"].clone();
+    let salary = game
+        .officers_in_city("pingyuan")
+        .into_iter()
+        .map(officer_monthly_salary)
+        .sum();
+    let projection = project_city_monthly_change(&before, salary);
+
+    let report = resolve_command_batch(&mut game, Vec::new());
+
+    let city = &game.cities["pingyuan"];
+    assert_eq!(city.gold, before.gold + projection.net_gold);
+    assert_eq!(city.food, before.food + projection.net_food);
+    assert_eq!(city.materials, before.materials + projection.net_materials);
+    assert_eq!(
+        city.population,
+        before.population + projection.population_delta as u32
+    );
+    assert!(city.troops > before.troops);
+    assert!(projection.officer_salary > 0);
+    assert!(
+        report
+            .entries
+            .iter()
+            .any(|entry| entry.message.contains("月度经济结算"))
+    );
+}
+
+#[test]
 fn recruit_consumes_resources_and_adds_troops() {
     let mut game = sample_game();
     let before_troops = game.cities["xiapi"].troops;
@@ -173,6 +357,8 @@ fn appoint_governor_updates_city() {
 #[test]
 fn transfer_moves_troops_between_adjacent_owned_cities() {
     let mut game = sample_game();
+    game.cities.get_mut("pingyuan").unwrap().facilities.clear();
+    game.cities.get_mut("xiapi").unwrap().facilities.clear();
     let before_source = game.cities["pingyuan"].troops;
     let before_target = game.cities["xiapi"].troops;
     queue_player_command(
@@ -266,6 +452,28 @@ fn save_manager_round_trips_multiple_slots() {
 
     manager.delete_slot("slot1").unwrap();
     assert_eq!(manager.list_slots().unwrap().len(), 1);
+}
+
+#[test]
+fn invalid_save_can_be_discarded() {
+    let temp = tempfile::tempdir().unwrap();
+    let manager = SaveManager::new(temp.path());
+    let game = sample_game();
+    manager.save_slot("slot1", "旧档", &game).unwrap();
+
+    let slot_path = manager.base_dir().join("slots").join("slot1.json");
+    let mut save_json: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&slot_path).unwrap()).unwrap();
+    save_json["version"] = serde_json::json!(SAVE_VERSION - 1);
+    fs::write(
+        &slot_path,
+        serde_json::to_string_pretty(&save_json).unwrap(),
+    )
+    .unwrap();
+
+    assert!(manager.load_slot("slot1").is_err());
+    manager.delete_slot("slot1").unwrap();
+    assert!(manager.list_slots().unwrap().is_empty());
 }
 
 #[test]
@@ -414,7 +622,7 @@ fn turn_report_includes_monthly_and_state_summaries() {
         report
             .entries
             .iter()
-            .any(|entry| entry.message.contains("月度税粮结算"))
+            .any(|entry| entry.message.contains("月度经济结算"))
     );
     assert!(
         report

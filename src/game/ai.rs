@@ -1,4 +1,6 @@
-use super::city::City;
+use super::city::{
+    CITY_MAX_LEVEL, City, FacilityKind, city_core_upgrade_cost, facility_upgrade_cost,
+};
 use super::commands::{
     resolve_command_batch, resolve_command_batch_with_history, validate_command_for_state,
 };
@@ -116,6 +118,18 @@ impl AiProvider for RuleBasedAiProvider {
                         target_city_id: target_id,
                         troops: (city.troops * 45 / 100).max(300),
                     },
+                });
+                continue;
+            }
+
+            if let Some(kind) = best_construction_command(city) {
+                let officer = best_politician(&officers);
+                used_officers.insert(officer.id.clone());
+                commands.push(Command {
+                    issuer_faction_id: request.faction_id.clone(),
+                    city_id: city.id.clone(),
+                    officer_id: Some(officer.id.clone()),
+                    kind,
                 });
                 continue;
             }
@@ -240,6 +254,87 @@ fn best_attack_target(request: &AiDecisionRequest, city: &City) -> Option<CityId
         .filter(|target| !has_truce(request, &city.faction_id, &target.faction_id))
         .min_by_key(|target| target.troops + u32::from(target.defense) * 8)
         .map(|target| target.id.clone())
+}
+
+fn best_construction_command(city: &City) -> Option<CommandKind> {
+    if city.order >= 45 && city.level < CITY_MAX_LEVEL {
+        let cost = city_core_upgrade_cost(city.level + 1);
+        if city.facilities.len() >= city.facility_slots() && can_pay(city, cost) {
+            return Some(CommandKind::UpgradeCityCore);
+        }
+    }
+
+    for kind in preferred_new_facilities(city) {
+        if city.has_facility(kind) || city.facilities.len() >= city.facility_slots() {
+            continue;
+        }
+        let cost = facility_upgrade_cost(kind, 1);
+        if can_pay(city, cost) {
+            return Some(CommandKind::BuildFacility { kind });
+        }
+    }
+
+    for kind in [
+        FacilityKind::Farmland,
+        FacilityKind::Market,
+        FacilityKind::Workshop,
+        FacilityKind::Barracks,
+        FacilityKind::Walls,
+        FacilityKind::Administration,
+        FacilityKind::Granary,
+        FacilityKind::RelayStation,
+    ] {
+        let Some(facility) = city.facility(kind) else {
+            continue;
+        };
+        if facility.level >= 5 || facility.level >= city.level {
+            continue;
+        }
+        let target_level = facility.level + 1;
+        let cost = facility_upgrade_cost(kind, target_level);
+        if can_pay(city, cost) {
+            return Some(CommandKind::BuildFacility { kind });
+        }
+    }
+
+    if city.order >= 45 && city.level < CITY_MAX_LEVEL {
+        let cost = city_core_upgrade_cost(city.level + 1);
+        if can_pay(city, cost) {
+            return Some(CommandKind::UpgradeCityCore);
+        }
+    }
+    None
+}
+
+fn preferred_new_facilities(city: &City) -> Vec<FacilityKind> {
+    let mut kinds = Vec::new();
+    if city.food < city.population as i32 / 80 || city.agriculture <= city.commerce {
+        kinds.push(FacilityKind::Farmland);
+        kinds.push(FacilityKind::Irrigation);
+        kinds.push(FacilityKind::Granary);
+    }
+    if city.materials < 300 {
+        kinds.push(FacilityKind::Workshop);
+        kinds.push(FacilityKind::Quarry);
+    }
+    if city.troops >= 3_000 {
+        kinds.push(FacilityKind::Barracks);
+        kinds.push(FacilityKind::DrillGround);
+    }
+    if city.defense < 180 {
+        kinds.push(FacilityKind::Walls);
+    }
+    kinds.extend([
+        FacilityKind::Market,
+        FacilityKind::Administration,
+        FacilityKind::TradeDepot,
+        FacilityKind::RelayStation,
+    ]);
+    kinds
+}
+
+fn can_pay(city: &City, cost: super::city::ResourceCost) -> bool {
+    city.gold >= cost.gold && city.food >= cost.food && city.materials >= cost.materials
 }
 
 fn has_truce(request: &AiDecisionRequest, a: &str, b: &str) -> bool {

@@ -1,4 +1,4 @@
-use super::city::City;
+use super::city::{City, CityFacility};
 use super::ids::{CityId, FactionId, OfficerId};
 use super::model::*;
 use super::officer::{Officer, OfficerGender, OfficerStats, OfficerStatus};
@@ -70,26 +70,28 @@ impl ScenarioData {
 
         let mut cities = BTreeMap::new();
         for seed in &self.cities {
-            cities.insert(
-                seed.id.clone(),
-                City {
-                    id: seed.id.clone(),
-                    name: seed.name.clone(),
-                    faction_id: seed.faction_id.clone(),
-                    position: seed.position,
-                    population: seed.population,
-                    gold: seed.gold,
-                    food: seed.food,
-                    troops: seed.troops,
-                    training: seed.training,
-                    agriculture: seed.agriculture,
-                    commerce: seed.commerce,
-                    defense: seed.defense,
-                    order: seed.order,
-                    governor_id: seed.governor_id.clone(),
-                    profile: None,
-                },
-            );
+            let mut city = City {
+                id: seed.id.clone(),
+                name: seed.name.clone(),
+                faction_id: seed.faction_id.clone(),
+                position: seed.position,
+                level: seed.level,
+                population: seed.population,
+                gold: seed.gold,
+                food: seed.food,
+                materials: seed.materials,
+                troops: seed.troops,
+                training: seed.training,
+                agriculture: seed.agriculture,
+                commerce: seed.commerce,
+                defense: seed.defense,
+                order: seed.order,
+                facilities: seed.facilities.clone(),
+                governor_id: seed.governor_id.clone(),
+                profile: None,
+            };
+            city.clamp_fields();
+            cities.insert(seed.id.clone(), city);
         }
 
         let mut officers = BTreeMap::new();
@@ -182,15 +184,18 @@ pub struct CitySeed {
     pub name: String,
     pub faction_id: FactionId,
     pub position: MapPosition,
+    pub level: u8,
     pub population: u32,
     pub gold: i32,
     pub food: i32,
+    pub materials: i32,
     pub troops: u32,
     pub training: u8,
     pub agriculture: u16,
     pub commerce: u16,
     pub defense: u16,
     pub order: u8,
+    pub facilities: Vec<CityFacility>,
     pub governor_id: Option<OfficerId>,
 }
 

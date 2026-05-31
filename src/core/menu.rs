@@ -248,7 +248,11 @@ pub(super) fn load_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
                                         game,
                                         format!("读取存档 {}", slot.display_name),
                                     ),
-                                    Err(error) => ui_state.message = error.to_string(),
+                                    Err(error) => {
+                                        let _ = ui_state.save_manager.delete_slot(&slot.slot_id);
+                                        refresh_saves(ui_state);
+                                        ui_state.message = format!("存档已失效，已丢弃: {error}");
+                                    }
                                 }
                             }
                             if ui.button("删除").clicked() {
