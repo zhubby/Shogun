@@ -412,6 +412,36 @@ pub fn official_rank_salary_bonus(rank: OfficialRank) -> i32 {
     }
 }
 
+pub fn official_rank_order(rank: OfficialRank) -> i16 {
+    match rank {
+        OfficialRank::WanShi => 10,
+        OfficialRank::ZhongErQianShi => 9,
+        OfficialRank::ErQianShi => 8,
+        OfficialRank::BiErQianShi => 7,
+        OfficialRank::QianShi => 6,
+        OfficialRank::LiuBaiShi => 5,
+        OfficialRank::BiLiuBaiShi => 4,
+        OfficialRank::SanBaiShi => 3,
+        OfficialRank::ErBaiShi => 2,
+        OfficialRank::BaiShi => 1,
+    }
+}
+
+pub fn official_rank_loyalty_bonus(rank: OfficialRank) -> u8 {
+    match rank {
+        OfficialRank::WanShi => 10,
+        OfficialRank::ZhongErQianShi => 8,
+        OfficialRank::ErQianShi => 7,
+        OfficialRank::BiErQianShi => 6,
+        OfficialRank::QianShi => 5,
+        OfficialRank::LiuBaiShi => 4,
+        OfficialRank::BiLiuBaiShi => 3,
+        OfficialRank::SanBaiShi => 2,
+        OfficialRank::ErBaiShi => 2,
+        OfficialRank::BaiShi => 1,
+    }
+}
+
 pub fn official_rank_label(rank: OfficialRank) -> &'static str {
     match rank {
         OfficialRank::WanShi => "万石",

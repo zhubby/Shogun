@@ -6,8 +6,8 @@ use super::history_db::{HistoricalCatalog, LifeEventKind};
 use super::ids::{CityId, FactionId, OfficerId};
 use super::model::*;
 use super::officer::{
-    Officer, OfficerStats, OfficerStatus, OfficialPostEffect, official_post_spec,
-    official_rank_salary_bonus,
+    Officer, OfficerStats, OfficerStatus, OfficialPostEffect, OfficialRank, official_post_spec,
+    official_rank_loyalty_bonus, official_rank_order, official_rank_salary_bonus,
 };
 use super::technology::*;
 use std::collections::{BTreeMap, BTreeSet};
@@ -138,9 +138,8 @@ pub fn appoint_official_post(
     officer_id: &str,
     office_id: &str,
 ) -> Result<(), CommandError> {
-    if official_post_spec(office_id).is_none() {
-        return Err(CommandError::Invalid(format!("官职 {office_id} 不存在")));
-    }
+    let new_spec = official_post_spec(office_id)
+        .ok_or_else(|| CommandError::Invalid(format!("官职 {office_id} 不存在")))?;
     let officer = state
         .officers
         .get(officer_id)
@@ -163,14 +162,25 @@ pub fn appoint_official_post(
             && other.id != officer_id
             && other.office_id.as_deref() == Some(office_id)
         {
+            apply_loyalty_delta(
+                &mut other.loyalty,
+                -i16::from(official_rank_loyalty_bonus(new_spec.rank)),
+            );
             other.office_id = None;
         }
     }
-    state
+    let officer = state
         .officers
         .get_mut(officer_id)
-        .ok_or_else(|| CommandError::Invalid(format!("武将 {officer_id} 不存在")))?
-        .office_id = Some(office_id.to_string());
+        .ok_or_else(|| CommandError::Invalid(format!("武将 {officer_id} 不存在")))?;
+    let old_rank = officer
+        .office_id
+        .as_deref()
+        .and_then(official_post_spec)
+        .map(|spec| spec.rank);
+    let loyalty_delta = appointment_loyalty_delta(old_rank, new_spec.rank);
+    apply_loyalty_delta(&mut officer.loyalty, loyalty_delta);
+    officer.office_id = Some(office_id.to_string());
     Ok(())
 }
 
@@ -189,8 +199,26 @@ pub fn dismiss_official_post(
             officer.name
         )));
     }
+    if let Some(spec) = officer.office_id.as_deref().and_then(official_post_spec) {
+        apply_loyalty_delta(
+            &mut officer.loyalty,
+            -i16::from(official_rank_loyalty_bonus(spec.rank)),
+        );
+    }
     officer.office_id = None;
     Ok(())
+}
+
+fn appointment_loyalty_delta(old_rank: Option<OfficialRank>, new_rank: OfficialRank) -> i16 {
+    let new_bonus = i16::from(official_rank_loyalty_bonus(new_rank));
+    let Some(old_rank) = old_rank else {
+        return new_bonus;
+    };
+    (official_rank_order(new_rank) - official_rank_order(old_rank)) * 2
+}
+
+fn apply_loyalty_delta(loyalty: &mut u8, delta: i16) {
+    *loyalty = (i16::from(*loyalty) + delta).clamp(0, 100) as u8;
 }
 
 fn validate_command(

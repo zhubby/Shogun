@@ -497,10 +497,12 @@ fn official_posts_are_unique_within_faction() {
     let mut game = sample_game();
 
     appoint_official_post(&mut game, "liu_bei", "liu_bei", "taifu").unwrap();
+    let liu_bei_loyalty = game.officers["liu_bei"].loyalty;
     appoint_official_post(&mut game, "liu_bei", "guan_yu", "taifu").unwrap();
 
     assert_eq!(game.officers["liu_bei"].office_id, None);
     assert_eq!(game.officers["guan_yu"].office_id.as_deref(), Some("taifu"));
+    assert!(game.officers["liu_bei"].loyalty < liu_bei_loyalty);
 }
 
 #[test]
@@ -529,6 +531,45 @@ fn dismiss_official_post_restores_base_salary() {
         officer_monthly_salary(officer),
         officer_base_monthly_salary(officer)
     );
+}
+
+#[test]
+fn appointing_official_post_increases_loyalty_by_rank() {
+    let mut game = sample_game();
+    game.officers.get_mut("jian_yong").unwrap().loyalty = 70;
+
+    appoint_official_post(&mut game, "liu_bei", "jian_yong", "taifu").unwrap();
+
+    assert_eq!(game.officers["jian_yong"].loyalty, 80);
+}
+
+#[test]
+fn promotion_and_demotion_adjust_loyalty() {
+    let mut game = sample_game();
+    game.officers.get_mut("jian_yong").unwrap().loyalty = 70;
+
+    appoint_official_post(&mut game, "liu_bei", "jian_yong", "zhubu").unwrap();
+    let after_first_post = game.officers["jian_yong"].loyalty;
+    appoint_official_post(&mut game, "liu_bei", "jian_yong", "taifu").unwrap();
+    let after_promotion = game.officers["jian_yong"].loyalty;
+    appoint_official_post(&mut game, "liu_bei", "jian_yong", "zhubu").unwrap();
+
+    assert_eq!(after_first_post, 72);
+    assert!(after_promotion > after_first_post);
+    assert!(game.officers["jian_yong"].loyalty < after_promotion);
+}
+
+#[test]
+fn dismissal_decreases_loyalty_by_rank_bonus() {
+    let mut game = sample_game();
+    game.officers.get_mut("jian_yong").unwrap().loyalty = 70;
+    appoint_official_post(&mut game, "liu_bei", "jian_yong", "taifu").unwrap();
+    let after_appointment = game.officers["jian_yong"].loyalty;
+
+    dismiss_official_post(&mut game, "liu_bei", "jian_yong").unwrap();
+
+    assert_eq!(after_appointment, 80);
+    assert_eq!(game.officers["jian_yong"].loyalty, 70);
 }
 
 #[test]
