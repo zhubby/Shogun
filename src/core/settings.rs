@@ -4,7 +4,7 @@ use bevy_egui::egui;
 use super::HUD_MARGIN;
 use super::display_settings::{DisplayMode, DisplayResolution, DisplaySettings};
 use super::state::GameUiState;
-use super::style::{war_gold, war_panel_frame, war_text_muted};
+use super::style::{modal_title_bar, war_gold, war_panel_frame, war_text_muted};
 
 pub(super) fn settings_modal(ctx: &egui::Context, ui_state: &mut GameUiState) -> bool {
     let screen = ctx.content_rect();
@@ -31,14 +31,9 @@ pub(super) fn settings_modal(ctx: &egui::Context, ui_state: &mut GameUiState) ->
         .show(ctx, |ui| {
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(modal_width);
-                ui.horizontal(|ui| {
-                    ui.heading(egui::RichText::new("显示设置").color(war_gold()));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("关闭").clicked() {
-                            ui_state.settings_open = false;
-                        }
-                    });
-                });
+                if modal_title_bar(ui, "显示设置") {
+                    ui_state.settings_open = false;
+                }
                 ui.separator();
                 apply_settings |= settings_controls(ui, ui_state);
             });

@@ -5,8 +5,8 @@ use super::model::{
     SAVE_VERSION, diplomacy_key,
 };
 use super::officer::{
-    Officer, OfficerCatalog, OfficerGender, OfficerProfile, OfficerRelationship,
-    OfficerRelationshipKind, OfficerStats, OfficerStatus,
+    Officer, OfficerCatalog, OfficerGender, OfficerProfile, OfficerProfileUpdate,
+    OfficerRelationship, OfficerRelationshipKind, OfficerStats, OfficerStatus,
 };
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -152,6 +152,72 @@ impl SqliteHistoricalCatalog {
         officer_id: &str,
     ) -> Result<Vec<OfficerRelationship>, HistoryDbError> {
         self.block_on(async { officer_relationships(&self.pool, officer_id).await })
+    }
+
+    pub fn update_officer_profile(
+        &self,
+        officer_id: &str,
+        update: &OfficerProfileUpdate,
+    ) -> Result<OfficerProfile, HistoryDbError> {
+        validate_officer_profile_update(update)?;
+        let name = update.name.trim();
+        let courtesy_name = trimmed_optional(&update.courtesy_name);
+        let native_place = trimmed_optional(&update.native_place);
+        let biography = update.biography.trim();
+        let notes = update.notes.trim();
+        let tags = update
+            .tags
+            .iter()
+            .map(|tag| tag.trim())
+            .filter(|tag| !tag.is_empty())
+            .collect::<Vec<_>>()
+            .join(",");
+        let rows_affected = self.block_on(async {
+            sqlx::query(
+                "UPDATE officers
+                 SET name = ?1,
+                     courtesy_name = ?2,
+                     native_place = ?3,
+                     birth_year = ?4,
+                     death_year = ?5,
+                     gender = ?6,
+                     leadership = ?7,
+                     strength = ?8,
+                     intelligence = ?9,
+                     politics = ?10,
+                     charm = ?11,
+                     tags = ?12,
+                     confidence = ?13,
+                     biography = ?14,
+                     notes = ?15
+                 WHERE id = ?16",
+            )
+            .bind(name)
+            .bind(courtesy_name.as_deref())
+            .bind(native_place.as_deref())
+            .bind(update.birth_year)
+            .bind(update.death_year)
+            .bind(gender_value(&update.gender))
+            .bind(i64::from(update.stats.leadership))
+            .bind(i64::from(update.stats.strength))
+            .bind(i64::from(update.stats.intelligence))
+            .bind(i64::from(update.stats.politics))
+            .bind(i64::from(update.stats.charm))
+            .bind(tags)
+            .bind(confidence_value(&update.confidence))
+            .bind(biography)
+            .bind(notes)
+            .bind(officer_id)
+            .execute(&self.pool)
+            .await
+            .map(|result| result.rows_affected())
+            .map_err(HistoryDbError::Sqlx)
+        })?;
+        if rows_affected == 0 {
+            return Err(HistoryDbError::Invalid(format!("武将 {officer_id} 不存在")));
+        }
+        self.officer_profile(officer_id)?
+            .ok_or_else(|| HistoryDbError::Invalid(format!("武将 {officer_id} 不存在")))
     }
 }
 
@@ -778,11 +844,54 @@ fn parse_confidence(value: &str) -> SourceConfidence {
     }
 }
 
+fn confidence_value(confidence: &SourceConfidence) -> &'static str {
+    match confidence {
+        SourceConfidence::High => "High",
+        SourceConfidence::Medium => "Medium",
+        SourceConfidence::Low => "Low",
+    }
+}
+
 fn parse_gender(value: &str) -> OfficerGender {
     match value {
         "Female" => OfficerGender::Female,
         _ => OfficerGender::Male,
     }
+}
+
+fn gender_value(gender: &OfficerGender) -> &'static str {
+    match gender {
+        OfficerGender::Male => "Male",
+        OfficerGender::Female => "Female",
+    }
+}
+
+fn trimmed_optional(value: &Option<String>) -> Option<String> {
+    value
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+fn validate_officer_profile_update(update: &OfficerProfileUpdate) -> Result<(), HistoryDbError> {
+    if update.name.trim().is_empty() {
+        return Err(HistoryDbError::Invalid("武将姓名不能为空".to_string()));
+    }
+    for (label, value) in [
+        ("统率", update.stats.leadership),
+        ("武力", update.stats.strength),
+        ("智力", update.stats.intelligence),
+        ("政治", update.stats.politics),
+        ("魅力", update.stats.charm),
+    ] {
+        if !(1..=100).contains(&value) {
+            return Err(HistoryDbError::Invalid(format!(
+                "{label} 必须在 1 到 100 之间"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn parse_relationship_kind(value: &str) -> OfficerRelationshipKind {

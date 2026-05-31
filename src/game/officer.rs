@@ -71,6 +71,39 @@ pub struct OfficerProfile {
     pub notes: String,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct OfficerProfileUpdate {
+    pub name: String,
+    pub courtesy_name: Option<String>,
+    pub native_place: Option<String>,
+    pub birth_year: Option<i32>,
+    pub death_year: Option<i32>,
+    pub gender: OfficerGender,
+    pub stats: OfficerStats,
+    pub tags: Vec<String>,
+    pub confidence: SourceConfidence,
+    pub biography: String,
+    pub notes: String,
+}
+
+impl OfficerProfileUpdate {
+    pub fn from_profile(profile: &OfficerProfile) -> Self {
+        Self {
+            name: profile.name.clone(),
+            courtesy_name: profile.courtesy_name.clone(),
+            native_place: profile.native_place.clone(),
+            birth_year: profile.birth_year,
+            death_year: profile.death_year,
+            gender: profile.gender.clone(),
+            stats: profile.stats,
+            tags: profile.tags.clone(),
+            confidence: profile.confidence.clone(),
+            biography: profile.biography.clone(),
+            notes: profile.notes.clone(),
+        }
+    }
+}
+
 pub trait OfficerProfileView {
     fn id(&self) -> &str;
     fn name(&self) -> &str;

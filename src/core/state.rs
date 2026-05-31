@@ -27,6 +27,11 @@ pub(super) struct GameUiState {
     pub(super) officer_settings_open: bool,
     pub(super) officer_settings_game: Option<GameState>,
     pub(super) officer_settings_filters: OfficerBrowserFilters,
+    pub(super) officer_settings_editable: bool,
+    pub(super) officer_settings_selected_id: Option<OfficerId>,
+    pub(super) officer_edit_open: bool,
+    pub(super) officer_edit_draft: Option<OfficerEditDraft>,
+    pub(super) officer_edit_error: Option<String>,
     pub(super) game: Option<GameState>,
     pub(super) selected_faction_id: FactionId,
     pub(super) selected_city_id: Option<CityId>,
@@ -98,6 +103,11 @@ impl GameUiState {
             officer_settings_open: false,
             officer_settings_game: None,
             officer_settings_filters: OfficerBrowserFilters::default(),
+            officer_settings_editable: false,
+            officer_settings_selected_id: None,
+            officer_edit_open: false,
+            officer_edit_draft: None,
+            officer_edit_error: None,
             game: None,
             selected_faction_id,
             selected_city_id: None,
@@ -286,5 +296,54 @@ pub(super) struct OfficerBrowserFilters {
 impl OfficerBrowserFilters {
     pub(super) fn reset(&mut self) {
         *self = Self::default();
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct OfficerEditDraft {
+    pub(super) id: OfficerId,
+    pub(super) name: String,
+    pub(super) courtesy_name: String,
+    pub(super) native_place: String,
+    pub(super) birth_year: String,
+    pub(super) death_year: String,
+    pub(super) gender: OfficerGender,
+    pub(super) leadership: u8,
+    pub(super) strength: u8,
+    pub(super) intelligence: u8,
+    pub(super) politics: u8,
+    pub(super) charm: u8,
+    pub(super) tags: String,
+    pub(super) confidence: SourceConfidence,
+    pub(super) biography: String,
+    pub(super) notes: String,
+}
+
+impl OfficerEditDraft {
+    pub(super) fn from_profile(profile: &OfficerProfile) -> Self {
+        Self {
+            id: profile.id.clone(),
+            name: profile.name.clone(),
+            courtesy_name: profile.courtesy_name.clone().unwrap_or_default(),
+            native_place: profile.native_place.clone().unwrap_or_default(),
+            birth_year: profile
+                .birth_year
+                .map(|year| year.to_string())
+                .unwrap_or_default(),
+            death_year: profile
+                .death_year
+                .map(|year| year.to_string())
+                .unwrap_or_default(),
+            gender: profile.gender.clone(),
+            leadership: profile.stats.leadership,
+            strength: profile.stats.strength,
+            intelligence: profile.stats.intelligence,
+            politics: profile.stats.politics,
+            charm: profile.stats.charm,
+            tags: profile.tags.join(","),
+            confidence: profile.confidence.clone(),
+            biography: profile.biography.clone(),
+            notes: profile.notes.clone(),
+        }
     }
 }

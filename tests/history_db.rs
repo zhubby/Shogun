@@ -164,6 +164,117 @@ fn officer_profiles_include_gender_biography_sources_and_relationships() {
 }
 
 #[test]
+fn update_officer_profile_persists_basic_fields() {
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
+    let profile = catalog.officer_profile("liu_bei").unwrap().unwrap();
+    let mut update = OfficerProfileUpdate::from_profile(&profile);
+    update.name = "刘玄德".to_string();
+    update.courtesy_name = Some("玄德公".to_string());
+    update.native_place = None;
+    update.birth_year = Some(160);
+    update.death_year = None;
+    update.gender = OfficerGender::Male;
+    update.stats = OfficerStats {
+        leadership: 88,
+        strength: 77,
+        intelligence: 81,
+        politics: 83,
+        charm: 99,
+    };
+    update.tags = vec!["ruler".to_string(), "edited".to_string()];
+    update.confidence = SourceConfidence::Medium;
+    update.biography = "编辑后的刘备生平摘要".to_string();
+    update.notes = "编辑测试备注".to_string();
+
+    let saved = catalog.update_officer_profile("liu_bei", &update).unwrap();
+    let loaded = catalog.officer_profile("liu_bei").unwrap().unwrap();
+
+    assert_eq!(saved, loaded);
+    assert_eq!(loaded.name, "刘玄德");
+    assert_eq!(loaded.courtesy_name.as_deref(), Some("玄德公"));
+    assert_eq!(loaded.native_place, None);
+    assert_eq!(loaded.birth_year, Some(160));
+    assert_eq!(loaded.death_year, None);
+    assert_eq!(loaded.stats.leadership, 88);
+    assert_eq!(loaded.tags, ["ruler", "edited"]);
+    assert_eq!(loaded.confidence, SourceConfidence::Medium);
+    assert_eq!(loaded.biography, "编辑后的刘备生平摘要");
+    assert_eq!(loaded.notes, "编辑测试备注");
+}
+
+#[test]
+fn update_officer_profile_rejects_invalid_values() {
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
+    let profile = catalog.officer_profile("liu_bei").unwrap().unwrap();
+
+    let mut blank_name = OfficerProfileUpdate::from_profile(&profile);
+    blank_name.name = "   ".to_string();
+    assert!(
+        catalog
+            .update_officer_profile("liu_bei", &blank_name)
+            .is_err()
+    );
+
+    let mut zero_stat = OfficerProfileUpdate::from_profile(&profile);
+    zero_stat.stats.leadership = 0;
+    assert!(
+        catalog
+            .update_officer_profile("liu_bei", &zero_stat)
+            .is_err()
+    );
+}
+
+#[test]
+fn update_officer_profile_keeps_ids_relationships_sources_and_events() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("database.sqlite");
+    build_history_database(&path).unwrap();
+
+    let before = runtime().block_on(async {
+        let pool = open_pool(&path).await;
+        let counts = (
+            query_count(&pool, "officer_external_ids").await,
+            query_count(&pool, "officer_relationships").await,
+            query_count(&pool, "officer_life_events").await,
+        );
+        pool.close().await;
+        counts
+    });
+
+    let catalog = SqliteHistoricalCatalog::open_or_create(&path).unwrap();
+    let profile = catalog.officer_profile("liu_bei").unwrap().unwrap();
+    let mut update = OfficerProfileUpdate::from_profile(&profile);
+    update.name = "刘备编辑".to_string();
+    catalog.update_officer_profile("liu_bei", &update).unwrap();
+    drop(catalog);
+
+    runtime().block_on(async {
+        let pool = open_pool(&path).await;
+        let after = (
+            query_count(&pool, "officer_external_ids").await,
+            query_count(&pool, "officer_relationships").await,
+            query_count(&pool, "officer_life_events").await,
+        );
+        assert_eq!(after, before);
+        assert!(
+            sqlx::query("UPDATE officers SET gender = 'Unknown' WHERE id = 'liu_bei'")
+                .execute(&pool)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            sqlx::query("SELECT id FROM officers WHERE name = '刘备编辑'")
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+                .get::<String, _>("id"),
+            "liu_bei"
+        );
+        pool.close().await;
+    });
+}
+
+#[test]
 fn historical_relationships_include_curated_family_and_enemy_links() {
     let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
 

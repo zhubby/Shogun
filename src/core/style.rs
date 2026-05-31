@@ -76,6 +76,37 @@ pub(super) fn war_border() -> egui::Color32 {
     egui::Color32::from_rgb(118, 85, 48)
 }
 
+pub(super) fn modal_title_bar(ui: &mut egui::Ui, title: &str) -> bool {
+    let row_width = ui.available_width();
+    let button_size = egui::vec2(30.0, 30.0);
+    let mut close_clicked = false;
+
+    ui.allocate_ui_with_layout(
+        egui::vec2(row_width, 34.0),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.set_width(row_width);
+            ui.heading(egui::RichText::new(title).color(war_gold()));
+            ui.add_space((ui.available_width() - button_size.x).max(0.0));
+            close_clicked = close_icon_button(ui, button_size).clicked();
+        },
+    );
+
+    close_clicked
+}
+
+fn close_icon_button(ui: &mut egui::Ui, size: egui::Vec2) -> egui::Response {
+    ui.add_sized(
+        size,
+        egui::Button::new(
+            egui::RichText::new(egui_phosphor::regular::X)
+                .size(18.0)
+                .color(war_gold()),
+        ),
+    )
+    .on_hover_text("关闭")
+}
+
 pub(super) fn draw_menu_background(painter: &egui::Painter, rect: egui::Rect) {
     draw_strategy_map_background(painter, rect);
     painter.rect_filled(
@@ -154,23 +185,23 @@ pub(super) fn configure_egui_fonts(ctx: &egui::Context, ui_state: &mut GameUiSta
     }
     ui_state.egui_font_configured = true;
 
-    let Some(bytes) = load_cjk_font_bytes() else {
-        return;
-    };
-    ctx.add_font(egui::epaint::text::FontInsert::new(
-        "shogun_cjk",
-        egui::FontData::from_owned(bytes),
-        vec![
-            egui::epaint::text::InsertFontFamily {
-                family: egui::FontFamily::Proportional,
-                priority: egui::epaint::text::FontPriority::Lowest,
-            },
-            egui::epaint::text::InsertFontFamily {
-                family: egui::FontFamily::Monospace,
-                priority: egui::epaint::text::FontPriority::Lowest,
-            },
-        ],
-    ));
+    let mut fonts = egui::FontDefinitions::default();
+    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+
+    if let Some(bytes) = load_cjk_font_bytes() {
+        fonts.font_data.insert(
+            "shogun_cjk".to_string(),
+            egui::FontData::from_owned(bytes).into(),
+        );
+        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            family.push("shogun_cjk".to_string());
+        }
+        if let Some(family) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+            family.push("shogun_cjk".to_string());
+        }
+    }
+
+    ctx.set_fonts(fonts);
 }
 
 pub(super) fn load_cjk_font_bytes() -> Option<Vec<u8>> {
