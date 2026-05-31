@@ -11,6 +11,7 @@ use super::officer::{
     Officer, OfficerCatalog, OfficerGender, OfficerProfile, OfficerProfileUpdate,
     OfficerRelationship, OfficerRelationshipKind, OfficerStats, OfficerStatus,
 };
+use super::technology::FactionTechnologyState;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -622,6 +623,10 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
             apply_initial_life_event(&mut officer_states, &cities, &factions, &profile, &event);
         }
         clean_invalid_governors(&mut cities, &officer_states);
+        let technologies = factions
+            .keys()
+            .map(|faction_id| (faction_id.clone(), FactionTechnologyState::default()))
+            .collect();
 
         Ok(GameState {
             version: SAVE_VERSION,
@@ -638,6 +643,7 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
             diplomacy,
             pending_commands: Vec::new(),
             army_movements: Vec::new(),
+            technologies,
             applied_event_ids,
             reports: Vec::new(),
             status: GameStatus::Running,

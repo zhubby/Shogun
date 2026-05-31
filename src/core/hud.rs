@@ -6,12 +6,15 @@ use super::actions::{
 };
 use super::city_intel::city_summary_intel;
 use super::city_panel::selected_city_panel;
-use super::labels::officer_gender_label;
+use super::labels::{officer_gender_label, technology_branch_label};
 use super::map::{map_panel, reset_map_view, zoom_map};
 use super::state::{
     GameUiState, OfficerBrowserFilters, OfficerGenderFilter, OfficerStatusFilter, Screen,
 };
-use super::style::{modal_title_bar, war_bar_frame, war_gold, war_panel_frame, war_text_muted};
+use super::style::{
+    modal_title_bar, war_bar_frame, war_danger, war_gold, war_panel_frame, war_sub_panel_frame,
+    war_success, war_text_muted, war_warning,
+};
 use super::{HUD_MARGIN, HUD_TOP_HEIGHT, HUD_TOP_OFFSET, MAP_ZOOM_STEP};
 
 pub(super) fn in_game(ctx: &egui::Context, ui_state: &mut GameUiState) {
@@ -35,6 +38,7 @@ pub(super) fn in_game_hud(ctx: &egui::Context, ui_state: &mut GameUiState) {
     bottom_map_actions_hud(ctx, ui_state);
     officer_browser_hud(ctx, ui_state, screen);
     retainer_hud(ctx, ui_state, screen);
+    technology_hud(ctx, ui_state, screen);
 }
 
 pub(super) fn top_status_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
@@ -156,9 +160,253 @@ pub(super) fn bottom_map_actions_hud(ctx: &egui::Context, ui_state: &mut GameUiS
                     if ui.button(retainer_label).clicked() {
                         ui_state.retainers_open = !ui_state.retainers_open;
                     }
+
+                    let technology_label = if ui_state.technology_open {
+                        "收起科技"
+                    } else {
+                        "科技"
+                    };
+                    if ui.button(technology_label).clicked() {
+                        ui_state.technology_open = !ui_state.technology_open;
+                    }
                 });
             });
         });
+}
+
+pub(super) fn technology_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
+    if !ui_state.technology_open {
+        return;
+    }
+
+    let width = (screen.width() * 0.84).clamp(780.0, 1120.0);
+    let height = (screen.height() * 0.78).clamp(500.0, 720.0);
+    egui::Area::new(egui::Id::new("hud_technology"))
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            war_panel_frame().show(ui, |ui| {
+                ui.set_width(width);
+                ui.set_min_height(height);
+                if modal_title_bar(ui, "科技") {
+                    ui_state.technology_open = false;
+                }
+                ui.separator();
+                technology_panel(ui, ui_state, width, height);
+            });
+        });
+}
+
+fn technology_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, width: f32, height: f32) {
+    let Some(game) = ui_state.game.as_ref().cloned() else {
+        ui.label("当前没有剧本局面。");
+        return;
+    };
+    let branch = ui_state.selected_technology_branch;
+    if technology_spec(ui_state.selected_technology_id).branch != branch {
+        ui_state.selected_technology_id = technology_specs_for_branch(branch)
+            .next()
+            .map(|spec| spec.id)
+            .unwrap_or(TechnologyId::MilitiaDrill);
+    }
+
+    ui.horizontal(|ui| {
+        for branch in [TechnologyBranch::Military, TechnologyBranch::Domestic] {
+            if ui
+                .selectable_label(
+                    ui_state.selected_technology_branch == branch,
+                    technology_branch_label(branch),
+                )
+                .clicked()
+            {
+                ui_state.selected_technology_branch = branch;
+                ui_state.selected_technology_id = technology_specs_for_branch(branch)
+                    .next()
+                    .map(|spec| spec.id)
+                    .unwrap_or(ui_state.selected_technology_id);
+            }
+        }
+    });
+    ui.add_space(8.0);
+
+    ui.columns(2, |columns| {
+        columns[0].set_width(width * 0.46);
+        war_sub_panel_frame().show(&mut columns[0], |ui| {
+            ui.label(egui::RichText::new("科技树").color(war_gold()).strong());
+            ui.add_space(6.0);
+            technology_tree(ui, ui_state, &game, height - 118.0);
+        });
+
+        war_sub_panel_frame().show(&mut columns[1], |ui| {
+            ui.label(egui::RichText::new("详情").color(war_gold()).strong());
+            ui.add_space(6.0);
+            technology_detail(ui, ui_state, &game);
+        });
+    });
+}
+
+fn technology_tree(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    game: &GameState,
+    max_height: f32,
+) {
+    let faction_state = faction_technology_state(game, &game.player_faction_id);
+    egui::ScrollArea::vertical()
+        .id_salt("technology_tree")
+        .max_height(max_height.max(320.0))
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for spec in technology_specs_for_branch(ui_state.selected_technology_branch) {
+                let selected = ui_state.selected_technology_id == spec.id;
+                let status = technology_status_label(game, faction_state, spec);
+                let text = format!(
+                    "{}  [{}]  {}回合 / {}金",
+                    spec.name, status, spec.turns, spec.gold_cost
+                );
+                let response = ui.selectable_label(selected, text);
+                if response.clicked() {
+                    ui_state.selected_technology_id = spec.id;
+                }
+                response.on_hover_text(spec.effect);
+                if !spec.prerequisites.is_empty() {
+                    ui.add_space(1.0);
+                    ui.colored_label(
+                        war_text_muted(),
+                        format!("  前置: {}", prerequisite_names(spec).join("、")),
+                    );
+                }
+                ui.add_space(5.0);
+            }
+        });
+}
+
+fn technology_detail(ui: &mut egui::Ui, ui_state: &mut GameUiState, game: &GameState) {
+    let faction_id = game.player_faction_id.clone();
+    let spec = technology_spec(ui_state.selected_technology_id);
+    let faction_state = faction_technology_state(game, &faction_id);
+    let progress = faction_state
+        .map(|state| technology_progress(state, spec.id))
+        .unwrap_or_default();
+    let total_gold = faction_total_gold(game, &faction_id);
+    let cost = effective_technology_cost(game, &faction_id, spec.id);
+    let missing = missing_prerequisite_names(faction_state, spec.id);
+    let is_completed = faction_state.is_some_and(|state| state.completed.contains(&spec.id));
+    let is_funded = faction_state.is_some_and(|state| state.funded.contains(&spec.id));
+    let is_active = faction_state.is_some_and(|state| state.active == Some(spec.id));
+
+    ui.heading(egui::RichText::new(spec.name).color(war_gold()));
+    ui.label(format!(
+        "{}科技  ·  {} 回合  ·  立项 {} 金",
+        technology_branch_label(spec.branch),
+        spec.turns,
+        cost
+    ));
+    if cost != spec.gold_cost {
+        ui.colored_label(
+            war_success(),
+            format!("度支尚书减免后原价 {} 金", spec.gold_cost),
+        );
+    }
+    ui.label(format!("当前势力金钱: {total_gold}"));
+    ui.label(format!("研发进度: {progress}/{}", spec.turns));
+    ui.separator();
+
+    if spec.prerequisites.is_empty() {
+        ui.label("前置: 无");
+    } else if missing.is_empty() {
+        ui.colored_label(
+            war_success(),
+            format!("前置: {}", prerequisite_names(spec).join("、")),
+        );
+    } else {
+        ui.colored_label(war_warning(), format!("缺少前置: {}", missing.join("、")));
+    }
+    ui.add_space(6.0);
+    ui.label("效果");
+    ui.colored_label(war_text_muted(), spec.effect);
+    ui.separator();
+
+    if is_completed {
+        ui.add_enabled(false, egui::Button::new("已完成"));
+        return;
+    }
+    if is_active {
+        ui.add_enabled(
+            false,
+            egui::Button::new(format!("研发中 {progress}/{}", spec.turns)),
+        );
+        return;
+    }
+    if !missing.is_empty() {
+        ui.add_enabled(false, egui::Button::new("前置未完成"));
+        return;
+    }
+    if is_funded {
+        if ui.button("继续研发").clicked() {
+            start_player_research(ui_state, spec.id);
+        }
+        return;
+    }
+    if total_gold < cost {
+        ui.colored_label(war_danger(), format!("还缺 {} 金", cost - total_gold));
+        ui.add_enabled(false, egui::Button::new("金钱不足，无法立项"));
+        return;
+    }
+    if ui.button("立项研发").clicked() {
+        start_player_research(ui_state, spec.id);
+    }
+}
+
+fn start_player_research(ui_state: &mut GameUiState, technology_id: TechnologyId) {
+    let Some(game) = ui_state.game.as_mut() else {
+        ui_state.message = "尚未开始游戏".to_string();
+        return;
+    };
+    let faction_id = game.player_faction_id.clone();
+    let spec = technology_spec(technology_id);
+    match start_research(game, &faction_id, technology_id) {
+        Ok(outcome) if outcome.resumed => {
+            ui_state.message = format!("继续研发 {}", spec.name);
+        }
+        Ok(outcome) => {
+            ui_state.message = format!("已立项研发 {}，消耗 {} 金", spec.name, outcome.cost_paid);
+        }
+        Err(error) => ui_state.message = error.to_string(),
+    }
+}
+
+fn technology_status_label(
+    game: &GameState,
+    faction_state: Option<&FactionTechnologyState>,
+    spec: &TechnologySpec,
+) -> &'static str {
+    if faction_state.is_some_and(|state| state.completed.contains(&spec.id)) {
+        return "已完成";
+    }
+    if faction_state.is_some_and(|state| state.active == Some(spec.id)) {
+        return "研发中";
+    }
+    if faction_state.is_some_and(|state| state.funded.contains(&spec.id)) {
+        return "已付款暂停";
+    }
+    if !missing_prerequisite_names(faction_state, spec.id).is_empty() {
+        return "未解锁";
+    }
+    if faction_total_gold(game, &game.player_faction_id)
+        >= effective_technology_cost(game, &game.player_faction_id, spec.id)
+    {
+        "可立项"
+    } else {
+        "金钱不足"
+    }
+}
+
+fn prerequisite_names(spec: &TechnologySpec) -> Vec<&'static str> {
+    spec.prerequisites
+        .iter()
+        .map(|id| technology_spec(*id).name)
+        .collect()
 }
 
 pub(super) fn city_list_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {

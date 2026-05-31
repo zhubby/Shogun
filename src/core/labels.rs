@@ -34,6 +34,13 @@ pub(super) fn facility_kind_label(kind: FacilityKind) -> &'static str {
     }
 }
 
+pub(super) fn technology_branch_label(branch: TechnologyBranch) -> &'static str {
+    match branch {
+        TechnologyBranch::Military => "军事",
+        TechnologyBranch::Domestic => "内政",
+    }
+}
+
 pub(super) fn confidence_label(confidence: &SourceConfidence) -> &'static str {
     match confidence {
         SourceConfidence::High => "高",

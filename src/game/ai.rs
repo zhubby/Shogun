@@ -8,6 +8,7 @@ use super::history_db::HistoricalCatalog;
 use super::ids::{CityId, FactionId};
 use super::model::*;
 use super::officer::Officer;
+use super::technology::ensure_faction_technology_states;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -184,6 +185,7 @@ impl AiProvider for RuleBasedAiProvider {
 }
 
 pub fn finish_turn_with_ai<P: AiProvider>(state: &mut GameState, provider: &P) -> TurnReport {
+    ensure_faction_technology_states(state);
     let commands = pending_and_ai_commands(state, provider);
     resolve_command_batch(state, commands)
 }
@@ -193,6 +195,7 @@ pub fn finish_turn_with_ai_with_history<P: AiProvider, C: HistoricalCatalog>(
     provider: &P,
     catalog: &C,
 ) -> TurnReport {
+    ensure_faction_technology_states(state);
     let commands = pending_and_ai_commands(state, provider);
     resolve_command_batch_with_history(state, commands, catalog)
 }

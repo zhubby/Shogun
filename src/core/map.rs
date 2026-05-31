@@ -121,8 +121,8 @@ fn draw_map_road(
     b: egui::Pos2,
     selected: bool,
 ) {
-    let points = road_curve_points(road, a, b);
-    if points_screen_bounds(&points).is_some_and(|bounds| !bounds.intersects(painter.clip_rect())) {
+    let bounds = egui::Rect::from_two_pos(a, b).expand(if selected { 10.0 } else { 7.0 });
+    if !bounds.intersects(painter.clip_rect()) {
         return;
     }
 
@@ -133,67 +133,27 @@ fn draw_map_road(
     } else {
         egui::Color32::from_rgba_unmultiplied(166, 135, 83, 170)
     };
-    painter.add(egui::Shape::line(
-        points.clone(),
+    painter.line_segment(
+        [a, b],
         egui::Stroke::new(
             shadow_width,
             egui::Color32::from_rgba_unmultiplied(10, 12, 10, 108),
         ),
-    ));
-    painter.add(egui::Shape::line(
-        points.clone(),
-        egui::Stroke::new(road_width, road_color),
-    ));
+    );
+    painter.line_segment([a, b], egui::Stroke::new(road_width, road_color));
 
     if selected {
-        draw_road_distance_label(painter, game, road, &points);
+        draw_road_distance_label(painter, game, road, a, b);
     }
-}
-
-fn road_curve_points(road: &Road, a: egui::Pos2, b: egui::Pos2) -> Vec<egui::Pos2> {
-    let delta = b - a;
-    let length = delta.length();
-    if length <= f32::EPSILON {
-        return vec![a, b];
-    }
-
-    let direction = delta / length;
-    let normal = egui::vec2(-direction.y, direction.x);
-    let sign = if road.from.as_str() <= road.to.as_str() {
-        1.0
-    } else {
-        -1.0
-    };
-    let bend = (length * 0.18).clamp(18.0, 72.0) * sign;
-    let c1 = a + delta * 0.34 + normal * bend;
-    let c2 = a + delta * 0.66 + normal * bend;
-
-    (0..=24)
-        .map(|index| {
-            let t = index as f32 / 24.0;
-            cubic_bezier(a, c1, c2, b, t)
-        })
-        .collect()
-}
-
-fn cubic_bezier(a: egui::Pos2, b: egui::Pos2, c: egui::Pos2, d: egui::Pos2, t: f32) -> egui::Pos2 {
-    let mt = 1.0 - t;
-    let point = a.to_vec2() * mt.powi(3)
-        + b.to_vec2() * 3.0 * mt.powi(2) * t
-        + c.to_vec2() * 3.0 * mt * t.powi(2)
-        + d.to_vec2() * t.powi(3);
-    egui::pos2(point.x, point.y)
 }
 
 fn draw_road_distance_label(
     painter: &egui::Painter,
     game: &GameState,
     road: &Road,
-    points: &[egui::Pos2],
+    a: egui::Pos2,
+    b: egui::Pos2,
 ) {
-    let Some(label_pos) = points.get(points.len() / 2).copied() else {
-        return;
-    };
     let Some(distance_li) = game.road_distance_li(&road.from, &road.to) else {
         return;
     };
@@ -202,6 +162,7 @@ fn draw_road_distance_label(
     };
     let text = format!("{distance_li}里 / {travel_months}月");
     let width = (text.chars().count() as f32 * 8.5 + 18.0).max(74.0);
+    let label_pos = a + (b - a) * 0.5;
     let rect =
         egui::Rect::from_center_size(label_pos + egui::vec2(0.0, -12.0), egui::vec2(width, 22.0));
     painter.rect(

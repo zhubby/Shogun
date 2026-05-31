@@ -301,6 +301,140 @@ fn monthly_economy_applies_facilities_upkeep_growth_and_salaries() {
 }
 
 #[test]
+fn technology_research_pays_full_cost_up_front() {
+    let mut game = sample_game();
+    let before_total = faction_total_gold(&game, "liu_bei");
+
+    let outcome = start_research(&mut game, "liu_bei", TechnologyId::MilitiaDrill).unwrap();
+
+    assert_eq!(outcome.cost_paid, 90);
+    assert_eq!(faction_total_gold(&game, "liu_bei"), before_total - 90);
+    let state = faction_technology_state(&game, "liu_bei").unwrap();
+    assert_eq!(state.active, Some(TechnologyId::MilitiaDrill));
+    assert!(state.funded.contains(&TechnologyId::MilitiaDrill));
+}
+
+#[test]
+fn technology_research_rejects_insufficient_gold_without_progress() {
+    let mut game = sample_game();
+    for city in game
+        .cities
+        .values_mut()
+        .filter(|city| city.faction_id == "liu_bei")
+    {
+        city.gold = 0;
+    }
+
+    let result = start_research(&mut game, "liu_bei", TechnologyId::MilitiaDrill);
+
+    assert!(matches!(
+        result,
+        Err(TechnologyError::InsufficientGold {
+            required: 90,
+            available: 0
+        })
+    ));
+    let state = faction_technology_state(&game, "liu_bei").unwrap();
+    assert!(state.active.is_none());
+    assert!(state.funded.is_empty());
+    assert!(state.progress.is_empty());
+}
+
+#[test]
+fn funded_technology_can_resume_without_repaying() {
+    let mut game = sample_game();
+    start_research(&mut game, "liu_bei", TechnologyId::MilitiaDrill).unwrap();
+    start_research(&mut game, "liu_bei", TechnologyId::ArsenalLogistics).unwrap();
+    let after_two_projects = faction_total_gold(&game, "liu_bei");
+
+    let outcome = start_research(&mut game, "liu_bei", TechnologyId::MilitiaDrill).unwrap();
+
+    assert!(outcome.resumed);
+    assert_eq!(outcome.cost_paid, 0);
+    assert_eq!(faction_total_gold(&game, "liu_bei"), after_two_projects);
+    assert_eq!(
+        faction_technology_state(&game, "liu_bei").unwrap().active,
+        Some(TechnologyId::MilitiaDrill)
+    );
+}
+
+#[test]
+fn technology_completes_after_required_turns() {
+    let mut game = sample_game();
+    start_research(&mut game, "liu_bei", TechnologyId::MilitiaDrill).unwrap();
+
+    resolve_command_batch(&mut game, Vec::new());
+    assert!(
+        !faction_technology_state(&game, "liu_bei")
+            .unwrap()
+            .completed
+            .contains(&TechnologyId::MilitiaDrill)
+    );
+    let report = resolve_command_batch(&mut game, Vec::new());
+
+    let state = faction_technology_state(&game, "liu_bei").unwrap();
+    assert!(state.completed.contains(&TechnologyId::MilitiaDrill));
+    assert!(state.active.is_none());
+    assert!(
+        report
+            .entries
+            .iter()
+            .any(|entry| entry.message.contains("完成科技：乡勇操练"))
+    );
+}
+
+#[test]
+fn technology_prerequisites_are_enforced() {
+    let mut game = sample_game();
+
+    let result = start_research(&mut game, "liu_bei", TechnologyId::IronWeapons);
+
+    assert!(matches!(
+        result,
+        Err(TechnologyError::MissingPrerequisite(name)) if name == "军械整备"
+    ));
+}
+
+#[test]
+fn completed_technology_affects_training_recruitment_and_income() {
+    let mut game = sample_game();
+    {
+        let state = faction_technology_state_mut(&mut game, "liu_bei");
+        state.completed.insert(TechnologyId::MilitiaDrill);
+        state.completed.insert(TechnologyId::ArsenalLogistics);
+        state.completed.insert(TechnologyId::HouseholdRegisters);
+    }
+
+    let discounted = recruit_cost_for_faction(&game, "liu_bei", 500);
+    assert!(discounted.gold < recruit_cost(500).gold);
+
+    let before_training = game.cities["xiapi"].training;
+    queue_player_command(&mut game, command("xiapi", "zhang_fei", CommandKind::Train)).unwrap();
+    let commands = game.pending_commands.clone();
+    resolve_command_batch(&mut game, commands);
+    assert!(game.cities["xiapi"].training >= before_training + 10);
+
+    let before_population = game.cities["pingyuan"].population;
+    resolve_command_batch(&mut game, Vec::new());
+    assert!(game.cities["pingyuan"].population > before_population);
+}
+
+#[test]
+fn completed_scout_roads_reduces_travel_months() {
+    let mut game = sample_game();
+    let baseline = game.travel_months_between("jiangxia", "jianye").unwrap();
+    faction_technology_state_mut(&mut game, "sun_quan")
+        .completed
+        .insert(TechnologyId::ScoutRoads);
+    let distance = game.road_distance_li("jiangxia", "jianye").unwrap();
+
+    assert_eq!(
+        travel_months_for_faction(&game, "sun_quan", distance),
+        baseline.saturating_sub(1).max(1)
+    );
+}
+
+#[test]
 fn officer_without_office_uses_ability_salary() {
     let game = sample_game();
     let officer = &game.officers["liu_bei"];
@@ -739,6 +873,33 @@ fn old_save_json_missing_army_movements_still_deserializes() {
     let loaded: GameState = serde_json::from_value(game_json).unwrap();
 
     assert!(loaded.army_movements.is_empty());
+}
+
+#[test]
+fn old_save_json_missing_technologies_still_deserializes() {
+    let mut game_json = serde_json::to_value(sample_game()).unwrap();
+    game_json.as_object_mut().unwrap().remove("technologies");
+
+    let loaded: GameState = serde_json::from_value(game_json).unwrap();
+
+    assert!(loaded.technologies.is_empty());
+}
+
+#[test]
+fn save_load_preserves_technology_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let manager = SaveManager::new(temp.path());
+    let mut game = sample_game();
+    start_research(&mut game, "liu_bei", TechnologyId::MilitiaDrill).unwrap();
+    resolve_command_batch(&mut game, Vec::new());
+
+    manager.save_slot("technology", "科技", &game).unwrap();
+    let loaded = manager.load_slot("technology").unwrap();
+    let state = faction_technology_state(&loaded, "liu_bei").unwrap();
+
+    assert_eq!(state.active, Some(TechnologyId::MilitiaDrill));
+    assert!(state.funded.contains(&TechnologyId::MilitiaDrill));
+    assert_eq!(technology_progress(state, TechnologyId::MilitiaDrill), 1);
 }
 
 #[test]

@@ -33,11 +33,6 @@ pub(super) fn selected_city_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState)
         .map(|faction| faction.name.as_str())
         .unwrap_or("未知");
     let pending_command = pending_command_for_city(&game, &city.id).cloned();
-    let available_officers = available_officers_for_city(&game, &city);
-    let selected_officer_id = ensure_selected_officer(ui_state, &city, &available_officers);
-    let selected_officer = selected_officer_id
-        .as_ref()
-        .and_then(|officer_id| game.officers.get(officer_id));
     sync_command_selection_to_city_tab(ui_state);
 
     command_tent_header(ui, &game, &city, faction_name, pending_command.as_ref());
@@ -48,16 +43,7 @@ pub(super) fn selected_city_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState)
     match ui_state.selected_city_tab {
         CityPanelTab::Overview => overview_tab(ui, &game, &city, faction_name),
         CityPanelTab::Domestic | CityPanelTab::Military | CityPanelTab::Diplomacy => {
-            command_tab(
-                ui,
-                ui_state,
-                &game,
-                &city,
-                &available_officers,
-                selected_officer,
-                selected_officer_id.as_ref(),
-                pending_command.as_ref(),
-            );
+            command_tab(ui, ui_state, &game, &city, pending_command.as_ref());
         }
     }
 }
@@ -153,11 +139,14 @@ fn command_tab(
     ui_state: &mut GameUiState,
     game: &GameState,
     city: &City,
-    available_officers: &[Officer],
-    selected_officer: Option<&Officer>,
-    selected_officer_id: Option<&OfficerId>,
     pending_command: Option<&Command>,
 ) {
+    let available_officers = available_officers_for_city(game, city);
+    let selected_officer_id = ensure_selected_officer(ui_state, city, &available_officers);
+    let selected_officer = selected_officer_id
+        .as_ref()
+        .and_then(|officer_id| game.officers.get(officer_id));
+
     ui.columns(3, |columns| {
         columns[0].set_width(300.0);
         command_action_column(
@@ -165,8 +154,8 @@ fn command_tab(
             ui_state,
             game,
             city,
-            available_officers,
-            selected_officer_id,
+            &available_officers,
+            selected_officer_id.as_ref(),
         );
 
         columns[1].set_width(370.0);
@@ -185,7 +174,7 @@ fn command_tab(
             game,
             city,
             selected_officer,
-            selected_officer_id,
+            selected_officer_id.as_ref(),
             pending_command,
         );
     });
@@ -254,7 +243,7 @@ fn city_projection(game: &GameState, city: &City) -> CityMonthlyProjection {
     project_city_monthly_change_with_effects(
         city,
         officer_salary,
-        city_official_effects(game, &city.id),
+        city_combined_effects(game, &city.id),
     )
 }
 
@@ -319,7 +308,7 @@ fn command_parameter_column(
             CommandAction::Develop => develop_parameter_controls(ui, ui_state, selected_officer),
             CommandAction::UpgradeCityCore => upgrade_parameter_controls(ui, city),
             CommandAction::BuildFacility => facility_parameter_controls(ui, ui_state, city),
-            CommandAction::Recruit => recruit_parameter_controls(ui, ui_state, city),
+            CommandAction::Recruit => recruit_parameter_controls(ui, ui_state, game, city),
             CommandAction::Train => train_parameter_controls(ui, selected_officer),
             CommandAction::AppointGovernor => {
                 appoint_parameter_controls(ui, city, selected_officer)
@@ -588,10 +577,15 @@ fn facility_parameter_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, ci
     }
 }
 
-fn recruit_parameter_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, city: &City) {
+fn recruit_parameter_controls(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    game: &GameState,
+    city: &City,
+) {
     ui_state.recruit_amount = ui_state.recruit_amount.clamp(100, 5000);
     ui.add(egui::Slider::new(&mut ui_state.recruit_amount, 100..=5000).text("征兵数"));
-    let cost = recruit_cost(ui_state.recruit_amount);
+    let cost = recruit_cost_for_faction(game, &city.faction_id, ui_state.recruit_amount);
     ui.label(format!(
         "消耗 金 {} / 粮 {} / 人口 {}。",
         cost.gold,
@@ -796,7 +790,13 @@ fn travel_summary_line(game: &GameState, from_city_id: &str, target_city_id: &st
 fn travel_summary(game: &GameState, from_city_id: &str, target_city_id: &str) -> String {
     match (
         game.road_distance_li(from_city_id, target_city_id),
-        game.travel_months_between(from_city_id, target_city_id),
+        game.road_distance_li(from_city_id, target_city_id)
+            .map(|distance| {
+                let Some(from_city) = game.cities.get(from_city_id) else {
+                    return travel_months_for_distance(distance);
+                };
+                travel_months_for_faction(game, &from_city.faction_id, distance)
+            }),
     ) {
         (Some(distance), Some(months)) => format!("距离 {distance} 里 / 行军 {months} 月"),
         _ => "距离未知".to_string(),
@@ -926,7 +926,10 @@ fn command_preview_lines(
         },
         CommandKind::Recruit { amount } => {
             lines.push(format!("兵力: +{amount}"));
-            lines.push(resource_cost_line("消耗", recruit_cost(*amount)));
+            lines.push(resource_cost_line(
+                "消耗",
+                recruit_cost_for_faction(game, &command.issuer_faction_id, *amount),
+            ));
             lines.push(format!("人口: -{}", amount * 2));
         }
         CommandKind::Train => {

@@ -3,12 +3,13 @@ use super::city::{
     city_core_upgrade_cost, facility_upgrade_cost, project_city_monthly_change_with_effects,
 };
 use super::history_db::{HistoricalCatalog, LifeEventKind};
-use super::ids::{CityId, OfficerId};
+use super::ids::{CityId, FactionId, OfficerId};
 use super::model::*;
 use super::officer::{
     Officer, OfficerStats, OfficerStatus, OfficialPostEffect, official_post_spec,
     official_rank_salary_bonus,
 };
+use super::technology::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Default)]
@@ -18,6 +19,7 @@ struct CommandReservations {
 }
 
 pub fn queue_player_command(state: &mut GameState, command: Command) -> Result<(), CommandError> {
+    ensure_faction_technology_states(state);
     if state.status != GameStatus::Running {
         return Err(CommandError::Invalid("游戏已经结束".to_string()));
     }
@@ -51,6 +53,8 @@ fn resolve_command_batch_inner(
     commands: Vec<Command>,
     catalog: Option<&dyn HistoricalCatalog>,
 ) -> TurnReport {
+    ensure_faction_technology_states(state);
+    begin_ai_research(state);
     let mut report = TurnReport::new(state);
     let mut reservations = CommandReservations::default();
     let command_count = commands.len();
@@ -75,6 +79,7 @@ fn resolve_command_batch_inner(
 
     resolve_due_army_movements(state, &mut report);
     apply_monthly_income(state, &mut report);
+    advance_research_and_report(state, &mut report);
     state.pending_commands.clear();
     state.refresh_status();
     if state.status == GameStatus::Running {
@@ -87,6 +92,36 @@ fn resolve_command_batch_inner(
     append_turn_summary(state, &mut report);
     state.reports.push(report.clone());
     report
+}
+
+fn begin_ai_research(state: &mut GameState) {
+    let faction_ids: Vec<FactionId> = state
+        .factions
+        .values()
+        .filter(|faction| {
+            faction.controlled_by == Controller::RuleAi && state.faction_alive(&faction.id)
+        })
+        .map(|faction| faction.id.clone())
+        .collect();
+
+    for faction_id in faction_ids {
+        let Some(technology_id) = choose_ai_research(state, &faction_id) else {
+            continue;
+        };
+        let _ = start_research(state, &faction_id, technology_id);
+    }
+}
+
+fn advance_research_and_report(state: &mut GameState, report: &mut TurnReport) {
+    for completed in advance_active_research(state) {
+        let faction_name = state
+            .factions
+            .get(&completed.faction_id)
+            .map(|faction| faction.name.as_str())
+            .unwrap_or(completed.faction_id.as_str());
+        let spec = technology_spec(completed.technology_id);
+        report.info(format!("{faction_name} 完成科技：{}", spec.name));
+    }
 }
 
 pub fn validate_command_for_state(
@@ -219,7 +254,7 @@ fn validate_command(
                     "征兵数量必须在 1-5000 之间".to_string(),
                 ));
             }
-            let cost = recruit_cost(*amount);
+            let cost = recruit_cost_for_faction(state, &command.issuer_faction_id, *amount);
             if city.gold < cost.gold || city.food < cost.food {
                 return Err(CommandError::Invalid(format!(
                     "征兵需要 {} 金和 {} 粮",
@@ -435,7 +470,16 @@ fn apply_develop(
         .officers
         .get(command.officer_id.as_ref().unwrap())
         .unwrap();
-    let gain = 8 + u16::from(officer.stats.politics) / 5;
+    let bonuses = faction_technology_bonuses(state, &command.issuer_faction_id);
+    let gain = 8
+        + u16::from(officer.stats.politics) / 5
+        + bonuses.development_bonus
+        + match focus {
+            DevelopmentFocus::Agriculture => bonuses.agriculture_development_bonus,
+            DevelopmentFocus::Commerce => bonuses.commerce_development_bonus,
+            DevelopmentFocus::Defense => 0,
+            DevelopmentFocus::Order => 0,
+        };
     let city = state.cities.get_mut(&command.city_id).unwrap();
     city.gold -= 80;
     match focus {
@@ -443,9 +487,9 @@ fn apply_develop(
         DevelopmentFocus::Commerce => city.commerce += gain,
         DevelopmentFocus::Defense => city.defense += gain,
         DevelopmentFocus::Order => {
-            city.order = city
-                .order
-                .saturating_add((4 + officer.stats.charm / 15).min(12));
+            city.order = city.order.saturating_add(
+                (4 + officer.stats.charm / 15 + bonuses.order_development_bonus).min(12),
+            );
         }
     }
     city.clamp_fields();
@@ -513,8 +557,8 @@ fn apply_recruit(state: &mut GameState, command: &Command, amount: u32, report: 
         .officers
         .get(command.officer_id.as_ref().unwrap())
         .unwrap();
+    let cost = recruit_cost_for_faction(state, &command.issuer_faction_id, amount);
     let city = state.cities.get_mut(&command.city_id).unwrap();
-    let cost = recruit_cost(amount);
     city.gold -= cost.gold;
     city.food -= cost.food;
     city.population = city.population.saturating_sub(amount * 2);
@@ -529,11 +573,13 @@ fn apply_train(state: &mut GameState, command: &Command, report: &mut TurnReport
         .officers
         .get(command.officer_id.as_ref().unwrap())
         .unwrap();
+    let bonus =
+        faction_technology_bonuses(state, &command.issuer_faction_id).training_command_bonus;
     let city = state.cities.get_mut(&command.city_id).unwrap();
     city.gold -= 40;
     city.training = city
         .training
-        .saturating_add((6 + officer.stats.leadership / 12).min(15));
+        .saturating_add((6 + officer.stats.leadership / 12).min(15) + bonus);
     city.clamp_fields();
     report.info(format!("{} 训练 {} 驻军", officer.name, city.name));
 }
@@ -567,7 +613,7 @@ fn apply_transfer(
     let distance_li = state
         .road_distance_li(&command.city_id, target_city_id)
         .unwrap_or_default();
-    let travel_months = travel_months_for_distance(distance_li);
+    let travel_months = travel_months_for_faction(state, &command.issuer_faction_id, distance_li);
     let source_training = state.cities[&command.city_id].training;
     let moving_officers = movement_officer_ids(command.officer_id.as_ref().unwrap(), officer_ids);
     let moving_officer_count = moving_officers.len();
@@ -616,7 +662,7 @@ fn apply_expedition(
     let distance_li = state
         .road_distance_li(&command.city_id, target_city_id)
         .unwrap_or_default();
-    let travel_months = travel_months_for_distance(distance_li);
+    let travel_months = travel_months_for_faction(state, &command.issuer_faction_id, distance_li);
     {
         let source = state.cities.get_mut(&command.city_id).unwrap();
         source.troops = source.troops.saturating_sub(troops);
@@ -786,14 +832,19 @@ fn resolve_expedition_battle(
     let defender_leadership = defender_governor
         .map(|officer| u32::from(officer.stats.leadership))
         .unwrap_or(45);
+    let attacker_bonuses = faction_technology_bonuses(state, &movement.issuer_faction_id);
+    let defender_bonuses = faction_technology_bonuses(state, &target_city.faction_id);
 
-    let attack_score = movement.troops * (60 + u32::from(movement.training)) / 100
+    let base_attack_score = movement.troops * (60 + u32::from(movement.training)) / 100
         + attacker_leadership * 18
         + attacker_strength * 10;
-    let defense_score = target_city.troops * (55 + u32::from(target_city.training)) / 100
+    let attack_percent = attacker_bonuses.attack_percent + attacker_bonuses.siege_attack_percent;
+    let attack_score = apply_percent_bonus(base_attack_score, attack_percent);
+    let base_defense_score = target_city.troops * (55 + u32::from(target_city.training)) / 100
         + u32::from(target_city.defense) * 12
         + defender_leadership * 15
         + u32::from(target_city.order) * 5;
+    let defense_score = apply_percent_bonus(base_defense_score, defender_bonuses.defense_percent);
     let noise = battle_noise(
         state.turn,
         &movement.source_city_id,
@@ -802,7 +853,11 @@ fn resolve_expedition_battle(
     let attacker_wins = attack_score as i32 + noise > defense_score as i32;
 
     if attacker_wins {
-        let attacker_loss = movement.troops.saturating_mul(35) / 100;
+        let attacker_loss = percent_loss(
+            movement.troops,
+            35,
+            attacker_bonuses.battle_loss_reduction_percent,
+        );
         let surviving_troops = movement.troops.saturating_sub(attacker_loss).max(100);
         let old_faction = target_city.faction_id.clone();
         {
@@ -821,7 +876,11 @@ fn resolve_expedition_battle(
             attacker.name, target_city.name, surviving_troops
         ));
     } else {
-        let attacker_loss = movement.troops.saturating_mul(60) / 100;
+        let attacker_loss = percent_loss(
+            movement.troops,
+            60,
+            attacker_bonuses.battle_loss_reduction_percent,
+        );
         let defender_loss = movement.troops.saturating_mul(30) / 100;
         {
             let target = state.cities.get_mut(&movement.target_city_id).unwrap();
@@ -835,7 +894,12 @@ fn resolve_expedition_battle(
         return_movement_to_friendly_city(
             state,
             movement,
-            movement.troops.saturating_sub(attacker_loss),
+            movement
+                .troops
+                .saturating_sub(attacker_loss)
+                .saturating_add(
+                    movement.troops * attacker_bonuses.retreat_survival_percent as u32 / 100,
+                ),
             "败军撤回".to_string(),
             report,
         );
@@ -852,6 +916,19 @@ fn place_movement_at_city(
         city.troops = city.troops.saturating_add(troops);
     }
     place_movement_officers_at_city(state, movement, city_id);
+}
+
+fn apply_percent_bonus(value: u32, percent: i32) -> u32 {
+    if percent >= 0 {
+        value.saturating_add(value.saturating_mul(percent as u32) / 100)
+    } else {
+        value.saturating_sub(value.saturating_mul(percent.unsigned_abs()) / 100)
+    }
+}
+
+fn percent_loss(value: u32, loss_percent: u32, reduction_percent: i32) -> u32 {
+    let effective_percent = loss_percent.saturating_sub(reduction_percent.max(0) as u32);
+    value.saturating_mul(effective_percent) / 100
 }
 
 fn place_movement_officers_at_city(state: &mut GameState, movement: &ArmyMovement, city_id: &str) {
@@ -1001,6 +1078,14 @@ pub fn city_official_effects(state: &GameState, city_id: &str) -> CityEconomyEff
     effects
 }
 
+pub fn city_combined_effects(state: &GameState, city_id: &str) -> CityEconomyEffects {
+    let mut effects = city_official_effects(state, city_id);
+    if let Some(city) = state.cities.get(city_id) {
+        effects.add(faction_technology_city_effects(state, &city.faction_id));
+    }
+    effects
+}
+
 fn official_effect_to_city_effect(effect: OfficialPostEffect) -> CityEconomyEffects {
     CityEconomyEffects {
         gold_income: effect.gold_income,
@@ -1022,6 +1107,7 @@ fn apply_monthly_income(state: &mut GameState, report: &mut TurnReport) {
     let player_faction_id = state.player_faction_id.clone();
     let salaries = city_salary_totals(state);
     let official_effects = city_official_effect_totals(state);
+    let technology_effects = city_technology_effect_totals(state);
     let mut total_gold_delta = 0;
     let mut total_food_delta = 0;
     let mut total_materials_delta = 0;
@@ -1038,7 +1124,13 @@ fn apply_monthly_income(state: &mut GameState, report: &mut TurnReport) {
 
     for city in state.cities.values_mut() {
         let salary = salaries.get(&city.id).copied().unwrap_or_default();
-        let extra_effects = official_effects.get(&city.id).copied().unwrap_or_default();
+        let mut extra_effects = official_effects.get(&city.id).copied().unwrap_or_default();
+        extra_effects.add(
+            technology_effects
+                .get(&city.id)
+                .copied()
+                .unwrap_or_default(),
+        );
         let projection = project_city_monthly_change_with_effects(city, salary, extra_effects);
         city.gold += projection.net_gold;
         city.food += projection.net_food;
@@ -1117,6 +1209,19 @@ fn city_official_effect_totals(state: &GameState) -> BTreeMap<CityId, CityEconom
             .add(official_effect_to_city_effect(spec.effect));
     }
     effects_by_city
+}
+
+fn city_technology_effect_totals(state: &GameState) -> BTreeMap<CityId, CityEconomyEffects> {
+    state
+        .cities
+        .values()
+        .map(|city| {
+            (
+                city.id.clone(),
+                faction_technology_city_effects(state, &city.faction_id),
+            )
+        })
+        .collect()
 }
 
 fn apply_i32_to_u32(value: u32, delta: i32) -> u32 {
@@ -1325,6 +1430,22 @@ pub fn recruit_cost(amount: u32) -> ResourceCost {
         food: (amount / 4) as i32 + 80,
         materials: 0,
     }
+}
+
+pub fn recruit_cost_for_faction(state: &GameState, faction_id: &str, amount: u32) -> ResourceCost {
+    let mut cost = recruit_cost(amount);
+    let discount = faction_technology_bonuses(state, faction_id)
+        .recruit_gold_discount_percent
+        .clamp(0, 80);
+    cost.gold = cost.gold * (100 - discount) / 100;
+    cost
+}
+
+pub fn travel_months_for_faction(state: &GameState, faction_id: &str, distance_li: u32) -> u32 {
+    let reduction = faction_technology_bonuses(state, faction_id).travel_month_reduction;
+    travel_months_for_distance(distance_li)
+        .saturating_sub(reduction)
+        .max(1)
 }
 
 fn battle_noise(turn: u32, source: &str, target: &str) -> i32 {

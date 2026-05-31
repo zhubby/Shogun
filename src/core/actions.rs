@@ -40,6 +40,7 @@ pub(super) fn enter_game(ui_state: &mut GameUiState, game: GameState, message: S
     ui_state.selected_command_action = CommandAction::Develop;
     ui_state.city_drawer_open = false;
     ui_state.city_list_open = false;
+    ui_state.technology_open = false;
     ui_state.reports_open = true;
     ui_state.save_panel_open = false;
     reset_map_view(ui_state);

@@ -2,6 +2,7 @@ use super::city::{City, CityFacility};
 use super::ids::{CityId, FactionId, OfficerId, OfficialPostId};
 use super::model::*;
 use super::officer::{Officer, OfficerGender, OfficerStats, OfficerStatus, official_post_spec};
+use super::technology::FactionTechnologyState;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -164,6 +165,10 @@ impl ScenarioData {
                 )
             })
             .collect();
+        let technologies = factions
+            .keys()
+            .map(|faction_id| (faction_id.clone(), FactionTechnologyState::default()))
+            .collect();
 
         Ok(GameState {
             version: SAVE_VERSION,
@@ -180,6 +185,7 @@ impl ScenarioData {
             diplomacy,
             pending_commands: Vec::new(),
             army_movements: Vec::new(),
+            technologies,
             applied_event_ids: BTreeSet::new(),
             reports: Vec::new(),
             status: GameStatus::Running,

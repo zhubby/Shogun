@@ -1,6 +1,7 @@
 use super::city::{City, FacilityKind};
 use super::ids::{CityId, FactionId, OfficerId};
 use super::officer::Officer;
+use super::technology::FactionTechnologyState;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,6 +24,8 @@ pub struct GameState {
     pub pending_commands: Vec<Command>,
     #[serde(default)]
     pub army_movements: Vec<ArmyMovement>,
+    #[serde(default)]
+    pub technologies: BTreeMap<FactionId, FactionTechnologyState>,
     pub applied_event_ids: BTreeSet<String>,
     pub reports: Vec<TurnReport>,
     pub status: GameStatus,
