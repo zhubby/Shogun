@@ -40,6 +40,7 @@ pub(super) struct GameUiState {
     pub(super) game: Option<GameState>,
     pub(super) selected_faction_id: FactionId,
     pub(super) selected_city_id: Option<CityId>,
+    pub(super) selected_city_tab: CityPanelTab,
     pub(super) selected_officers: BTreeMap<CityId, OfficerId>,
     pub(super) selected_focus: DevelopmentFocus,
     pub(super) selected_facility_kind: FacilityKind,
@@ -121,6 +122,7 @@ impl GameUiState {
             game: None,
             selected_faction_id,
             selected_city_id: None,
+            selected_city_tab: CityPanelTab::Overview,
             selected_officers: BTreeMap::new(),
             selected_focus: DevelopmentFocus::Agriculture,
             selected_facility_kind: FacilityKind::Farmland,
@@ -273,6 +275,15 @@ pub(super) enum Screen {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum CommandCategory {
+    Domestic,
+    Military,
+    Diplomacy,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum CityPanelTab {
+    #[default]
+    Overview,
     Domestic,
     Military,
     Diplomacy,

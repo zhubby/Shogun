@@ -76,6 +76,18 @@ pub(super) fn war_border() -> egui::Color32 {
     egui::Color32::from_rgb(118, 85, 48)
 }
 
+pub(super) fn war_success() -> egui::Color32 {
+    egui::Color32::from_rgb(118, 186, 122)
+}
+
+pub(super) fn war_warning() -> egui::Color32 {
+    egui::Color32::from_rgb(218, 174, 88)
+}
+
+pub(super) fn war_danger() -> egui::Color32 {
+    egui::Color32::from_rgb(218, 95, 76)
+}
+
 pub(super) fn modal_title_bar(ui: &mut egui::Ui, title: &str) -> bool {
     let row_width = ui.available_width();
     let button_size = egui::vec2(30.0, 30.0);

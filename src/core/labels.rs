@@ -17,15 +17,6 @@ pub(super) fn diplomacy_label(proposal: &DiplomacyProposal) -> &'static str {
     }
 }
 
-pub(super) fn city_scale_label(scale: &CityScale) -> &'static str {
-    match scale {
-        CityScale::County => "县城",
-        CityScale::Commandery => "郡治",
-        CityScale::RegionalCapital => "州郡重镇",
-        CityScale::ImperialCapital => "都城",
-    }
-}
-
 pub(super) fn facility_kind_label(kind: FacilityKind) -> &'static str {
     match kind {
         FacilityKind::Farmland => "农田",

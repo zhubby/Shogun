@@ -1,7 +1,7 @@
 use crate::game::*;
 
 use super::map::reset_map_view;
-use super::state::{CommandAction, CommandCategory, GameUiState, Screen};
+use super::state::{CityPanelTab, CommandAction, CommandCategory, GameUiState, Screen};
 
 pub(super) fn start_history_game(ui_state: &mut GameUiState) {
     if ui_state.selected_scenario_id.is_empty() {
@@ -35,6 +35,7 @@ pub(super) fn enter_game(ui_state: &mut GameUiState, game: GameState, message: S
     ui_state.selected_transfer_target = None;
     ui_state.selected_expedition_target = None;
     ui_state.selected_diplomacy_target = None;
+    ui_state.selected_city_tab = CityPanelTab::Overview;
     ui_state.selected_command_category = CommandCategory::Domestic;
     ui_state.selected_command_action = CommandAction::Develop;
     ui_state.city_drawer_open = false;

@@ -1,4 +1,5 @@
 mod actions;
+mod city_intel;
 mod city_panel;
 mod display_settings;
 mod hud;

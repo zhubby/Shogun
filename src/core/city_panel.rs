@@ -1,12 +1,18 @@
 use crate::game::*;
 use bevy_egui::egui;
 
-use super::labels::{
-    city_scale_label, confidence_label, development_focus_label, diplomacy_label,
-    facility_kind_label, officer_gender_label, officer_relationship_label,
+use super::city_intel::{
+    city_development_intel, city_facility_intel, city_monthly_trend_intel, city_overview_intel,
+    city_resource_intel, city_stability_intel,
 };
-use super::state::{CommandAction, CommandCategory, GameUiState};
-use super::style::{war_gold, war_sub_panel_frame, war_text_muted};
+use super::labels::{
+    confidence_label, development_focus_label, diplomacy_label, facility_kind_label,
+    officer_gender_label, officer_relationship_label,
+};
+use super::state::{CityPanelTab, CommandAction, CommandCategory, GameUiState};
+use super::style::{
+    war_danger, war_gold, war_sub_panel_frame, war_success, war_text_muted, war_warning,
+};
 
 pub(super) fn selected_city_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
     let Some(game) = ui_state.game.as_ref().cloned() else {
@@ -26,48 +32,34 @@ pub(super) fn selected_city_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState)
         .get(&city.faction_id)
         .map(|faction| faction.name.as_str())
         .unwrap_or("未知");
-    ensure_command_action(ui_state);
-
     let pending_command = pending_command_for_city(&game, &city.id).cloned();
     let available_officers = available_officers_for_city(&game, &city);
     let selected_officer_id = ensure_selected_officer(ui_state, &city, &available_officers);
     let selected_officer = selected_officer_id
         .as_ref()
         .and_then(|officer_id| game.officers.get(officer_id));
+    sync_command_selection_to_city_tab(ui_state);
 
     command_tent_header(ui, &game, &city, faction_name, pending_command.as_ref());
     ui.add_space(8.0);
-    ui.columns(3, |columns| {
-        columns[0].set_width(300.0);
-        command_context_column(
-            &mut columns[0],
-            ui_state,
-            &game,
-            &city,
-            &available_officers,
-            selected_officer_id.as_ref(),
-        );
+    city_tab_bar(ui, ui_state);
+    ui.add_space(8.0);
 
-        columns[1].set_width(370.0);
-        command_parameter_column(
-            &mut columns[1],
-            ui_state,
-            &game,
-            &city,
-            selected_officer,
-            pending_command.as_ref(),
-        );
-
-        command_preview_column(
-            &mut columns[2],
-            ui_state,
-            &game,
-            &city,
-            selected_officer,
-            selected_officer_id.as_ref(),
-            pending_command.as_ref(),
-        );
-    });
+    match ui_state.selected_city_tab {
+        CityPanelTab::Overview => overview_tab(ui, &game, &city, faction_name),
+        CityPanelTab::Domestic | CityPanelTab::Military | CityPanelTab::Diplomacy => {
+            command_tab(
+                ui,
+                ui_state,
+                &game,
+                &city,
+                &available_officers,
+                selected_officer,
+                selected_officer_id.as_ref(),
+                pending_command.as_ref(),
+            );
+        }
+    }
 }
 
 fn command_tent_header(
@@ -105,7 +97,101 @@ fn command_tent_header(
     });
 }
 
-fn command_context_column(
+fn city_tab_bar(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
+    ui.horizontal(|ui| {
+        for tab in [
+            CityPanelTab::Overview,
+            CityPanelTab::Domestic,
+            CityPanelTab::Military,
+            CityPanelTab::Diplomacy,
+        ] {
+            if ui
+                .selectable_label(ui_state.selected_city_tab == tab, city_tab_label(tab))
+                .clicked()
+            {
+                ui_state.selected_city_tab = tab;
+                sync_command_selection_to_city_tab(ui_state);
+            }
+        }
+    });
+}
+
+fn overview_tab(ui: &mut egui::Ui, game: &GameState, city: &City, faction_name: &str) {
+    let projection = city_projection(game, city);
+    ui.columns(3, |columns| {
+        columns[0].set_width(330.0);
+        war_sub_panel_frame().show(&mut columns[0], |ui| {
+            section_title(ui, "城池概览");
+            city_overview_intel(ui, city, faction_name);
+            ui.add_space(8.0);
+            city_resource_intel(ui, city);
+        });
+
+        columns[1].set_width(330.0);
+        war_sub_panel_frame().show(&mut columns[1], |ui| {
+            section_title(ui, "发展与军备");
+            city_development_intel(ui, city);
+            ui.add_space(8.0);
+            city_stability_intel(ui, city);
+        });
+
+        war_sub_panel_frame().show(&mut columns[2], |ui| {
+            section_title(ui, "月报与设施");
+            city_monthly_trend_intel(ui, &projection);
+            ui.add_space(8.0);
+            city_facility_intel(ui, city);
+            if city.faction_id != game.player_faction_id {
+                ui.add_space(8.0);
+                ui.colored_label(war_text_muted(), "非己方城池，只能查看情报。");
+            }
+        });
+    });
+}
+
+fn command_tab(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    game: &GameState,
+    city: &City,
+    available_officers: &[Officer],
+    selected_officer: Option<&Officer>,
+    selected_officer_id: Option<&OfficerId>,
+    pending_command: Option<&Command>,
+) {
+    ui.columns(3, |columns| {
+        columns[0].set_width(300.0);
+        command_action_column(
+            &mut columns[0],
+            ui_state,
+            game,
+            city,
+            available_officers,
+            selected_officer_id,
+        );
+
+        columns[1].set_width(370.0);
+        command_parameter_column(
+            &mut columns[1],
+            ui_state,
+            game,
+            city,
+            selected_officer,
+            pending_command,
+        );
+
+        command_preview_column(
+            &mut columns[2],
+            ui_state,
+            game,
+            city,
+            selected_officer,
+            selected_officer_id,
+            pending_command,
+        );
+    });
+}
+
+fn command_action_column(
     ui: &mut egui::Ui,
     ui_state: &mut GameUiState,
     game: &GameState,
@@ -114,89 +200,37 @@ fn command_context_column(
     selected_officer_id: Option<&OfficerId>,
 ) {
     war_sub_panel_frame().show(ui, |ui| {
-        section_title(ui, "城池态势");
-        ui.label(format!(
-            "{}级城镇 | 槽位 {}/{}",
-            city.level,
-            city.facilities.len(),
-            city.facility_slots()
-        ));
-        ui.label(format!(
-            "人口 {} | 农 {} | 商 {} | 防 {}",
-            city.population, city.agriculture, city.commerce, city.defense
-        ));
-        ui.label(format!("训练 {} | 治安 {}", city.training, city.order));
-
-        let officer_salary = game
-            .officers_in_city(&city.id)
-            .into_iter()
-            .filter(|officer| officer.faction_id == city.faction_id)
-            .map(officer_monthly_salary)
-            .sum();
-        let projection = project_city_monthly_change_with_effects(
-            city,
-            officer_salary,
-            city_official_effects(game, &city.id),
-        );
-        ui.label(format!(
-            "月净 金 {:+} | 粮 {:+} | 建材 {:+}",
-            projection.net_gold, projection.net_food, projection.net_materials
-        ));
-        ui.label(format!(
-            "人口 {:+} | 兵 {:+}",
-            projection.population_delta, projection.troop_delta
-        ));
-        if city.facilities.is_empty() {
-            ui.colored_label(war_text_muted(), "设施: 无");
-        } else {
-            ui.colored_label(war_text_muted(), format!("设施: {}", facility_list(city)));
-        }
-    });
-
-    ui.add_space(8.0);
-    war_sub_panel_frame().show(ui, |ui| {
         section_title(ui, "执令武将");
         if city.faction_id != game.player_faction_id {
             ui.colored_label(war_text_muted(), "非己方城池，只能查看。");
-            officer_roster(ui, game, city);
+            officer_roster_list(ui, game, city, 250.0);
         } else if available_officers.is_empty() {
             ui.colored_label(war_text_muted(), "本城没有可行动武将。");
         } else {
-            for officer in available_officers {
-                let selected =
-                    selected_officer_id.is_some_and(|officer_id| officer_id == &officer.id);
-                if ui
-                    .selectable_label(selected, officer_command_label(officer))
-                    .clicked()
-                {
-                    ui_state
-                        .selected_officers
-                        .insert(city.id.clone(), officer.id.clone());
-                }
-            }
+            egui::ScrollArea::vertical()
+                .id_salt(("city_command_officers", &city.id))
+                .max_height(196.0)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    for officer in available_officers {
+                        let selected =
+                            selected_officer_id.is_some_and(|officer_id| officer_id == &officer.id);
+                        if ui
+                            .selectable_label(selected, officer_command_label(officer))
+                            .clicked()
+                        {
+                            ui_state
+                                .selected_officers
+                                .insert(city.id.clone(), officer.id.clone());
+                        }
+                    }
+                });
         }
     });
 
     ui.add_space(8.0);
     war_sub_panel_frame().show(ui, |ui| {
-        section_title(ui, "军令类型");
-        for category in [
-            CommandCategory::Domestic,
-            CommandCategory::Military,
-            CommandCategory::Diplomacy,
-        ] {
-            if ui
-                .selectable_label(
-                    ui_state.selected_command_category == category,
-                    command_category_label(category),
-                )
-                .clicked()
-            {
-                ui_state.selected_command_category = category;
-                ui_state.selected_command_action = default_action_for_category(category);
-            }
-        }
-        ui.separator();
+        section_title(ui, "军令");
         for action in command_actions(ui_state.selected_command_category) {
             let response = ui.selectable_label(
                 ui_state.selected_command_action == *action,
@@ -208,6 +242,46 @@ fn command_context_column(
             response.on_hover_text(command_action_hint(*action));
         }
     });
+}
+
+fn city_projection(game: &GameState, city: &City) -> CityMonthlyProjection {
+    let officer_salary = game
+        .officers_in_city(&city.id)
+        .into_iter()
+        .filter(|officer| officer.faction_id == city.faction_id)
+        .map(officer_monthly_salary)
+        .sum();
+    project_city_monthly_change_with_effects(
+        city,
+        officer_salary,
+        city_official_effects(game, &city.id),
+    )
+}
+
+fn sync_command_selection_to_city_tab(ui_state: &mut GameUiState) {
+    let Some(category) = city_tab_command_category(ui_state.selected_city_tab) else {
+        return;
+    };
+    ui_state.selected_command_category = category;
+    ensure_command_action(ui_state);
+}
+
+fn city_tab_command_category(tab: CityPanelTab) -> Option<CommandCategory> {
+    match tab {
+        CityPanelTab::Overview => None,
+        CityPanelTab::Domestic => Some(CommandCategory::Domestic),
+        CityPanelTab::Military => Some(CommandCategory::Military),
+        CityPanelTab::Diplomacy => Some(CommandCategory::Diplomacy),
+    }
+}
+
+fn city_tab_label(tab: CityPanelTab) -> &'static str {
+    match tab {
+        CityPanelTab::Overview => "概览",
+        CityPanelTab::Domestic => "内政",
+        CityPanelTab::Military => "军事",
+        CityPanelTab::Diplomacy => "任命外交",
+    }
 }
 
 fn command_parameter_column(
@@ -227,7 +301,7 @@ fn command_parameter_column(
         ui.separator();
 
         if city.faction_id != game.player_faction_id {
-            city_readonly_details(ui, game, city);
+            ui.colored_label(war_text_muted(), "非己方城池，只能查看情报。");
             return;
         }
 
@@ -341,14 +415,6 @@ fn default_action_for_category(category: CommandCategory) -> CommandAction {
     command_actions(category)[0]
 }
 
-fn command_category_label(category: CommandCategory) -> &'static str {
-    match category {
-        CommandCategory::Domestic => "内政",
-        CommandCategory::Military => "军事",
-        CommandCategory::Diplomacy => "任命 / 外交",
-    }
-}
-
 fn command_action_label(action: CommandAction) -> &'static str {
     match action {
         CommandAction::Develop => "开发",
@@ -382,15 +448,15 @@ fn section_title(ui: &mut egui::Ui, title: &str) {
 }
 
 fn status_ready_color() -> egui::Color32 {
-    egui::Color32::from_rgb(118, 186, 122)
+    war_success()
 }
 
 fn status_warning_color() -> egui::Color32 {
-    egui::Color32::from_rgb(218, 174, 88)
+    war_warning()
 }
 
 fn status_error_color() -> egui::Color32 {
-    egui::Color32::from_rgb(218, 95, 76)
+    war_danger()
 }
 
 fn pending_command_for_city<'a>(game: &'a GameState, city_id: &str) -> Option<&'a Command> {
@@ -436,14 +502,6 @@ fn ensure_selected_officer(
     Some(selected_officer.clone())
 }
 
-fn facility_list(city: &City) -> String {
-    city.facilities
-        .iter()
-        .map(|facility| format!("{}{}级", facility_kind_label(facility.kind), facility.level))
-        .collect::<Vec<_>>()
-        .join(" / ")
-}
-
 fn officer_command_label(officer: &Officer) -> String {
     format!(
         "{}  统{} 武{} 智{} 政{} 魅{}",
@@ -454,22 +512,6 @@ fn officer_command_label(officer: &Officer) -> String {
         officer.stats.politics,
         officer.stats.charm
     )
-}
-
-fn city_readonly_details(ui: &mut egui::Ui, game: &GameState, city: &City) {
-    ui.label("非己方城池，只能查看情报。");
-    if let Some(profile) = &city.profile {
-        ui.label(format!(
-            "{}{} | 规模 {} | 战略 {} | 可信度 {}",
-            profile.province,
-            profile.commandery,
-            city_scale_label(&profile.scale),
-            profile.strategic_rank,
-            confidence_label(&profile.confidence)
-        ));
-    }
-    ui.separator();
-    officer_roster(ui, game, city);
 }
 
 fn develop_parameter_controls(
@@ -951,16 +993,21 @@ fn officer_name(game: &GameState, officer_id: &str) -> String {
         .unwrap_or_else(|| officer_id.to_string())
 }
 
-pub(super) fn officer_roster(ui: &mut egui::Ui, game: &GameState, city: &City) {
-    ui.heading("武将");
+fn officer_roster_list(ui: &mut egui::Ui, game: &GameState, city: &City, max_height: f32) {
     let officers = game.officers_in_city(&city.id);
     if officers.is_empty() {
         ui.label("无武将");
         return;
     }
-    for officer in officers {
-        officer_row(ui, officer);
-    }
+    egui::ScrollArea::vertical()
+        .id_salt(("city_officer_roster", &city.id))
+        .max_height(max_height)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            for officer in officers {
+                officer_row(ui, officer);
+            }
+        });
 }
 
 fn facility_build_preview(

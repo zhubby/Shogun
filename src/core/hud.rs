@@ -4,6 +4,7 @@ use bevy_egui::egui;
 use super::actions::{
     clear_pending_commands, enter_game, finish_current_turn, open_city, refresh_saves,
 };
+use super::city_intel::city_summary_intel;
 use super::city_panel::selected_city_panel;
 use super::labels::officer_gender_label;
 use super::map::{map_panel, reset_map_view, zoom_map};
@@ -228,12 +229,13 @@ pub(super) fn city_drawer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, s
                     });
                 });
                 ui.separator();
-                egui::ScrollArea::vertical()
-                    .max_height(modal_height - 54.0)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
+                ui.allocate_ui_with_layout(
+                    egui::vec2(modal_width, modal_height - 54.0),
+                    egui::Layout::top_down(egui::Align::Min),
+                    |ui| {
                         selected_city_panel(ui, ui_state);
-                    });
+                    },
+                );
             });
         });
 }
@@ -423,31 +425,16 @@ pub(super) fn selected_city_summary(ui: &mut egui::Ui, ui_state: &mut GameUiStat
             .get(&city.faction_id)
             .map(|faction| faction.name.clone())
             .unwrap_or_else(|| "未知".to_string());
-        Some((
-            city.id.clone(),
-            city.name.clone(),
-            faction_name,
-            city.level,
-            city.population,
-            city.troops,
-            city.gold,
-            city.food,
-            city.materials,
-        ))
+        Some((city.id.clone(), city.clone(), faction_name))
     });
 
-    let Some((city_id, city_name, faction_name, level, population, troops, gold, food, materials)) =
-        summary
-    else {
+    let Some((city_id, city, faction_name)) = summary else {
         ui.label("未选择城池");
         return;
     };
 
-    ui.heading(city_name);
-    ui.label(format!("归属: {faction_name}"));
-    ui.label(format!(
-        "{level}级 | 人口 {population} | 兵 {troops} | 金 {gold} | 粮 {food} | 建材 {materials}"
-    ));
+    city_summary_intel(ui, &city, &faction_name);
+    ui.add_space(8.0);
     if ui.button("打开中军帐").clicked() {
         open_city(ui_state, city_id);
     }
