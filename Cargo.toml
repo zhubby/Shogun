@@ -6,7 +6,7 @@ default-run = "shogun"
 build = "build.rs"
 
 [dependencies]
-bevy = "0.18"
+bevy = { version = "0.18", features = ["mp3"] }
 bevy_egui = "0.39"
 directories = "6"
 egui-phosphor = "0.11"
@@ -14,6 +14,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8.6", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite"] }
 tokio = { version = "1.47", default-features = false, features = ["rt", "time"] }
+winit = "0.30"
 
 [dev-dependencies]
 tempfile = "3"

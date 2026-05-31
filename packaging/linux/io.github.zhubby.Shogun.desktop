@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Shogun
+GenericName=Strategy Game
+Comment=Three Kingdoms strategy game prototype
+Exec=shogun
+Icon=io.github.zhubby.Shogun
+Terminal=false
+Categories=Game;StrategyGame;

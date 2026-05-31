@@ -119,21 +119,6 @@ fn close_icon_button(ui: &mut egui::Ui, size: egui::Vec2) -> egui::Response {
     .on_hover_text("关闭")
 }
 
-pub(super) fn draw_menu_background(painter: &egui::Painter, rect: egui::Rect) {
-    draw_strategy_map_background(painter, rect);
-    painter.rect_filled(
-        rect,
-        0.0,
-        egui::Color32::from_rgba_unmultiplied(8, 8, 7, 86),
-    );
-    let top = egui::Rect::from_min_max(rect.min, egui::pos2(rect.right(), rect.top() + 150.0));
-    painter.rect_filled(
-        top,
-        0.0,
-        egui::Color32::from_rgba_unmultiplied(15, 13, 10, 120),
-    );
-}
-
 pub(super) fn draw_strategy_map_background(painter: &egui::Painter, rect: egui::Rect) {
     painter.rect_filled(rect, 0.0, egui::Color32::from_rgb(35, 39, 29));
 

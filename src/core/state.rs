@@ -31,6 +31,9 @@ pub(super) struct GameUiState {
     pub(super) retainer_filters: OfficerBrowserFilters,
     pub(super) reports_open: bool,
     pub(super) save_panel_open: bool,
+    pub(super) main_menu_new_game_open: bool,
+    pub(super) main_menu_load_game_open: bool,
+    pub(super) main_menu_bgm_enabled: bool,
     pub(super) settings_open: bool,
     pub(super) officer_settings_open: bool,
     pub(super) officer_settings_game: Option<GameState>,
@@ -71,6 +74,30 @@ pub(super) struct GameUiState {
     pub(super) pending_settings: DisplaySettings,
     pub(super) message: String,
     pub(super) egui_font_configured: bool,
+    pub(super) banner_logo: Option<MenuBannerLogo>,
+    pub(super) banner_logo_error: Option<String>,
+    pub(super) main_menu_illustrations: Vec<Option<MenuIllustration>>,
+    pub(super) main_menu_illustration_errors: Vec<Option<String>>,
+    pub(super) main_menu_hovered_illustration_index: Option<usize>,
+    pub(super) main_menu_cloud_pattern: Option<MenuCloudPattern>,
+    pub(super) main_menu_cloud_pattern_error: Option<String>,
+}
+
+pub(super) struct MenuBannerLogo {
+    pub(super) texture: egui::TextureHandle,
+    pub(super) crop_uv: egui::Rect,
+    pub(super) crop_size: egui::Vec2,
+}
+
+pub(super) struct MenuIllustration {
+    pub(super) texture: egui::TextureHandle,
+    pub(super) crop_uv: egui::Rect,
+    pub(super) crop_size: egui::Vec2,
+}
+
+pub(super) struct MenuCloudPattern {
+    pub(super) texture: egui::TextureHandle,
+    pub(super) size: egui::Vec2,
 }
 
 impl GameUiState {
@@ -124,6 +151,9 @@ impl GameUiState {
             retainer_filters: OfficerBrowserFilters::default(),
             reports_open: true,
             save_panel_open: false,
+            main_menu_new_game_open: false,
+            main_menu_load_game_open: false,
+            main_menu_bgm_enabled: true,
             settings_open: false,
             officer_settings_open: false,
             officer_settings_game: None,
@@ -164,6 +194,13 @@ impl GameUiState {
             pending_settings: loaded_settings.settings,
             message,
             egui_font_configured: false,
+            banner_logo: None,
+            banner_logo_error: None,
+            main_menu_illustrations: Vec::new(),
+            main_menu_illustration_errors: Vec::new(),
+            main_menu_hovered_illustration_index: None,
+            main_menu_cloud_pattern: None,
+            main_menu_cloud_pattern_error: None,
         }
     }
 }

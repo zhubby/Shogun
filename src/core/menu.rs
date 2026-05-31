@@ -1,3 +1,8 @@
+use bevy::{
+    asset::RenderAssetUsages,
+    image::{CompressedImageFormats, Image as BevyImage, ImageFormat, ImageSampler, ImageType},
+    render::render_resource::TextureFormat,
+};
 use bevy_egui::egui;
 
 use crate::build_info::menu_build_label;
@@ -7,106 +12,75 @@ use crate::game::{
     SqliteHistoricalCatalog,
 };
 
+use super::HUD_MARGIN;
 use super::actions::{enter_game, refresh_saves, start_history_game, start_json_game};
 use super::hud::{OfficerBrowserTableOptions, officer_browser_filters, officer_browser_table};
 use super::labels::{confidence_label, officer_gender_label};
 use super::settings::settings_modal;
-use super::state::{GameUiState, OfficerEditDraft, refresh_history_factions, refresh_history_menu};
-use super::style::{
-    draw_menu_background, modal_title_bar, war_bar_frame, war_gold, war_panel_frame,
-    war_sub_panel_frame, war_text_muted,
+use super::state::{
+    GameUiState, MenuBannerLogo, MenuCloudPattern, MenuIllustration, OfficerEditDraft,
+    refresh_history_factions, refresh_history_menu,
 };
-use super::{HUD_MARGIN, HUD_TOP_OFFSET};
+use super::style::{
+    modal_title_bar, war_gold, war_panel_frame, war_sub_panel_frame, war_text_muted,
+};
 
-pub(super) fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) -> bool {
-    let mut apply_display_settings = false;
+const BANNER_LOGO_BYTES: &[u8] = include_bytes!("../../assets/icons/banner_logo.png");
+const BANNER_LOGO_TEXTURE_ID: &str = "main_menu_banner_logo";
+const BANNER_LOGO_ALPHA_THRESHOLD: u8 = 8;
+const BANNER_LOGO_CROP_PADDING: usize = 32;
+const BANNER_LOGO_MAX_WIDTH: f32 = 860.0;
+const BANNER_LOGO_MAX_HEIGHT: f32 = 340.0;
+const MAIN_MENU_ILLUSTRATION_COUNT: usize = 6;
+const MAIN_MENU_DEFAULT_ILLUSTRATION_INDEX: usize = 0;
+const MAIN_MENU_ILLUSTRATION_BYTES: [&[u8]; MAIN_MENU_ILLUSTRATION_COUNT] = [
+    include_bytes!("../../assets/Illustrations/main_menu_0.png"),
+    include_bytes!("../../assets/Illustrations/main_menu_1.png"),
+    include_bytes!("../../assets/Illustrations/main_menu_2.png"),
+    include_bytes!("../../assets/Illustrations/main_menu_3.png"),
+    include_bytes!("../../assets/Illustrations/main_menu_4.png"),
+    include_bytes!("../../assets/Illustrations/main_menu_5.png"),
+];
+const MAIN_MENU_ILLUSTRATION_TEXTURE_ID_PREFIX: &str = "main_menu_illustration";
+const MAIN_MENU_CLOUD_PATTERN_BYTES: &[u8] =
+    include_bytes!("../../assets/Illustrations/main_menu_cloud_pattern.png");
+const MAIN_MENU_CLOUD_PATTERN_TEXTURE_ID: &str = "main_menu_cloud_pattern";
+const MAIN_MENU_CLOUD_PATTERN_ALPHA: u8 = 38;
+const MAIN_MENU_CLOUD_PATTERN_UV_INSET: f32 = 0.08;
+const MAIN_MENU_CONTROL_MIN_WIDTH: f32 = 420.0;
+const MAIN_MENU_CONTROL_MAX_WIDTH: f32 = 620.0;
+const MAIN_MENU_ART_MIN_WIDTH: f32 = 360.0;
+const MAIN_MENU_BUTTON_WIDTH: f32 = 236.0;
+const MAIN_MENU_BUTTON_HEIGHT: f32 = 36.0;
+const MAIN_MENU_BUTTON_SPACING: f32 = 7.0;
+const MAIN_MENU_BGM_BUTTON_SIZE: f32 = 36.0;
+const MAIN_MENU_BGM_BUTTON_MARGIN: f32 = 12.0;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum MainMenuAction {
+    None,
+    ApplyDisplaySettings,
+    Exit,
+}
+
+pub(super) fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) -> MainMenuAction {
+    let mut action = MainMenuAction::None;
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(ctx, |ui| {
-            let rect = ui.max_rect();
-            let painter = ui.painter_at(rect);
-            draw_menu_background(&painter, rect);
-
-            egui::ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.add_space(34.0);
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            egui::RichText::new("大将军")
-                                .size(42.0)
-                                .color(war_gold())
-                                .strong(),
-                        );
-                        ui.label(
-                            egui::RichText::new("Shogun")
-                                .size(18.0)
-                                .color(war_text_muted()),
-                        );
-                        ui.label(
-                            egui::RichText::new(menu_build_label())
-                                .size(12.0)
-                                .color(war_text_muted()),
-                        );
-                    });
-                    ui.add_space(24.0);
-
-                    let total_width = (ui.available_width() - HUD_MARGIN * 2.0).min(1060.0);
-                    let stacked_menu = total_width < 900.0;
-                    let panel_width = if stacked_menu {
-                        total_width
-                    } else {
-                        (total_width - 18.0) * 0.5
-                    };
-                    let left_pad = ((ui.available_width() - total_width) * 0.5).max(HUD_MARGIN);
-
-                    if stacked_menu {
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            ui.add_space(left_pad);
-                            war_panel_frame().show(ui, |ui| {
-                                ui.set_width(panel_width);
-                                new_game_menu(ui, ui_state);
-                            });
-                        });
-                        ui.add_space(14.0);
-                        ui.horizontal(|ui| {
-                            ui.add_space(left_pad);
-                            war_panel_frame().show(ui, |ui| {
-                                ui.set_width(panel_width);
-                                load_game_menu(ui, ui_state);
-                            });
-                        });
-                    } else {
-                        ui.horizontal_top(|ui| {
-                            ui.add_space(left_pad);
-                            war_panel_frame().show(ui, |ui| {
-                                ui.set_width(panel_width);
-                                new_game_menu(ui, ui_state);
-                            });
-                            ui.add_space(18.0);
-                            war_panel_frame().show(ui, |ui| {
-                                ui.set_width(panel_width);
-                                load_game_menu(ui, ui_state);
-                            });
-                        });
-                    }
-
-                    if !ui_state.message.is_empty() {
-                        ui.add_space(16.0);
-                        ui.horizontal(|ui| {
-                            ui.add_space(left_pad);
-                            war_panel_frame().show(ui, |ui| {
-                                ui.set_width(total_width);
-                                ui.colored_label(war_gold(), &ui_state.message);
-                            });
-                        });
-                    }
-                });
+            action = main_menu_columns(ui, ui_state);
         });
-    main_menu_settings_button(ctx, ui_state);
+
+    if ui_state.main_menu_new_game_open {
+        new_game_modal(ctx, ui_state);
+    }
+    if ui_state.main_menu_load_game_open {
+        load_game_modal(ctx, ui_state);
+    }
     if ui_state.settings_open {
-        apply_display_settings |= settings_modal(ctx, ui_state);
+        if settings_modal(ctx, ui_state) {
+            action = MainMenuAction::ApplyDisplaySettings;
+        }
     }
     if ui_state.officer_settings_open {
         officer_settings_modal(ctx, ui_state);
@@ -114,7 +88,207 @@ pub(super) fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) -> bool
     if ui_state.officer_edit_open {
         officer_profile_edit_modal(ctx, ui_state);
     }
-    apply_display_settings
+    action
+}
+
+fn main_menu_columns(ui: &mut egui::Ui, ui_state: &mut GameUiState) -> MainMenuAction {
+    let content_rect = ui.max_rect().shrink(HUD_MARGIN);
+    if content_rect.width() <= 0.0 || content_rect.height() <= 0.0 {
+        return MainMenuAction::None;
+    }
+
+    let left_width = main_menu_control_width(content_rect.width());
+    let left_height = (content_rect.height() * 0.78).clamp(520.0, 680.0);
+    let left_offset = (content_rect.width() * 0.105).clamp(118.0, 245.0);
+    let left_rect = egui::Rect::from_min_size(
+        egui::pos2(
+            content_rect.left() + left_offset,
+            content_rect.center().y - left_height.min(content_rect.height()).min(680.0) * 0.5,
+        ),
+        egui::vec2(left_width, left_height.min(content_rect.height())),
+    );
+    let art_gap = (content_rect.width() * 0.012).clamp(14.0, 28.0);
+    let art_rect = egui::Rect::from_min_max(
+        egui::pos2(left_rect.right() - art_gap, content_rect.top() + 10.0),
+        egui::pos2(content_rect.right() - 10.0, content_rect.bottom() - 10.0),
+    );
+
+    draw_main_menu_illustration(ui, ui_state, content_rect, art_rect);
+    let action = draw_main_menu_left_panel(ui, ui_state, left_rect);
+    draw_main_menu_bgm_button(ui, ui_state, content_rect);
+    action
+}
+
+fn main_menu_control_width(total_width: f32) -> f32 {
+    let preferred =
+        (total_width * 0.36).clamp(MAIN_MENU_CONTROL_MIN_WIDTH, MAIN_MENU_CONTROL_MAX_WIDTH);
+    let max_left = total_width - MAIN_MENU_ART_MIN_WIDTH;
+    if max_left >= MAIN_MENU_CONTROL_MIN_WIDTH {
+        preferred.min(max_left)
+    } else {
+        (total_width * 0.40).clamp(280.0, MAIN_MENU_CONTROL_MIN_WIDTH)
+    }
+}
+
+fn draw_main_menu_left_panel(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    rect: egui::Rect,
+) -> MainMenuAction {
+    let inner = rect.shrink2(egui::vec2(6.0, 16.0));
+    let mut action = MainMenuAction::None;
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(inner)
+            .layout(egui::Layout::top_down(egui::Align::Center)),
+        |ui| {
+            ui.set_width(inner.width());
+            ui.add_space(4.0);
+            banner_logo(ui, ui_state);
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(menu_build_label())
+                        .size(12.0)
+                        .color(war_text_muted()),
+                )
+                .truncate(),
+            );
+            ui.add_space((inner.height() * 0.04).clamp(12.0, 24.0));
+
+            action = draw_main_menu_buttons(ui, ui_state);
+
+            if !ui_state.message.is_empty() {
+                let reserved_height = 50.0;
+                ui.add_space((ui.available_height() - reserved_height).max(10.0));
+                war_sub_panel_frame().show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    let summary = ui_state.message.replace('\n', " / ");
+                    let response = ui.add(
+                        egui::Label::new(egui::RichText::new(summary).size(12.0).color(war_gold()))
+                            .truncate(),
+                    );
+                    response.on_hover_text(&ui_state.message);
+                });
+            }
+        },
+    );
+    action
+}
+
+fn draw_main_menu_buttons(ui: &mut egui::Ui, ui_state: &mut GameUiState) -> MainMenuAction {
+    let button_width = ui.available_width().min(MAIN_MENU_BUTTON_WIDTH);
+    let mut action = MainMenuAction::None;
+    let mut hovered_illustration_index = None;
+
+    let new_game_response = main_menu_button(ui, button_width, "新的开始");
+    if new_game_response.hovered() {
+        hovered_illustration_index = Some(1);
+    }
+    if new_game_response.clicked() {
+        close_main_menu_popups(ui_state);
+        ui_state.main_menu_new_game_open = true;
+    }
+    ui.add_space(MAIN_MENU_BUTTON_SPACING);
+    let load_game_response = main_menu_button(ui, button_width, "继续征途");
+    if load_game_response.hovered() {
+        hovered_illustration_index = Some(2);
+    }
+    if load_game_response.clicked() {
+        close_main_menu_popups(ui_state);
+        refresh_saves(ui_state);
+        ui_state.main_menu_load_game_open = true;
+    }
+    ui.add_space(MAIN_MENU_BUTTON_SPACING);
+    let officer_response = main_menu_button(ui, button_width, "武将设置");
+    if officer_response.hovered() {
+        hovered_illustration_index = Some(3);
+    }
+    if officer_response.clicked() {
+        close_main_menu_popups(ui_state);
+        open_officer_settings(ui_state);
+    }
+    ui.add_space(MAIN_MENU_BUTTON_SPACING);
+    let settings_response = main_menu_button(ui, button_width, "显示设置");
+    if settings_response.hovered() {
+        hovered_illustration_index = Some(4);
+    }
+    if settings_response.clicked() {
+        close_main_menu_popups(ui_state);
+        ui_state.settings_open = true;
+    }
+    ui.add_space(MAIN_MENU_BUTTON_SPACING);
+    let exit_response = main_menu_button(ui, button_width, "退出游戏");
+    if exit_response.hovered() {
+        hovered_illustration_index = Some(5);
+    }
+    if exit_response.clicked() {
+        action = MainMenuAction::Exit;
+    }
+
+    set_main_menu_hovered_illustration(ui, ui_state, hovered_illustration_index);
+
+    action
+}
+
+fn set_main_menu_hovered_illustration(
+    ui: &egui::Ui,
+    ui_state: &mut GameUiState,
+    hovered_illustration_index: Option<usize>,
+) {
+    if ui_state.main_menu_hovered_illustration_index != hovered_illustration_index {
+        ui_state.main_menu_hovered_illustration_index = hovered_illustration_index;
+        ui.ctx().request_repaint();
+    }
+}
+
+fn main_menu_button(ui: &mut egui::Ui, width: f32, label: &str) -> egui::Response {
+    ui.add_sized(
+        [width, MAIN_MENU_BUTTON_HEIGHT],
+        egui::Button::new(
+            egui::RichText::new(label)
+                .size(15.5)
+                .color(war_gold())
+                .strong(),
+        )
+        .truncate(),
+    )
+}
+
+fn draw_main_menu_bgm_button(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    content_rect: egui::Rect,
+) {
+    let button_rect = egui::Rect::from_min_size(
+        egui::pos2(
+            content_rect.right() - MAIN_MENU_BGM_BUTTON_MARGIN - MAIN_MENU_BGM_BUTTON_SIZE,
+            content_rect.top() + MAIN_MENU_BGM_BUTTON_MARGIN,
+        ),
+        egui::vec2(MAIN_MENU_BGM_BUTTON_SIZE, MAIN_MENU_BGM_BUTTON_SIZE),
+    );
+    let (icon, tooltip) = if ui_state.main_menu_bgm_enabled {
+        (egui_phosphor::regular::SPEAKER_HIGH, "关闭背景音乐")
+    } else {
+        (egui_phosphor::regular::SPEAKER_X, "打开背景音乐")
+    };
+
+    let response = ui
+        .put(
+            button_rect,
+            egui::Button::new(egui::RichText::new(icon).size(20.0).color(war_gold())),
+        )
+        .on_hover_text(tooltip);
+    if response.clicked() {
+        ui_state.main_menu_bgm_enabled = !ui_state.main_menu_bgm_enabled;
+        ui.ctx().request_repaint();
+    }
+}
+
+fn close_main_menu_popups(ui_state: &mut GameUiState) {
+    ui_state.main_menu_new_game_open = false;
+    ui_state.main_menu_load_game_open = false;
+    ui_state.settings_open = false;
+    ui_state.officer_settings_open = false;
 }
 
 pub(super) fn new_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
@@ -273,35 +447,254 @@ pub(super) fn load_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
     });
 }
 
-pub(super) fn main_menu_settings_button(ctx: &egui::Context, ui_state: &mut GameUiState) {
-    if ui_state.settings_open || ui_state.officer_settings_open {
+fn new_game_modal(ctx: &egui::Context, ui_state: &mut GameUiState) {
+    main_menu_scrim(ctx, ui_state);
+
+    let screen = ctx.content_rect();
+    let width = (screen.width() * 0.48).clamp(440.0, 640.0);
+    let height = (screen.height() - HUD_MARGIN * 2.0).clamp(500.0, 680.0);
+    egui::Area::new(egui::Id::new("main_menu_new_game_modal"))
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            war_panel_frame().show(ui, |ui| {
+                ui.set_width(width);
+                ui.set_min_height(height);
+                if modal_title_bar(ui, "新的开始") {
+                    ui_state.main_menu_new_game_open = false;
+                }
+                ui.separator();
+                new_game_menu(ui, ui_state);
+            });
+        });
+}
+
+fn load_game_modal(ctx: &egui::Context, ui_state: &mut GameUiState) {
+    main_menu_scrim(ctx, ui_state);
+
+    let screen = ctx.content_rect();
+    let width = (screen.width() * 0.52).clamp(480.0, 720.0);
+    let height = (screen.height() - HUD_MARGIN * 2.0).clamp(500.0, 700.0);
+    egui::Area::new(egui::Id::new("main_menu_load_game_modal"))
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            war_panel_frame().show(ui, |ui| {
+                ui.set_width(width);
+                ui.set_min_height(height);
+                if modal_title_bar(ui, "继续征途") {
+                    ui_state.main_menu_load_game_open = false;
+                }
+                ui.separator();
+                load_game_menu(ui, ui_state);
+            });
+        });
+}
+
+fn main_menu_scrim(ctx: &egui::Context, ui_state: &mut GameUiState) {
+    let screen = ctx.content_rect();
+    egui::Area::new(egui::Id::new("main_menu_choice_modal_scrim"))
+        .order(egui::Order::Middle)
+        .fixed_pos(screen.min)
+        .show(ctx, |ui| {
+            let (rect, response) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
+            ui.painter().rect_filled(
+                rect,
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 120),
+            );
+            if response.clicked() {
+                ui_state.main_menu_new_game_open = false;
+                ui_state.main_menu_load_game_open = false;
+            }
+        });
+}
+
+fn draw_main_menu_illustration(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    background_rect: egui::Rect,
+    art_rect: egui::Rect,
+) {
+    paint_illustration_stage(ui.painter(), background_rect, art_rect);
+    draw_cloud_pattern(ui, ui_state, background_rect.shrink(28.0));
+
+    ensure_main_menu_illustration_slots(ui_state);
+    let illustration_index = active_main_menu_illustration_index(ui_state);
+
+    if ui_state.main_menu_illustrations[illustration_index].is_none()
+        && ui_state.main_menu_illustration_errors[illustration_index].is_none()
+    {
+        match load_main_menu_illustration(ui.ctx(), illustration_index) {
+            Ok(illustration) => {
+                ui_state.main_menu_illustrations[illustration_index] = Some(illustration)
+            }
+            Err(error) => ui_state.main_menu_illustration_errors[illustration_index] = Some(error),
+        }
+    }
+
+    if let Some(illustration) = &ui_state.main_menu_illustrations[illustration_index] {
+        let fit_size = fit_contained_size(illustration.crop_size, art_rect.size());
+        let image_rect = egui::Align2::CENTER_CENTER.align_size_within_rect(fit_size, art_rect);
+        paint_illustration_underlay(ui.painter(), background_rect, image_rect);
+        egui::Image::from_texture((illustration.texture.id(), fit_size))
+            .fit_to_exact_size(fit_size)
+            .uv(illustration.crop_uv)
+            .tint(egui::Color32::WHITE)
+            .paint_at(ui, image_rect);
+    } else if let Some(error) = &ui_state.main_menu_illustration_errors[illustration_index] {
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(art_rect.shrink(24.0))
+                .layout(egui::Layout::centered_and_justified(
+                    egui::Direction::TopDown,
+                )),
+            |ui| {
+                ui.label(egui::RichText::new(error).color(war_text_muted()));
+            },
+        );
+    }
+}
+
+fn ensure_main_menu_illustration_slots(ui_state: &mut GameUiState) {
+    ui_state
+        .main_menu_illustrations
+        .resize_with(MAIN_MENU_ILLUSTRATION_COUNT, || None);
+    ui_state
+        .main_menu_illustration_errors
+        .resize_with(MAIN_MENU_ILLUSTRATION_COUNT, || None);
+}
+
+fn active_main_menu_illustration_index(ui_state: &GameUiState) -> usize {
+    ui_state
+        .main_menu_hovered_illustration_index
+        .filter(|index| *index < MAIN_MENU_ILLUSTRATION_COUNT)
+        .unwrap_or(MAIN_MENU_DEFAULT_ILLUSTRATION_INDEX)
+}
+
+fn draw_cloud_pattern(ui: &mut egui::Ui, ui_state: &mut GameUiState, rect: egui::Rect) {
+    if rect.width() <= 0.0 || rect.height() <= 0.0 {
         return;
     }
 
-    egui::Area::new(egui::Id::new("main_menu_settings_button"))
-        .order(egui::Order::Foreground)
-        .anchor(
-            egui::Align2::RIGHT_TOP,
-            egui::vec2(-HUD_MARGIN, HUD_TOP_OFFSET),
-        )
-        .show(ctx, |ui| {
-            war_bar_frame().show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_sized([104.0, 32.0], egui::Button::new("显示设置"))
-                        .clicked()
-                    {
-                        ui_state.settings_open = true;
-                    }
-                    if ui
-                        .add_sized([104.0, 32.0], egui::Button::new("武将设置"))
-                        .clicked()
-                    {
-                        open_officer_settings(ui_state);
-                    }
-                });
-            });
-        });
+    if ui_state.main_menu_cloud_pattern.is_none()
+        && ui_state.main_menu_cloud_pattern_error.is_none()
+    {
+        match load_main_menu_cloud_pattern(ui.ctx()) {
+            Ok(pattern) => ui_state.main_menu_cloud_pattern = Some(pattern),
+            Err(error) => ui_state.main_menu_cloud_pattern_error = Some(error),
+        }
+    }
+
+    let Some(pattern) = &ui_state.main_menu_cloud_pattern else {
+        return;
+    };
+
+    if pattern.size.x <= 0.0 || pattern.size.y <= 0.0 {
+        return;
+    }
+
+    let painter = ui.painter().with_clip_rect(rect);
+    let tint = egui::Color32::from_rgba_unmultiplied(255, 255, 255, MAIN_MENU_CLOUD_PATTERN_ALPHA);
+    let uv = egui::Rect::from_min_max(
+        egui::pos2(
+            MAIN_MENU_CLOUD_PATTERN_UV_INSET,
+            MAIN_MENU_CLOUD_PATTERN_UV_INSET,
+        ),
+        egui::pos2(
+            1.0 - MAIN_MENU_CLOUD_PATTERN_UV_INSET,
+            1.0 - MAIN_MENU_CLOUD_PATTERN_UV_INSET,
+        ),
+    );
+    let crop_size = pattern.size * (1.0 - MAIN_MENU_CLOUD_PATTERN_UV_INSET * 2.0);
+    let decal_width = (rect.width() * 0.45).clamp(420.0, 600.0);
+    let decal_size = egui::vec2(
+        decal_width,
+        decal_width * crop_size.y / crop_size.x.max(1.0),
+    );
+
+    for center_factor in [
+        egui::vec2(0.13, 0.16),
+        egui::vec2(0.57, 0.12),
+        egui::vec2(0.91, 0.30),
+        egui::vec2(0.20, 0.58),
+        egui::vec2(0.66, 0.55),
+        egui::vec2(0.08, 0.88),
+        egui::vec2(0.55, 0.91),
+        egui::vec2(0.94, 0.82),
+    ] {
+        let center = egui::pos2(
+            rect.left() + rect.width() * center_factor.x,
+            rect.top() + rect.height() * center_factor.y,
+        );
+        let decal_rect = egui::Align2::CENTER_CENTER
+            .align_size_within_rect(decal_size, egui::Rect::from_center_size(center, decal_size));
+        painter.image(pattern.texture.id(), decal_rect, uv, tint);
+    }
+}
+
+fn paint_illustration_stage(painter: &egui::Painter, rect: egui::Rect, art_rect: egui::Rect) {
+    painter.rect_filled(rect, 12.0, egui::Color32::from_rgb(244, 239, 224));
+    paint_center_gradient(
+        painter,
+        art_rect.expand2(egui::vec2(90.0, 32.0)).intersect(rect),
+        egui::Color32::from_rgba_unmultiplied(255, 252, 240, 92),
+        egui::Color32::TRANSPARENT,
+    );
+    painter.rect_stroke(
+        rect,
+        12.0,
+        egui::Stroke::new(
+            1.5,
+            egui::Color32::from_rgba_unmultiplied(215, 162, 72, 210),
+        ),
+        egui::StrokeKind::Inside,
+    );
+}
+
+fn paint_illustration_underlay(
+    painter: &egui::Painter,
+    stage_rect: egui::Rect,
+    image_rect: egui::Rect,
+) {
+    let wash_rect = image_rect
+        .expand2(egui::vec2(72.0, 44.0))
+        .intersect(stage_rect);
+    paint_center_gradient(
+        painter,
+        wash_rect,
+        egui::Color32::from_rgba_unmultiplied(250, 247, 232, 82),
+        egui::Color32::TRANSPARENT,
+    );
+
+    let ink_rect = image_rect
+        .expand2(egui::vec2(26.0, 18.0))
+        .intersect(stage_rect);
+    paint_center_gradient(
+        painter,
+        ink_rect,
+        egui::Color32::from_rgba_unmultiplied(96, 84, 64, 28),
+        egui::Color32::TRANSPARENT,
+    );
+}
+
+fn paint_center_gradient(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    center: egui::Color32,
+    edge: egui::Color32,
+) {
+    let mut mesh = egui::epaint::Mesh::default();
+    mesh.colored_vertex(rect.left_top(), edge);
+    mesh.colored_vertex(rect.right_top(), edge);
+    mesh.colored_vertex(rect.right_bottom(), edge);
+    mesh.colored_vertex(rect.left_bottom(), edge);
+    mesh.colored_vertex(rect.center(), center);
+    mesh.add_triangle(0, 1, 4);
+    mesh.add_triangle(1, 2, 4);
+    mesh.add_triangle(2, 3, 4);
+    mesh.add_triangle(3, 0, 4);
+    painter.add(mesh);
 }
 
 pub(super) fn open_officer_settings(ui_state: &mut GameUiState) {
@@ -362,6 +755,260 @@ fn load_officer_settings_game(ui_state: &mut GameUiState) -> Option<GameState> {
             None
         }
     }
+}
+
+fn banner_logo(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
+    if ui_state.banner_logo.is_none() && ui_state.banner_logo_error.is_none() {
+        match load_banner_logo(ui.ctx()) {
+            Ok(logo) => ui_state.banner_logo = Some(logo),
+            Err(error) => ui_state.banner_logo_error = Some(error),
+        }
+    }
+
+    let Some(logo) = &ui_state.banner_logo else {
+        ui.label(
+            egui::RichText::new("三国争霸")
+                .size(42.0)
+                .color(war_gold())
+                .strong(),
+        );
+        ui.label(
+            egui::RichText::new("Shogun")
+                .size(18.0)
+                .color(war_text_muted()),
+        );
+        return;
+    };
+
+    let max_width = ui.available_width().min(BANNER_LOGO_MAX_WIDTH);
+    let scale = (max_width / logo.crop_size.x)
+        .min(BANNER_LOGO_MAX_HEIGHT / logo.crop_size.y)
+        .max(0.0);
+    let size = logo.crop_size * scale;
+
+    ui.add(
+        egui::Image::from_texture((logo.texture.id(), size))
+            .uv(logo.crop_uv)
+            .fit_to_exact_size(size),
+    );
+}
+
+fn load_banner_logo(ctx: &egui::Context) -> Result<MenuBannerLogo, String> {
+    let decoded = decode_banner_logo()?;
+    let texture = ctx.load_texture(
+        BANNER_LOGO_TEXTURE_ID,
+        decoded.image,
+        egui::TextureOptions::LINEAR,
+    );
+
+    Ok(MenuBannerLogo {
+        texture,
+        crop_uv: decoded.crop_uv,
+        crop_size: decoded.crop_size,
+    })
+}
+
+fn load_main_menu_illustration(
+    ctx: &egui::Context,
+    index: usize,
+) -> Result<MenuIllustration, String> {
+    let decoded = decode_main_menu_illustration(index)?;
+    let texture = ctx.load_texture(
+        format!("{MAIN_MENU_ILLUSTRATION_TEXTURE_ID_PREFIX}_{index}"),
+        decoded.image,
+        egui::TextureOptions::LINEAR,
+    );
+
+    Ok(MenuIllustration {
+        texture,
+        crop_uv: decoded.crop_uv,
+        crop_size: decoded.crop_size,
+    })
+}
+
+fn load_main_menu_cloud_pattern(ctx: &egui::Context) -> Result<MenuCloudPattern, String> {
+    let decoded = decode_png_rgba(MAIN_MENU_CLOUD_PATTERN_BYTES, "main menu cloud pattern")?;
+    let size = egui::vec2(decoded.width as f32, decoded.height as f32);
+    let image =
+        egui::ColorImage::from_rgba_unmultiplied([decoded.width, decoded.height], &decoded.rgba);
+    let texture = ctx.load_texture(
+        MAIN_MENU_CLOUD_PATTERN_TEXTURE_ID,
+        image,
+        egui::TextureOptions::LINEAR,
+    );
+
+    Ok(MenuCloudPattern { texture, size })
+}
+
+struct DecodedBannerLogo {
+    image: egui::ColorImage,
+    crop_uv: egui::Rect,
+    crop_size: egui::Vec2,
+}
+
+struct DecodedMenuIllustration {
+    image: egui::ColorImage,
+    crop_uv: egui::Rect,
+    crop_size: egui::Vec2,
+}
+
+struct DecodedPng {
+    width: usize,
+    height: usize,
+    rgba: Vec<u8>,
+}
+
+fn decode_banner_logo() -> Result<DecodedBannerLogo, String> {
+    let decoded = decode_png_rgba(BANNER_LOGO_BYTES, "banner logo")?;
+    let crop = alpha_crop_bounds(&decoded.rgba, decoded.width, decoded.height).unwrap_or((
+        0,
+        0,
+        decoded.width - 1,
+        decoded.height - 1,
+    ));
+    let crop_uv = crop_uv(crop, decoded.width, decoded.height);
+    let crop_size = egui::vec2((crop.2 - crop.0 + 1) as f32, (crop.3 - crop.1 + 1) as f32);
+    let image =
+        egui::ColorImage::from_rgba_unmultiplied([decoded.width, decoded.height], &decoded.rgba);
+
+    Ok(DecodedBannerLogo {
+        image,
+        crop_uv,
+        crop_size,
+    })
+}
+
+fn decode_main_menu_illustration(index: usize) -> Result<DecodedMenuIllustration, String> {
+    let bytes = MAIN_MENU_ILLUSTRATION_BYTES
+        .get(index)
+        .ok_or_else(|| format!("main menu illustration index {index} is out of range"))?;
+    let decoded = decode_png_rgba(bytes, &format!("main menu illustration {index}"))?;
+    let crop = alpha_crop_bounds(&decoded.rgba, decoded.width, decoded.height).unwrap_or((
+        0,
+        0,
+        decoded.width - 1,
+        decoded.height - 1,
+    ));
+    let crop_uv = crop_uv(crop, decoded.width, decoded.height);
+    let crop_size = egui::vec2((crop.2 - crop.0 + 1) as f32, (crop.3 - crop.1 + 1) as f32);
+    let image =
+        egui::ColorImage::from_rgba_unmultiplied([decoded.width, decoded.height], &decoded.rgba);
+
+    Ok(DecodedMenuIllustration {
+        image,
+        crop_uv,
+        crop_size,
+    })
+}
+
+fn decode_png_rgba(bytes: &[u8], description: &str) -> Result<DecodedPng, String> {
+    let image = BevyImage::from_buffer(
+        bytes,
+        ImageType::Format(ImageFormat::Png),
+        CompressedImageFormats::NONE,
+        true,
+        ImageSampler::Default,
+        RenderAssetUsages::MAIN_WORLD,
+    )
+    .map_err(|error| format!("failed to decode {description} PNG: {error}"))?;
+
+    let width = image.width() as usize;
+    let height = image.height() as usize;
+    let format = image.texture_descriptor.format;
+    let data = image
+        .data
+        .ok_or_else(|| format!("decoded {description} has no CPU pixel data"))?;
+    let rgba = match format {
+        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Uint => {
+            data
+        }
+        TextureFormat::Rgba16Unorm | TextureFormat::Rgba16Uint => rgba16_to_rgba8(&data)?,
+        _ => {
+            return Err(format!(
+                "unsupported {description} texture format: {format:?}"
+            ));
+        }
+    };
+
+    Ok(DecodedPng {
+        width,
+        height,
+        rgba,
+    })
+}
+
+fn fit_contained_size(image_size: egui::Vec2, available_size: egui::Vec2) -> egui::Vec2 {
+    if image_size.x <= 0.0
+        || image_size.y <= 0.0
+        || available_size.x <= 0.0
+        || available_size.y <= 0.0
+    {
+        return egui::Vec2::ZERO;
+    }
+
+    let scale = (available_size.x / image_size.x)
+        .min(available_size.y / image_size.y)
+        .max(0.0);
+    image_size * scale
+}
+
+fn rgba16_to_rgba8(bytes: &[u8]) -> Result<Vec<u8>, String> {
+    if !bytes.len().is_multiple_of(8) {
+        return Err(format!(
+            "16-bit RGBA logo buffer length must be divisible by 8, got {}",
+            bytes.len()
+        ));
+    }
+
+    let mut rgba = Vec::with_capacity(bytes.len() / 2);
+    for channel in bytes.chunks_exact(2) {
+        let value = u16::from_le_bytes([channel[0], channel[1]]);
+        rgba.push((value / 257) as u8);
+    }
+    Ok(rgba)
+}
+
+fn alpha_crop_bounds(
+    rgba: &[u8],
+    width: usize,
+    height: usize,
+) -> Option<(usize, usize, usize, usize)> {
+    let mut min_x = width;
+    let mut min_y = height;
+    let mut max_x = 0;
+    let mut max_y = 0;
+    let mut found_pixel = false;
+
+    for y in 0..height {
+        for x in 0..width {
+            let alpha = rgba[(y * width + x) * 4 + 3];
+            if alpha <= BANNER_LOGO_ALPHA_THRESHOLD {
+                continue;
+            }
+            found_pixel = true;
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+
+    found_pixel.then_some((
+        min_x.saturating_sub(BANNER_LOGO_CROP_PADDING),
+        min_y.saturating_sub(BANNER_LOGO_CROP_PADDING),
+        (max_x + BANNER_LOGO_CROP_PADDING).min(width - 1),
+        (max_y + BANNER_LOGO_CROP_PADDING).min(height - 1),
+    ))
+}
+
+fn crop_uv(crop: (usize, usize, usize, usize), width: usize, height: usize) -> egui::Rect {
+    egui::Rect::from_min_max(
+        egui::pos2(crop.0 as f32 / width as f32, crop.1 as f32 / height as f32),
+        egui::pos2(
+            (crop.2 + 1) as f32 / width as f32,
+            (crop.3 + 1) as f32 / height as f32,
+        ),
+    )
 }
 
 fn extend_game_with_catalog_officers(game: &mut GameState, profiles: Vec<OfficerProfile>) {
@@ -761,6 +1408,54 @@ mod tests {
         officer.stats = profile.stats;
         state.officer_settings_game = Some(game);
         state
+    }
+
+    #[test]
+    fn banner_logo_decodes_and_respects_display_bounds() {
+        let decoded = decode_banner_logo().unwrap();
+
+        assert!(decoded.crop_size.x > 0.0);
+        assert!(decoded.crop_size.y > 0.0);
+
+        let scale = (BANNER_LOGO_MAX_WIDTH / decoded.crop_size.x)
+            .min(BANNER_LOGO_MAX_HEIGHT / decoded.crop_size.y);
+        let display_size = decoded.crop_size * scale;
+
+        assert!(display_size.x <= BANNER_LOGO_MAX_WIDTH + f32::EPSILON);
+        assert!(display_size.y <= BANNER_LOGO_MAX_HEIGHT + f32::EPSILON);
+    }
+
+    #[test]
+    fn main_menu_cloud_pattern_decodes_at_expected_size() {
+        let decoded =
+            decode_png_rgba(MAIN_MENU_CLOUD_PATTERN_BYTES, "main menu cloud pattern").unwrap();
+
+        assert_eq!(decoded.width, 1536);
+        assert_eq!(decoded.height, 1024);
+    }
+
+    #[test]
+    fn main_menu_illustrations_decode_at_expected_size() {
+        for (index, bytes) in MAIN_MENU_ILLUSTRATION_BYTES.iter().enumerate() {
+            let decoded =
+                decode_png_rgba(bytes, &format!("main menu illustration {index}")).unwrap();
+
+            assert_eq!(decoded.width, 1152);
+            assert_eq!(decoded.height, 1696);
+        }
+    }
+
+    #[test]
+    fn main_menu_illustration_fit_respects_display_bounds() {
+        let image_size = egui::vec2(1152.0, 1696.0);
+
+        for available_size in [egui::vec2(804.0, 788.0), egui::vec2(804.0, 688.0)] {
+            let display_size = fit_contained_size(image_size, available_size);
+
+            assert!(display_size.x <= available_size.x + f32::EPSILON);
+            assert!(display_size.y <= available_size.y + f32::EPSILON);
+            assert!((display_size.x / display_size.y - image_size.x / image_size.y).abs() < 0.001);
+        }
     }
 
     #[test]

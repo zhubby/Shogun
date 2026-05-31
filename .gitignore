@@ -1,4 +1,5 @@
 /target/
+/dist/
 .shogun_saves/
 .shogun_data/
 assets/data/*.sqlite

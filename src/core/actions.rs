@@ -45,6 +45,8 @@ pub(super) fn enter_game(ui_state: &mut GameUiState, game: GameState, message: S
     ui_state.technology_open = false;
     ui_state.reports_open = true;
     ui_state.save_panel_open = false;
+    ui_state.main_menu_new_game_open = false;
+    ui_state.main_menu_load_game_open = false;
     reset_map_view(ui_state);
     ui_state.game = Some(game);
     ui_state.screen = Screen::InGame;

@@ -76,7 +76,7 @@ pub(super) fn top_status_hud(ctx: &egui::Context, ui_state: &mut GameUiState, sc
                 ui.set_width(width);
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("大将军")
+                        egui::RichText::new("三国争霸")
                             .size(24.0)
                             .color(war_gold())
                             .strong(),
