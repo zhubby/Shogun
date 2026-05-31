@@ -9,7 +9,7 @@ use crate::game::{
 use super::actions::{enter_game, refresh_saves, start_history_game, start_json_game};
 use super::hud::{officer_browser_filters, officer_browser_table};
 use super::settings::settings_modal;
-use super::state::{refresh_history_factions, refresh_history_menu, GameUiState};
+use super::state::{GameUiState, refresh_history_factions, refresh_history_menu};
 use super::style::{
     draw_menu_background, war_bar_frame, war_gold, war_panel_frame, war_sub_panel_frame,
     war_text_muted,

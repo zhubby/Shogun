@@ -126,13 +126,13 @@ impl ScenarioData {
                     officer.id, officer.faction_id
                 )));
             }
-            if let Some(city_id) = &officer.city_id {
-                if !cities.contains_key(city_id) {
-                    return Err(ScenarioError::Invalid(format!(
-                        "武将 {} 引用了不存在的城池 {}",
-                        officer.id, city_id
-                    )));
-                }
+            if let Some(city_id) = &officer.city_id
+                && !cities.contains_key(city_id)
+            {
+                return Err(ScenarioError::Invalid(format!(
+                    "武将 {} 引用了不存在的城池 {}",
+                    officer.id, city_id
+                )));
             }
         }
 

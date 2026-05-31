@@ -42,10 +42,10 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
         return;
     };
 
-    if ui_state.map_boundaries_enabled {
-        if let Some(catalog) = &ui_state.map_boundaries {
-            draw_map_boundaries(&painter, game, catalog, bounds, rect, ui_state);
-        }
+    if ui_state.map_boundaries_enabled
+        && let Some(catalog) = &ui_state.map_boundaries
+    {
+        draw_map_boundaries(&painter, game, catalog, bounds, rect, ui_state);
     }
 
     for road in &game.roads {
@@ -83,25 +83,25 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
         .interact_pointer_pos()
         .and_then(|pointer_pos| city_at_position(game, bounds, rect, pointer_pos, ui_state));
 
-    if response.clicked() || response.secondary_clicked() {
-        if let Some(city_id) = picked_city.clone() {
-            ui_state.selected_city_id = Some(city_id);
-            ui_state.city_drawer_open = true;
-        }
+    if (response.clicked() || response.secondary_clicked())
+        && let Some(city_id) = picked_city.clone()
+    {
+        ui_state.selected_city_id = Some(city_id);
+        ui_state.city_drawer_open = true;
     }
-    if response.double_clicked() {
-        if let Some(city_id) = picked_city.clone() {
-            open_city(ui_state, city_id);
-        }
+    if response.double_clicked()
+        && let Some(city_id) = picked_city.clone()
+    {
+        open_city(ui_state, city_id);
     }
 
     let context_city_id = ui_state.selected_city_id.clone();
     response.context_menu(|ui| {
-        if let Some(city_id) = context_city_id.clone() {
-            if ui.button("打开军令").clicked() {
-                open_city(ui_state, city_id);
-                ui.close();
-            }
+        if let Some(city_id) = context_city_id.clone()
+            && ui.button("打开军令").clicked()
+        {
+            open_city(ui_state, city_id);
+            ui.close();
         }
     });
 }

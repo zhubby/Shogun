@@ -1,10 +1,10 @@
 use bevy::prelude::Window;
 use bevy_egui::egui;
 
+use super::HUD_MARGIN;
 use super::display_settings::{DisplayMode, DisplayResolution, DisplaySettings};
 use super::state::GameUiState;
 use super::style::{war_gold, war_panel_frame, war_text_muted};
-use super::HUD_MARGIN;
 
 pub(super) fn settings_modal(ctx: &egui::Context, ui_state: &mut GameUiState) -> bool {
     let screen = ctx.content_rect();

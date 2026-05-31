@@ -1,6 +1,6 @@
 use shogun::game::*;
+use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{ConnectOptions, Row};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -237,14 +237,16 @@ fn fixed_scenarios_build_with_valid_selectable_factions_and_governors() {
                 scenario.id,
                 faction.id
             );
-            assert!(game
-                .cities
-                .values()
-                .all(|city| game.factions.contains_key(&city.faction_id)));
-            assert!(game
-                .officers
-                .values()
-                .all(|officer| officer.profile.is_some()));
+            assert!(
+                game.cities
+                    .values()
+                    .all(|city| game.factions.contains_key(&city.faction_id))
+            );
+            assert!(
+                game.officers
+                    .values()
+                    .all(|officer| officer.profile.is_some())
+            );
 
             for city in game.cities.values() {
                 if let Some(governor_id) = &city.governor_id {
@@ -283,10 +285,12 @@ fn life_events_apply_appearances_deaths_and_do_not_repeat() {
 
     assert!(death_game.applied_event_ids.contains("death_sun_ce"));
     assert_eq!(death_game.officers["sun_ce"].status, OfficerStatus::Dead);
-    assert!(first_report
-        .entries
-        .iter()
-        .any(|entry| entry.message.contains("孙策")));
+    assert!(
+        first_report
+            .entries
+            .iter()
+            .any(|entry| entry.message.contains("孙策"))
+    );
 
     let applied_count = death_game.applied_event_ids.len();
     death_game.year = 200;
@@ -294,10 +298,12 @@ fn life_events_apply_appearances_deaths_and_do_not_repeat() {
     let second_report = resolve_command_batch_with_history(&mut death_game, Vec::new(), &catalog);
 
     assert_eq!(death_game.applied_event_ids.len(), applied_count);
-    assert!(!second_report
-        .entries
-        .iter()
-        .any(|entry| entry.message.contains("孙策")));
+    assert!(
+        !second_report
+            .entries
+            .iter()
+            .any(|entry| entry.message.contains("孙策"))
+    );
 }
 
 #[test]

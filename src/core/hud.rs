@@ -786,19 +786,19 @@ pub(super) fn save_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
         ui.text_edit_singleline(&mut ui_state.save_display_name);
     });
     ui.horizontal(|ui| {
-        if ui.button("保存").clicked() {
-            if let Some(game) = &ui_state.game {
-                match ui_state.save_manager.save_slot(
-                    &ui_state.save_slot_id,
-                    &ui_state.save_display_name,
-                    game,
-                ) {
-                    Ok(meta) => {
-                        refresh_saves(ui_state);
-                        ui_state.message = format!("保存到 {}", meta.display_name);
-                    }
-                    Err(error) => ui_state.message = error.to_string(),
+        if ui.button("保存").clicked()
+            && let Some(game) = &ui_state.game
+        {
+            match ui_state.save_manager.save_slot(
+                &ui_state.save_slot_id,
+                &ui_state.save_display_name,
+                game,
+            ) {
+                Ok(meta) => {
+                    refresh_saves(ui_state);
+                    ui_state.message = format!("保存到 {}", meta.display_name);
                 }
+                Err(error) => ui_state.message = error.to_string(),
             }
         }
         if ui.button("读取当前槽").clicked() {
@@ -887,22 +887,28 @@ mod tests {
         let game = state.game.as_ref().unwrap();
 
         state.officer_browser_filters.search = "关羽".to_string();
-        assert!(filtered_officer_rows(&state.officer_browser_filters, game)
-            .iter()
-            .any(|row| row.name == "关羽"));
+        assert!(
+            filtered_officer_rows(&state.officer_browser_filters, game)
+                .iter()
+                .any(|row| row.name == "关羽")
+        );
 
         state.officer_browser_filters.search = "guan_yu".to_string();
-        assert!(filtered_officer_rows(&state.officer_browser_filters, game)
-            .iter()
-            .any(|row| row.name == "关羽"));
+        assert!(
+            filtered_officer_rows(&state.officer_browser_filters, game)
+                .iter()
+                .any(|row| row.name == "关羽")
+        );
 
         state.officer_browser_filters.search = "刘备军".to_string();
         assert!(!filtered_officer_rows(&state.officer_browser_filters, game).is_empty());
 
         state.officer_browser_filters.search = "平原".to_string();
-        assert!(filtered_officer_rows(&state.officer_browser_filters, game)
-            .iter()
-            .all(|row| row.city_name == "平原"));
+        assert!(
+            filtered_officer_rows(&state.officer_browser_filters, game)
+                .iter()
+                .all(|row| row.city_name == "平原")
+        );
     }
 
     #[test]

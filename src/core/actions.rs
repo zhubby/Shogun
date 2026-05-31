@@ -76,10 +76,10 @@ pub(super) fn open_city(ui_state: &mut GameUiState, city_id: CityId) {
 }
 
 pub(super) fn finish_turn(game: &mut GameState, provider: &RuleBasedAiProvider) -> TurnReport {
-    if is_history_scenario(&game.scenario_id) {
-        if let Ok(catalog) = SqliteHistoricalCatalog::open_default() {
-            return finish_turn_with_ai_with_history(game, provider, &catalog);
-        }
+    if is_history_scenario(&game.scenario_id)
+        && let Ok(catalog) = SqliteHistoricalCatalog::open_default()
+    {
+        return finish_turn_with_ai_with_history(game, provider, &catalog);
     }
     finish_turn_with_ai(game, provider)
 }

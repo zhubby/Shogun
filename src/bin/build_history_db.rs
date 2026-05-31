@@ -1,4 +1,4 @@
-use shogun::game::{build_history_database, SqliteHistoricalCatalog};
+use shogun::game::{SqliteHistoricalCatalog, build_history_database};
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

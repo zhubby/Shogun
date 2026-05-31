@@ -1,8 +1,8 @@
 use super::city::{City, CityCatalog, CityProfile, CityScale, SourceConfidence};
 use super::ids::{CityId, FactionId, OfficerId, ScenarioId};
 use super::model::{
-    diplomacy_key, Controller, DiplomaticRelation, Faction, GameState, GameStatus, MapPosition,
-    Road, SAVE_VERSION,
+    Controller, DiplomaticRelation, Faction, GameState, GameStatus, MapPosition, Road,
+    SAVE_VERSION, diplomacy_key,
 };
 use super::officer::{
     Officer, OfficerCatalog, OfficerGender, OfficerProfile, OfficerRelationship,
@@ -10,8 +10,8 @@ use super::officer::{
 };
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
 use sqlx::Row;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions, SqliteRow};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::future::Future;

@@ -58,10 +58,10 @@ pub(super) fn selected_city_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState)
         }
     }
 
-    if let Some(governor_id) = &city.governor_id {
-        if let Some(governor) = game.officers.get(governor_id) {
-            ui.label(format!("太守: {}", governor.name));
-        }
+    if let Some(governor_id) = &city.governor_id
+        && let Some(governor) = game.officers.get(governor_id)
+    {
+        ui.label(format!("太守: {}", governor.name));
     }
 
     ui.separator();

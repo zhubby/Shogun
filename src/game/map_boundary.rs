@@ -110,13 +110,13 @@ impl MapBoundaryCatalog {
                     boundary.id
                 )));
             }
-            if let (Some(from), Some(to)) = (boundary.valid_from_year, boundary.valid_to_year) {
-                if from > to {
-                    return Err(MapBoundaryError::Invalid(format!(
-                        "边界 {} 年份范围无效",
-                        boundary.id
-                    )));
-                }
+            if let (Some(from), Some(to)) = (boundary.valid_from_year, boundary.valid_to_year)
+                && from > to
+            {
+                return Err(MapBoundaryError::Invalid(format!(
+                    "边界 {} 年份范围无效",
+                    boundary.id
+                )));
             }
             if boundary
                 .points
