@@ -122,7 +122,7 @@ impl DisplaySettings {
         if self.display_mode == DisplayMode::Windowed {
             window
                 .resolution
-                .set_physical_resolution(self.resolution.width, self.resolution.height);
+                .set(self.resolution.width as f32, self.resolution.height as f32);
         }
     }
 
@@ -610,5 +610,26 @@ mod tests {
         assert!(!window.enabled_buttons.maximize);
         assert_eq!(window.resolution.physical_width(), 1600);
         assert_eq!(window.resolution.physical_height(), 900);
+    }
+
+    #[test]
+    fn applying_windowed_settings_preserves_logical_size_on_scaled_displays() {
+        let settings = DisplaySettings {
+            resolution: DisplayResolution::new(1600, 900),
+            display_mode: DisplayMode::Windowed,
+            vsync: true,
+        };
+        let mut window = Window {
+            resolution: WindowResolution::new(1024, 768),
+            ..Default::default()
+        };
+        window.resolution.set_scale_factor(2.0);
+
+        settings.apply_to_window(&mut window);
+
+        assert_eq!(window.resolution.width(), 1600.0);
+        assert_eq!(window.resolution.height(), 900.0);
+        assert_eq!(window.resolution.physical_width(), 3200);
+        assert_eq!(window.resolution.physical_height(), 1800);
     }
 }
