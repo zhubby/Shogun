@@ -3,6 +3,7 @@ use bevy::prelude::Resource;
 use bevy_egui::egui;
 use std::collections::BTreeMap;
 
+use super::asset_path;
 use super::display_settings::{GameSettings, GameSettingsStore, LoadedGameSettings};
 use super::i18n::{Translator, args};
 use super::map::MapBoundaryViewCache;
@@ -116,9 +117,10 @@ impl GameUiState {
         settings_store: GameSettingsStore,
         loaded_settings: LoadedGameSettings,
     ) -> Self {
-        let json_scenario = ScenarioData::from_path("assets/scenarios/early_three_kingdoms.json")
-            .or_else(|_| ScenarioData::default_scenario())
-            .expect("默认剧本必须可加载");
+        let json_scenario =
+            ScenarioData::from_path(asset_path("scenarios/early_three_kingdoms.json"))
+                .or_else(|_| ScenarioData::default_scenario())
+                .expect("默认剧本必须可加载");
         let history_menu = load_history_menu(None);
         let selected_faction_id = history_menu
             .factions
@@ -255,7 +257,7 @@ pub(super) fn combined_menu_message(
 pub(super) fn load_map_boundary_catalog(
     t: &Translator,
 ) -> (Option<MapBoundaryCatalog>, Option<String>) {
-    match MapBoundaryCatalog::from_path(MAP_BOUNDARY_ASSET_PATH) {
+    match MapBoundaryCatalog::from_path(asset_path("data/map_boundaries.json")) {
         Ok(catalog) => (Some(catalog), None),
         Err(error) => (
             None,

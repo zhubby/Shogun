@@ -13,10 +13,12 @@ mod settings;
 mod state;
 mod style;
 
+use bevy::asset::AssetPlugin;
 use bevy::prelude::*;
 use bevy::window::{EnabledButtons, PrimaryWindow};
 use bevy_asset_loader::prelude::*;
 use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
+use std::path::{Path, PathBuf};
 
 use audio::MainMenuAudio;
 use display_settings::GameSettingsStore;
@@ -38,23 +40,31 @@ pub fn run() {
     let settings_store = GameSettingsStore::with_default_path();
     let loaded_settings = settings_store.load();
     let initial_display_settings = loaded_settings.settings.display;
+    let asset_dir = runtime_assets_dir();
 
     App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "三国争霸 Shogun".to_string(),
-                resolution: initial_display_settings.window_resolution(),
-                mode: initial_display_settings.window_mode(),
-                present_mode: initial_display_settings.present_mode(),
-                resizable: false,
-                enabled_buttons: EnabledButtons {
-                    maximize: false,
+        .add_plugins(
+            DefaultPlugins
+                .set(AssetPlugin {
+                    file_path: asset_dir.to_string_lossy().into_owned(),
                     ..default()
-                },
-                ..default()
-            }),
-            ..default()
-        }))
+                })
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "三国争霸 Shogun".to_string(),
+                        resolution: initial_display_settings.window_resolution(),
+                        mode: initial_display_settings.window_mode(),
+                        present_mode: initial_display_settings.present_mode(),
+                        resizable: false,
+                        enabled_buttons: EnabledButtons {
+                            maximize: false,
+                            ..default()
+                        },
+                        ..default()
+                    }),
+                    ..default()
+                }),
+        )
         .add_plugins(EguiPlugin::default())
         .add_plugins(app_icon::AppIconPlugin)
         .init_collection::<MainMenuAssets>()
@@ -67,6 +77,56 @@ pub fn run() {
             (prepare_main_menu_assets_for_egui, game_ui_system).chain(),
         )
         .run();
+}
+
+pub(super) fn asset_path(path: impl AsRef<Path>) -> PathBuf {
+    runtime_assets_dir().join(path)
+}
+
+pub(super) fn runtime_assets_dir() -> PathBuf {
+    asset_dir_candidates()
+        .into_iter()
+        .find_map(existing_directory)
+        .unwrap_or_else(|| PathBuf::from("assets"))
+}
+
+fn asset_dir_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(exe_dir) = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+    {
+        candidates.push(exe_dir.join("../Resources/assets"));
+        candidates.push(exe_dir.join("assets"));
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("assets"));
+    }
+
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        candidates.push(PathBuf::from(manifest_dir).join("assets"));
+    }
+
+    candidates
+}
+
+fn existing_directory(path: PathBuf) -> Option<PathBuf> {
+    if !path.is_dir() {
+        return None;
+    }
+    Some(path.canonicalize().unwrap_or(path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_assets_dir_resolves_project_assets() {
+        assert!(runtime_assets_dir().join("icons/banner_logo.png").is_file());
+    }
 }
 
 fn setup_camera(mut commands: Commands) {

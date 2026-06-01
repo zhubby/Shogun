@@ -2,6 +2,7 @@ use bevy_egui::egui;
 use std::fs;
 use std::path::PathBuf;
 
+use super::asset_path;
 use super::i18n::Translator;
 use super::state::GameUiState;
 
@@ -204,7 +205,7 @@ pub(super) fn configure_egui_fonts(ctx: &egui::Context, ui_state: &mut GameUiSta
 
 pub(super) fn load_cjk_font_bytes() -> Option<Vec<u8>> {
     let candidates = vec![
-        PathBuf::from("assets/fonts/LXGWWenKai-Regular.ttf"),
+        asset_path("fonts/LXGWWenKai-Regular.ttf"),
         PathBuf::from("/System/Library/Fonts/PingFang.ttc"),
         PathBuf::from("/System/Library/Fonts/STHeiti Light.ttc"),
         PathBuf::from("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
