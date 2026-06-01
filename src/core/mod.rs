@@ -9,7 +9,9 @@ mod labels;
 mod map;
 mod menu;
 mod portraits;
+mod runtime;
 mod settings;
+mod shortcuts;
 mod state;
 mod style;
 
@@ -24,7 +26,9 @@ use audio::MainMenuAudio;
 use hud::in_game;
 use i18n::{Translator, args};
 use menu::{MainMenuAction, MainMenuAssets, main_menu, prepare_main_menu_assets_for_egui};
-use settings::{GameSettingsStore, apply_pending_game_settings};
+use runtime::CoreAsyncRuntime;
+use settings::{GameSettingsStore, apply_pending_game_settings, settings_modal};
+use shortcuts::handle_shortcut_input;
 use state::{GameUiState, Screen};
 use style::{configure_egui_fonts, configure_egui_theme};
 
@@ -40,6 +44,8 @@ pub fn run() {
     let loaded_settings = settings_store.load();
     let initial_display_settings = loaded_settings.settings.display;
     let asset_dir = runtime_assets_dir();
+    let core_async_runtime =
+        CoreAsyncRuntime::new().expect("failed to initialize core async runtime");
 
     App::new()
         .add_plugins(
@@ -68,6 +74,7 @@ pub fn run() {
         .add_plugins(app_icon::AppIconPlugin)
         .init_collection::<MainMenuAssets>()
         .insert_non_send_resource(MainMenuAudio::default())
+        .insert_resource(core_async_runtime)
         .insert_resource(GameUiState::new(settings_store, loaded_settings))
         .add_systems(Startup, setup_camera)
         .add_systems(Update, sync_main_menu_bgm)
@@ -190,6 +197,8 @@ fn sync_main_menu_bgm(
 
 fn game_ui_system(
     mut contexts: EguiContexts,
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    async_runtime: Res<CoreAsyncRuntime>,
     mut ui_state: ResMut<GameUiState>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
     mut app_exit_writer: MessageWriter<AppExit>,
@@ -200,22 +209,26 @@ fn game_ui_system(
     };
     configure_egui_fonts(ctx, &mut ui_state);
     configure_egui_theme(ctx);
+    handle_shortcut_input(ctx, &keyboard_input, &mut ui_state);
     let t = Translator::new(ui_state.applied_settings.general.ui_language);
 
     match ui_state.screen {
-        Screen::MainMenu => match main_menu(ctx, &mut ui_state) {
+        Screen::MainMenu => match main_menu(ctx, &mut ui_state, async_runtime.as_ref()) {
             MainMenuAction::None => {}
-            MainMenuAction::ApplyGameSettings => match windows.single_mut() {
-                Ok(mut window) => {
-                    apply_pending_game_settings(&mut ui_state, &mut window, &mut main_menu_audio)
-                }
-                Err(_) => ui_state.message = t.text("message-main-window-missing"),
-            },
             MainMenuAction::Exit => {
                 main_menu_audio.stop();
                 app_exit_writer.write(AppExit::Success);
             }
         },
         Screen::InGame => in_game(ctx, &mut ui_state),
+    }
+
+    if ui_state.settings_open && settings_modal(ctx, &mut ui_state) {
+        match windows.single_mut() {
+            Ok(mut window) => {
+                apply_pending_game_settings(&mut ui_state, &mut window, &mut main_menu_audio)
+            }
+            Err(_) => ui_state.message = t.text("message-main-window-missing"),
+        }
     }
 }

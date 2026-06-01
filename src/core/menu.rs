@@ -24,7 +24,8 @@ use super::labels::{confidence_label, officer_gender_label};
 use super::portraits::{
     OfficerPortraitTaskState, OfficerPortraitTextureView, officer_portrait_path,
 };
-use super::settings::{refresh_audio_output_devices, settings_modal};
+use super::runtime::CoreAsyncRuntime;
+use super::settings::refresh_audio_output_devices;
 use super::state::{
     GameUiState, MenuBannerLogo, MenuCloudPattern, MenuIllustration, OfficerEditDraft,
     refresh_history_factions, refresh_history_menu,
@@ -106,11 +107,14 @@ impl MainMenuAssets {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum MainMenuAction {
     None,
-    ApplyGameSettings,
     Exit,
 }
 
-pub(super) fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) -> MainMenuAction {
+pub(super) fn main_menu(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    async_runtime: &CoreAsyncRuntime,
+) -> MainMenuAction {
     ui_state.officer_portraits.poll_task_events();
     let t = Translator::new(ui_state.applied_settings.general.ui_language);
     let mut action = MainMenuAction::None;
@@ -126,16 +130,11 @@ pub(super) fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) -> Main
     if ui_state.main_menu_load_game_open {
         load_game_modal(ctx, ui_state, &t);
     }
-    if ui_state.settings_open {
-        if settings_modal(ctx, ui_state) {
-            action = MainMenuAction::ApplyGameSettings;
-        }
-    }
     if ui_state.officer_settings_open {
         officer_settings_modal(ctx, ui_state, &t);
     }
     if ui_state.officer_edit_open {
-        officer_profile_edit_modal(ctx, ui_state, &t);
+        officer_profile_edit_modal(ctx, ui_state, &t, async_runtime);
     }
     let screen = ctx.content_rect();
     if ui_state.officer_settings_open {
@@ -1351,7 +1350,12 @@ fn open_officer_profile_editor(ui_state: &mut GameUiState, officer_id: &str) {
     ui_state.officer_edit_open = true;
 }
 
-fn officer_profile_edit_modal(ctx: &egui::Context, ui_state: &mut GameUiState, t: &Translator) {
+fn officer_profile_edit_modal(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    async_runtime: &CoreAsyncRuntime,
+) {
     let screen = ctx.content_rect();
     let width = (screen.width() * 0.72).clamp(760.0, 900.0);
     let height = (screen.height() * 0.78).clamp(460.0, 720.0);
@@ -1389,6 +1393,7 @@ fn officer_profile_edit_modal(ctx: &egui::Context, ui_state: &mut GameUiState, t
                             ui,
                             ui_state,
                             t,
+                            async_runtime,
                             OFFICER_PORTRAIT_PANEL_WIDTH,
                             content_height,
                         );
@@ -1519,6 +1524,7 @@ fn officer_profile_portrait_panel(
     ui: &mut egui::Ui,
     ui_state: &mut GameUiState,
     t: &Translator,
+    async_runtime: &CoreAsyncRuntime,
     width: f32,
     max_height: f32,
 ) {
@@ -1591,6 +1597,7 @@ fn officer_profile_portrait_panel(
                 if clicked {
                     ui_state.officer_edit_error = None;
                     ui_state.officer_portraits.start_generation(
+                        async_runtime,
                         draft,
                         ui_state.applied_settings.ai.multimodal.api_key.clone(),
                         ui_state.applied_settings.ai.multimodal.model_name.clone(),

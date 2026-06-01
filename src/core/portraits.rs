@@ -6,7 +6,7 @@ use crate::ai::{
 use crate::game::{OfficerGender, OfficerId};
 use bevy::{
     image::Image as BevyImage,
-    log::{debug, error, info, warn},
+    log::{debug, error, info, trace, warn},
     render::render_resource::TextureFormat,
 };
 use bevy_egui::egui;
@@ -15,16 +15,14 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    sync::{
-        Mutex,
-        mpsc::{self, Receiver, Sender},
-    },
-    thread,
     time::{Duration, Instant, SystemTime},
 };
 use tokio::time::sleep;
 
-use super::state::OfficerEditDraft;
+use super::{
+    runtime::{CoreAsyncEvents, CoreAsyncRuntime},
+    state::OfficerEditDraft,
+};
 
 pub(super) const OFFICER_PORTRAIT_PROMPT_TEMPLATE: &str = "\
 A portrait of [人名], [身份描述], in Three Kingdoms historical strategy game character illustration style,
@@ -45,31 +43,22 @@ pub(super) enum OfficerPortraitTaskState {
 pub(super) struct OfficerPortraitStore {
     task_states: BTreeMap<OfficerId, OfficerPortraitTaskState>,
     textures: BTreeMap<OfficerId, OfficerPortraitTexture>,
-    sender: Sender<OfficerPortraitTaskEvent>,
-    receiver: Mutex<Receiver<OfficerPortraitTaskEvent>>,
+    task_events: CoreAsyncEvents<OfficerPortraitTaskEvent>,
 }
 
 impl Default for OfficerPortraitStore {
     fn default() -> Self {
-        let (sender, receiver) = mpsc::channel();
         Self {
             task_states: BTreeMap::new(),
             textures: BTreeMap::new(),
-            sender,
-            receiver: Mutex::new(receiver),
+            task_events: CoreAsyncEvents::default(),
         }
     }
 }
 
 impl OfficerPortraitStore {
     pub(super) fn poll_task_events(&mut self) {
-        let events = self
-            .receiver
-            .lock()
-            .map(|receiver| receiver.try_iter().collect::<Vec<_>>())
-            .unwrap_or_default();
-
-        for event in events {
+        for event in self.task_events.drain() {
             match event {
                 OfficerPortraitTaskEvent::Succeeded { officer_id, path } => {
                     self.textures.remove(&officer_id);
@@ -93,6 +82,7 @@ impl OfficerPortraitStore {
 
     pub(super) fn start_generation(
         &mut self,
+        runtime: &CoreAsyncRuntime,
         draft: OfficerEditDraft,
         api_key: String,
         model_name: String,
@@ -126,8 +116,7 @@ impl OfficerPortraitStore {
         self.task_states
             .insert(officer_id.clone(), OfficerPortraitTaskState::Generating);
 
-        let sender = self.sender.clone();
-        thread::spawn(move || {
+        std::mem::drop(runtime.spawn_event_task(&self.task_events, async move {
             let logger = OfficerPortraitDebugLogger::new(officer_id.clone());
             logger.info(format!(
                 "启动: model={}, path={}",
@@ -135,7 +124,7 @@ impl OfficerPortraitStore {
                 path.display()
             ));
             let result =
-                run_officer_portrait_generation(api_key, model_name, draft, path.clone(), &logger);
+                generate_officer_portrait(api_key, model_name, draft, path.clone(), &logger).await;
             let event = match result {
                 Ok(()) => OfficerPortraitTaskEvent::Succeeded { officer_id, path },
                 Err(error) => {
@@ -143,8 +132,8 @@ impl OfficerPortraitStore {
                     OfficerPortraitTaskEvent::Failed { officer_id, error }
                 }
             };
-            let _ = sender.send(event);
-        });
+            event
+        }));
     }
 
     pub(super) fn texture_for(
@@ -234,6 +223,11 @@ impl OfficerPortraitDebugLogger {
         let message = message.into();
         debug!(target: "shogun::portrait", "[{}] {message}", self.officer_id);
     }
+
+    fn trace(&self, message: impl Into<String>) {
+        let message = message.into();
+        trace!(target: "shogun::portrait", "[{}] {message}", self.officer_id);
+    }
 }
 
 pub(super) fn officer_portrait_path(officer_id: &str) -> Result<PathBuf, String> {
@@ -280,22 +274,6 @@ pub(super) fn build_officer_portrait_prompt(draft: &OfficerEditDraft) -> String 
     push_prompt_detail(&mut details, "Biography", &biography);
 
     format!("{base}\n\nCharacter reference: {}.", details.join("; "))
-}
-
-fn run_officer_portrait_generation(
-    api_key: String,
-    model_name: String,
-    draft: OfficerEditDraft,
-    path: PathBuf,
-    logger: &OfficerPortraitDebugLogger,
-) -> Result<(), String> {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|error| format!("初始化图像生成运行时失败: {error}"))?;
-    runtime.block_on(generate_officer_portrait(
-        api_key, model_name, draft, path, logger,
-    ))
 }
 
 async fn generate_officer_portrait(
@@ -371,7 +349,7 @@ async fn wait_image_task_with_debug(
             .get_image_task(task_id)
             .await
             .map_err(localize_ai_error)?;
-        logger.info(format!(
+        logger.trace(format!(
             "轮询响应: {}",
             bailian_response_debug_summary(&response)
         ));

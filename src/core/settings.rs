@@ -11,8 +11,9 @@ use std::path::{Path, PathBuf};
 use super::HUD_MARGIN;
 use super::audio::{MainMenuAudio, available_output_device_names};
 use super::i18n::{Translator, UiLanguage, args};
+use super::shortcuts::{ShortcutAction, ShortcutBinding, ShortcutSettings, shortcut_groups};
 use super::state::{GameUiState, SettingsTab};
-use super::style::{modal_title_bar, war_gold, war_panel_frame, war_text_muted};
+use super::style::{modal_title_bar, war_gold, war_panel_frame, war_text_muted, war_warning};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -20,6 +21,7 @@ pub(super) struct GameSettings {
     pub(super) general: GeneralSettings,
     pub(super) display: DisplaySettings,
     pub(super) audio: AudioSettings,
+    pub(super) shortcuts: ShortcutSettings,
     pub(super) ai: AiSettings,
 }
 
@@ -29,6 +31,10 @@ impl GameSettings {
             general: self.general,
             display: self.display.validate()?,
             audio: self.audio.normalized(),
+            shortcuts: self
+                .shortcuts
+                .validated()
+                .map_err(GameSettingsError::Invalid)?,
             ai: self.ai.normalized()?,
         })
     }
@@ -361,6 +367,7 @@ fn parse_game_settings(body: &str) -> Result<GameSettings, GameSettingsError> {
     let settings = if value.get("general").is_some()
         || value.get("display").is_some()
         || value.get("audio").is_some()
+        || value.get("shortcuts").is_some()
         || value.get("ai").is_some()
     {
         serde_json::from_value::<GameSettings>(value).map_err(GameSettingsError::Json)?
@@ -371,6 +378,7 @@ fn parse_game_settings(body: &str) -> Result<GameSettings, GameSettingsError> {
             general: GeneralSettings::default(),
             display,
             audio: AudioSettings::default(),
+            shortcuts: ShortcutSettings::default(),
             ai: AiSettings::default(),
         }
     };
@@ -464,7 +472,7 @@ pub(super) fn settings_modal(ctx: &egui::Context, ui_state: &mut GameUiState) ->
         });
 
     let mut apply_settings = false;
-    let modal_width = (screen.width() - HUD_MARGIN * 2.0).clamp(340.0, 620.0);
+    let modal_width = (screen.width() - HUD_MARGIN * 2.0).clamp(340.0, 720.0);
     egui::Area::new(egui::Id::new("settings_modal"))
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
@@ -519,6 +527,7 @@ pub(super) fn settings_controls(
             SettingsTab::Display => display_settings_controls(ui, ui_state, t),
             SettingsTab::Audio => audio_settings_controls(ui, ui_state, t),
             SettingsTab::Language => language_settings_controls(ui, ui_state, t),
+            SettingsTab::Shortcuts => shortcut_settings_controls(ui, ui_state, t),
             SettingsTab::Ai => ai_settings_controls(ui, ui_state, t),
         }
 
@@ -541,6 +550,7 @@ pub(super) fn settings_controls(
             }
             if ui.button(t.text("settings-restore-defaults")).clicked() {
                 ui_state.pending_settings = GameSettings::default();
+                ui_state.shortcut_capture_action = None;
                 ui_state.message = t.text("message-settings-restored");
             }
         });
@@ -564,6 +574,11 @@ fn settings_tabs(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) 
             &mut ui_state.settings_tab,
             SettingsTab::Language,
             t.text("settings-tab-language"),
+        );
+        ui.selectable_value(
+            &mut ui_state.settings_tab,
+            SettingsTab::Shortcuts,
+            t.text("settings-tab-shortcuts"),
         );
         ui.selectable_value(
             &mut ui_state.settings_tab,
@@ -691,6 +706,110 @@ fn language_settings_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: 
             });
     });
     ui.colored_label(war_text_muted(), t.text("settings-language-apply-hint"));
+}
+
+fn shortcut_settings_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
+    ui.label(egui::RichText::new(t.text("settings-shortcuts-hint")).color(war_text_muted()));
+    if let Err(error) = ui_state.pending_settings.shortcuts.clone().validated() {
+        ui.colored_label(
+            war_warning(),
+            t.text_args("settings-shortcuts-invalid", &args([("error", error)])),
+        );
+    }
+    ui.add_space(6.0);
+
+    egui::ScrollArea::vertical()
+        .id_salt("settings_shortcuts")
+        .max_height(360.0)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for group in shortcut_groups() {
+                ui.label(egui::RichText::new(t.text(group.label_key)).strong());
+                ui.add_space(4.0);
+                for action in group.actions {
+                    shortcut_binding_row(ui, ui_state, *action, t);
+                }
+                ui.add_space(8.0);
+            }
+        });
+}
+
+fn shortcut_binding_row(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    action: ShortcutAction,
+    t: &Translator,
+) {
+    let capturing = ui_state.shortcut_capture_action == Some(action);
+    let binding = ui_state.pending_settings.shortcuts.binding(action);
+    let binding_text = if capturing {
+        t.text("settings-shortcut-press-key")
+    } else {
+        shortcut_binding_text(binding, t)
+    };
+
+    ui.horizontal_wrapped(|ui| {
+        ui.add_sized(
+            [210.0, 26.0],
+            egui::Label::new(t.text(action.label_key())).truncate(),
+        );
+        ui.add_sized(
+            [118.0, 26.0],
+            egui::Label::new(
+                egui::RichText::new(binding_text)
+                    .monospace()
+                    .color(if capturing {
+                        war_gold()
+                    } else {
+                        war_text_muted()
+                    }),
+            )
+            .truncate(),
+        );
+        if ui
+            .add_sized(
+                [82.0, 26.0],
+                egui::Button::new(t.text("settings-shortcut-rebind")),
+            )
+            .clicked()
+        {
+            ui_state.shortcut_capture_action = Some(action);
+            ui_state.message = t.text_args(
+                "message-shortcut-capturing",
+                &args([("action", t.text(action.label_key()))]),
+            );
+        }
+        if ui
+            .add_sized(
+                [64.0, 26.0],
+                egui::Button::new(t.text("settings-shortcut-clear")),
+            )
+            .clicked()
+        {
+            *ui_state.pending_settings.shortcuts.binding_mut(action) = ShortcutBinding::unbound();
+            if ui_state.shortcut_capture_action == Some(action) {
+                ui_state.shortcut_capture_action = None;
+            }
+        }
+        if ui
+            .add_sized(
+                [88.0, 26.0],
+                egui::Button::new(t.text("settings-shortcut-default")),
+            )
+            .clicked()
+        {
+            ui_state.pending_settings.shortcuts.reset_binding(action);
+            if ui_state.shortcut_capture_action == Some(action) {
+                ui_state.shortcut_capture_action = None;
+            }
+        }
+    });
+}
+
+fn shortcut_binding_text(binding: &ShortcutBinding, t: &Translator) -> String {
+    binding
+        .display_name()
+        .unwrap_or_else(|| t.text("settings-shortcut-unbound"))
 }
 
 fn ai_settings_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
@@ -826,6 +945,7 @@ pub(super) fn apply_pending_game_settings(
     settings.display.apply_to_window(window);
     ui_state.pending_settings = settings.clone();
     ui_state.applied_settings = settings.clone();
+    ui_state.shortcut_capture_action = None;
 
     let audio_message = match main_menu_audio.sync(
         ui_state.screen,
@@ -890,6 +1010,10 @@ mod tests {
                 master_volume: 0.42,
                 output_device_name: Some("Built-in Output".to_string()),
             },
+            shortcuts: ShortcutSettings {
+                toggle_city_list: ShortcutBinding::new("KeyL").with_ctrl(),
+                ..ShortcutSettings::default()
+            },
             ai: AiSettings {
                 reasoning: ReasoningAiSettings {
                     api_type: OpenAiApiType::Responses,
@@ -938,6 +1062,7 @@ mod tests {
         );
         assert_eq!(loaded.settings.audio, AudioSettings::default());
         assert_eq!(loaded.settings.general, GeneralSettings::default());
+        assert_eq!(loaded.settings.shortcuts, ShortcutSettings::default());
         assert_eq!(loaded.settings.ai, AiSettings::default());
         assert!(loaded.message.is_none());
     }
@@ -971,8 +1096,81 @@ mod tests {
             DisplayResolution::new(1366, 768)
         );
         assert_eq!(loaded.settings.audio.master_volume, 0.5);
+        assert_eq!(loaded.settings.shortcuts, ShortcutSettings::default());
         assert_eq!(loaded.settings.ai, AiSettings::default());
         assert!(loaded.message.is_none());
+    }
+
+    #[test]
+    fn shortcuts_load_from_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{
+  "shortcuts": {
+    "toggle_city_list": { "key": "KeyL", "ctrl": true },
+    "return_main_menu": { "key": "F12" }
+  }
+}"#,
+        )
+        .unwrap();
+        let store = GameSettingsStore::new(path);
+
+        let loaded = store.load();
+
+        assert_eq!(
+            loaded.settings.shortcuts.toggle_city_list,
+            ShortcutBinding::new("KeyL").with_ctrl()
+        );
+        assert_eq!(
+            loaded.settings.shortcuts.return_main_menu,
+            ShortcutBinding::new("F12")
+        );
+        assert_eq!(
+            loaded.settings.shortcuts.close_panel,
+            ShortcutSettings::default().close_panel
+        );
+        assert!(loaded.message.is_none());
+    }
+
+    #[test]
+    fn duplicate_shortcuts_are_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{
+  "shortcuts": {
+    "toggle_city_list": { "key": "KeyC" },
+    "toggle_events": { "key": "KeyC" }
+  }
+}"#,
+        )
+        .unwrap();
+        let store = GameSettingsStore::new(path);
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.settings, GameSettings::default());
+        assert!(loaded.message.is_some());
+    }
+
+    #[test]
+    fn default_settings_restore_default_shortcuts() {
+        let settings = GameSettings {
+            shortcuts: ShortcutSettings {
+                toggle_city_list: ShortcutBinding::new("KeyL"),
+                ..ShortcutSettings::default()
+            },
+            ..GameSettings::default()
+        };
+
+        assert_ne!(settings.shortcuts, ShortcutSettings::default());
+        assert_eq!(
+            GameSettings::default().shortcuts,
+            ShortcutSettings::default()
+        );
     }
 
     #[test]

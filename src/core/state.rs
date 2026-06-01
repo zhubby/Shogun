@@ -8,12 +8,14 @@ use super::i18n::{Translator, args};
 use super::map::MapBoundaryViewCache;
 use super::portraits::OfficerPortraitStore;
 use super::settings::{GameSettings, GameSettingsStore, LoadedGameSettings};
+use super::shortcuts::ShortcutAction;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SettingsTab {
     Display,
     Audio,
     Language,
+    Shortcuts,
     Ai,
 }
 
@@ -54,6 +56,7 @@ pub(super) struct GameUiState {
     pub(super) main_menu_bgm_enabled: bool,
     pub(super) settings_open: bool,
     pub(super) settings_tab: SettingsTab,
+    pub(super) shortcut_capture_action: Option<ShortcutAction>,
     pub(super) audio_output_devices: Vec<String>,
     pub(super) audio_output_devices_refresh_attempted: bool,
     pub(super) audio_output_devices_error: Option<String>,
@@ -192,6 +195,7 @@ impl GameUiState {
             main_menu_bgm_enabled: true,
             settings_open: false,
             settings_tab: SettingsTab::Display,
+            shortcut_capture_action: None,
             audio_output_devices: Vec::new(),
             audio_output_devices_refresh_attempted: false,
             audio_output_devices_error: None,
