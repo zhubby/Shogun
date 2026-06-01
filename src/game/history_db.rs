@@ -2,10 +2,10 @@ use super::city::{
     City, CityCatalog, CityFacility, CityProfile, CityScale, FacilityKind, SourceConfidence,
     city_facility_slots,
 };
-use super::ids::{CityId, FactionId, OfficerId, ScenarioId};
+use super::ids::{CityId, FactionId, OfficerId, ScenarioId, WILD_FACTION_ID};
 use super::model::{
     Controller, DiplomaticRelation, Faction, GameState, GameStatus, MapPosition, Road,
-    SAVE_VERSION, TroopPool, diplomacy_key,
+    SAVE_VERSION, TroopPool, deterministic_index_seed, deterministic_percent_seed, diplomacy_key,
 };
 use super::officer::{
     Officer, OfficerCatalog, OfficerGender, OfficerProfile, OfficerProfileUpdate,
@@ -623,7 +623,14 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
             let Some(profile) = self.officer_profile(&event.officer_id)? else {
                 continue;
             };
-            apply_initial_life_event(&mut officer_states, &cities, &factions, &profile, &event);
+            apply_initial_life_event(
+                &mut officer_states,
+                &scenario.id,
+                &cities,
+                &factions,
+                &profile,
+                &event,
+            );
         }
         clean_invalid_governors(&mut cities, &officer_states);
         let technologies = factions
@@ -653,6 +660,8 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
             family_relationships: Vec::new(),
             next_generated_officer_sequence: 0,
             last_lifecycle_year: None,
+            officer_recruitments: Vec::new(),
+            next_officer_recruitment_sequence: 0,
             applied_event_ids,
             reports: Vec::new(),
             status: GameStatus::Running,
@@ -682,6 +691,7 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
 
 fn apply_initial_life_event(
     officers: &mut BTreeMap<OfficerId, Officer>,
+    scenario_id: &str,
     cities: &BTreeMap<CityId, City>,
     factions: &BTreeMap<FactionId, Faction>,
     profile: &OfficerProfile,
@@ -699,7 +709,7 @@ fn apply_initial_life_event(
                         .and_then(|city_id| cities.get(city_id))
                         .map(|city| city.faction_id.clone())
                 })
-                .unwrap_or_else(|| "wild".to_string());
+                .unwrap_or_else(|| WILD_FACTION_ID.to_string());
             let city_id = event
                 .city_id
                 .as_ref()
@@ -712,7 +722,10 @@ fn apply_initial_life_event(
                         .find(|city| city.faction_id == faction_id)
                         .map(|city| city.id.clone())
                 });
-            if factions.contains_key(&faction_id) && city_id.is_some() {
+            let enter_service = factions.contains_key(&faction_id)
+                && city_id.is_some()
+                && would_life_event_enter_service_for_scenario(scenario_id, &profile.id, &event.id);
+            if enter_service {
                 officers.insert(
                     profile.id.clone(),
                     Officer {
@@ -730,7 +743,31 @@ fn apply_initial_life_event(
                     },
                 );
             } else {
-                officers.remove(&profile.id);
+                let city_id = city_id
+                    .or_else(|| {
+                        event
+                            .city_id
+                            .as_ref()
+                            .and_then(|city_id| cities.get(city_id))
+                            .map(|city| city.id.clone())
+                    })
+                    .or_else(|| deterministic_initial_city_id(cities, scenario_id, &profile.id));
+                officers.insert(
+                    profile.id.clone(),
+                    Officer {
+                        id: profile.id.clone(),
+                        name: profile.name.clone(),
+                        faction_id: WILD_FACTION_ID.to_string(),
+                        city_id,
+                        office_id: None,
+                        stats: profile.stats,
+                        loyalty: event.loyalty.unwrap_or(75),
+                        birth_year: profile.birth_year.unwrap_or(event.year - 18),
+                        gender: profile.gender.clone(),
+                        status: OfficerStatus::Wild,
+                        profile: Some(profile.clone()),
+                    },
+                );
             }
         }
         LifeEventKind::BecomeUnavailable | LifeEventKind::Die => {
@@ -755,6 +792,27 @@ fn clean_invalid_governors(
             city.governor_id = None;
         }
     }
+}
+
+fn would_life_event_enter_service_for_scenario(
+    scenario_id: &str,
+    officer_id: &str,
+    event_id: &str,
+) -> bool {
+    deterministic_percent_seed(scenario_id, officer_id, event_id) < 70
+}
+
+fn deterministic_initial_city_id(
+    cities: &BTreeMap<CityId, City>,
+    scenario_id: &str,
+    officer_id: &str,
+) -> Option<CityId> {
+    if cities.is_empty() {
+        return None;
+    }
+    let index =
+        deterministic_index_seed(scenario_id, officer_id, "initial-wild-city", cities.len());
+    cities.keys().nth(index).cloned()
 }
 
 async fn officer_relationships(

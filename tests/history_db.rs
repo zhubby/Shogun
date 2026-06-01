@@ -136,6 +136,28 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
             query_count_sql(
                 &pool,
                 "SELECT count(*) AS count
+                 FROM officers
+                 WHERE tags LIKE '%expansion_003%'
+                   AND biography LIKE '%收录用于扩充三国时期群雄、宗族与幕府网络%'",
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count
+                 FROM officers
+                 WHERE id = 'liu_bian'
+                   AND biography LIKE '%弘农王%'",
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count
                  FROM officers o
                  WHERE o.tags LIKE '%expansion_003%'
                    AND NOT EXISTS (
@@ -502,8 +524,16 @@ fn life_events_apply_appearances_deaths_and_do_not_repeat() {
     resolve_command_batch_with_history(&mut appear_game, Vec::new(), &catalog);
 
     let jiang_wei = appear_game.officers.get("jiang_wei").unwrap();
-    assert!(jiang_wei.is_active());
-    assert_eq!(jiang_wei.faction_id, "liu_bei");
+    assert!(matches!(
+        jiang_wei.status,
+        OfficerStatus::Active | OfficerStatus::Wild
+    ));
+    if jiang_wei.is_active() {
+        assert_eq!(jiang_wei.faction_id, "liu_bei");
+    } else {
+        assert_eq!(jiang_wei.faction_id, WILD_FACTION_ID);
+        assert!(jiang_wei.city_id.is_some());
+    }
     assert!(appear_game.applied_event_ids.contains("start_jiang_wei"));
 
     let mut death_game = catalog.build_game("ad200", "sun_quan").unwrap();
@@ -550,4 +580,23 @@ fn life_events_with_loyalty_apply_initial_loyalty() {
     let officer = game.officers.get("ctk_5f20_6e29_32").unwrap();
     assert_eq!(officer.name, "张温");
     assert_eq!(officer.loyalty, 76);
+    assert!(matches!(
+        officer.status,
+        OfficerStatus::Active | OfficerStatus::Wild
+    ));
+}
+
+#[test]
+fn starting_scenario_keeps_cutoff_wild_life_event_officers() {
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
+
+    let game = catalog.build_game("ad208", "liu_bei").unwrap();
+
+    assert!(
+        game.officers
+            .values()
+            .any(|officer| officer.status == OfficerStatus::Wild
+                && officer.faction_id == WILD_FACTION_ID
+                && officer.city_id.is_some())
+    );
 }

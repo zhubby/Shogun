@@ -4,7 +4,7 @@ use super::city::{
 };
 use super::events::*;
 use super::history_db::{HistoricalCatalog, LifeEventKind};
-use super::ids::{CityId, FactionId, OfficerId};
+use super::ids::{CityId, FactionId, OfficerId, WILD_FACTION_ID};
 use super::model::*;
 use super::officer::{
     Officer, OfficerStats, OfficerStatus, OfficialPostEffect, OfficialRank, official_post_spec,
@@ -23,6 +23,8 @@ struct CommandReservations {
 const WOUNDED_PERCENT: u32 = 60;
 const DEFENDER_MONTHLY_LOSS_PERCENT: u32 = 22;
 const ATTACKER_MONTHLY_LOSS_PERCENT: u32 = 18;
+const OFFICER_RECRUITMENT_SUCCESS_PROGRESS: u8 = 100;
+const WILD_OFFICER_MOVE_CHANCE_PERCENT: u32 = 35;
 
 pub fn expedition_monthly_supply_for_troops(troops: TroopPool) -> u32 {
     troops.total().div_ceil(500).max(1)
@@ -38,6 +40,7 @@ pub fn queue_player_command(state: &mut GameState, command: Command) -> Result<(
     }
 
     let mut reservations = CommandReservations::default();
+    reserve_officer_recruitments(state, &mut reservations);
     for pending in &state.pending_commands {
         reserve_command(state, pending, &mut reservations)?;
     }
@@ -71,6 +74,7 @@ fn resolve_command_batch_inner(
     let alive_before = alive_faction_ids(state);
     let mut report = TurnReport::new(state);
     let mut reservations = CommandReservations::default();
+    reserve_officer_recruitments(state, &mut reservations);
     let command_count = commands.len();
     let mut executed_commands = 0;
     let mut rejected_commands = 0;
@@ -104,6 +108,8 @@ fn resolve_command_batch_inner(
             apply_due_life_events(state, catalog, &mut report);
             state.refresh_status();
         }
+        advance_officer_recruitments(state, &mut report);
+        move_wild_officers(state, &mut report);
         apply_annual_lifecycle(state, &mut report);
         trigger_monthly_incidents(state);
     }
@@ -164,6 +170,7 @@ pub fn validate_command_for_state(
     command: &Command,
 ) -> Result<(), CommandError> {
     let mut reservations = CommandReservations::default();
+    reserve_officer_recruitments(state, &mut reservations);
     validate_command(state, command, &mut reservations)
 }
 
@@ -244,6 +251,68 @@ pub fn dismiss_official_post(
     Ok(())
 }
 
+pub fn start_officer_recruitment(
+    state: &mut GameState,
+    issuer_faction_id: &str,
+    source_city_id: &str,
+    recruiter_officer_id: &str,
+    target_officer_id: &str,
+) -> Result<OfficerRecruitmentTask, CommandError> {
+    validate_officer_recruitment(
+        state,
+        issuer_faction_id,
+        source_city_id,
+        recruiter_officer_id,
+        target_officer_id,
+    )?;
+    state.next_officer_recruitment_sequence += 1;
+    let task = OfficerRecruitmentTask {
+        id: format!(
+            "officer-recruitment-{}",
+            state.next_officer_recruitment_sequence
+        ),
+        issuer_faction_id: issuer_faction_id.to_string(),
+        source_city_id: source_city_id.to_string(),
+        recruiter_officer_id: recruiter_officer_id.to_string(),
+        target_officer_id: target_officer_id.to_string(),
+        progress: 0,
+        attempt_months: 0,
+        started_turn: state.turn,
+    };
+    state.officer_recruitments.push(task.clone());
+    Ok(task)
+}
+
+pub fn cancel_officer_recruitment(
+    state: &mut GameState,
+    task_id: &str,
+) -> Result<OfficerRecruitmentTask, CommandError> {
+    let index = state
+        .officer_recruitments
+        .iter()
+        .position(|task| task.id == task_id)
+        .ok_or_else(|| CommandError::Invalid(format!("登用任务 {task_id} 不存在")))?;
+    Ok(state.officer_recruitments.remove(index))
+}
+
+pub fn officer_recruitment_progress_gain(
+    state: &GameState,
+    task: &OfficerRecruitmentTask,
+) -> Option<u8> {
+    let recruiter = state.officers.get(&task.recruiter_officer_id)?;
+    let target = state.officers.get(&task.target_officer_id)?;
+    Some(recruitment_progress_gain(
+        state,
+        &task.source_city_id,
+        recruiter,
+        target,
+    ))
+}
+
+pub fn would_life_event_enter_service(state: &GameState, officer_id: &str, event_id: &str) -> bool {
+    deterministic_percent_seed(&state.scenario_id, officer_id, event_id) < 70
+}
+
 fn appointment_loyalty_delta(old_rank: Option<OfficialRank>, new_rank: OfficialRank) -> i16 {
     let new_bonus = i16::from(official_rank_loyalty_bonus(new_rank));
     let Some(old_rank) = old_rank else {
@@ -254,6 +323,62 @@ fn appointment_loyalty_delta(old_rank: Option<OfficialRank>, new_rank: OfficialR
 
 fn apply_loyalty_delta(loyalty: &mut u8, delta: i16) {
     *loyalty = (i16::from(*loyalty) + delta).clamp(0, 100) as u8;
+}
+
+fn validate_officer_recruitment(
+    state: &GameState,
+    issuer_faction_id: &str,
+    source_city_id: &str,
+    recruiter_officer_id: &str,
+    target_officer_id: &str,
+) -> Result<(), CommandError> {
+    if !state.factions.contains_key(issuer_faction_id) {
+        return Err(CommandError::Invalid("发起势力不存在".to_string()));
+    }
+    let city = state
+        .cities
+        .get(source_city_id)
+        .ok_or_else(|| CommandError::Invalid(format!("城池 {source_city_id} 不存在")))?;
+    if city.faction_id != issuer_faction_id {
+        return Err(CommandError::Invalid(format!("{} 不是己方城池", city.name)));
+    }
+    validate_officer_in_city(
+        state,
+        recruiter_officer_id,
+        source_city_id,
+        issuer_faction_id,
+    )?;
+    if state.pending_officer_ids().contains(recruiter_officer_id) {
+        return Err(CommandError::Invalid(format!(
+            "武将 {recruiter_officer_id} 本月已经行动"
+        )));
+    }
+    if state.officer_recruitments.iter().any(|task| {
+        task.recruiter_officer_id == recruiter_officer_id
+            || task.target_officer_id == target_officer_id
+    }) {
+        return Err(CommandError::Invalid("登用相关武将已有任务".to_string()));
+    }
+    let target = state
+        .officers
+        .get(target_officer_id)
+        .ok_or_else(|| CommandError::Invalid(format!("武将 {target_officer_id} 不存在")))?;
+    if target.status != OfficerStatus::Wild || target.faction_id != WILD_FACTION_ID {
+        return Err(CommandError::Invalid(format!(
+            "{} 不是在野武将",
+            target.name
+        )));
+    }
+    if !target.is_adult_at(state.year) {
+        return Err(CommandError::Invalid(format!("{} 尚未成年", target.name)));
+    }
+    if target.city_id.is_none() {
+        return Err(CommandError::Invalid(format!(
+            "{} 行踪不明，无法登用",
+            target.name
+        )));
+    }
+    Ok(())
 }
 
 fn validate_command(
@@ -437,6 +562,14 @@ fn reserve_command(
     reservations: &mut CommandReservations,
 ) -> Result<(), CommandError> {
     validate_command(state, command, reservations)
+}
+
+fn reserve_officer_recruitments(state: &GameState, reservations: &mut CommandReservations) {
+    for task in &state.officer_recruitments {
+        reservations
+            .officer_ids
+            .insert(task.recruiter_officer_id.clone());
+    }
 }
 
 fn validate_officer_in_city(
@@ -1452,7 +1585,7 @@ fn return_movement_to_friendly_city_with_wounded(
             if let Some(officer) = state.officers.get_mut(officer_id)
                 && officer.is_active()
             {
-                officer.faction_id = "wild".to_string();
+                officer.faction_id = WILD_FACTION_ID.to_string();
                 officer.city_id = None;
                 officer.office_id = None;
                 officer.status = OfficerStatus::Wild;
@@ -2101,8 +2234,260 @@ fn deterministic_famine_roll(state: &GameState, city_id: &str) -> bool {
     (state.turn + city_seed + 3).is_multiple_of(6)
 }
 
+fn deterministic_index(state: &GameState, turn: u32, key: &str, salt: &str, len: usize) -> usize {
+    deterministic_index_seed(&format!("{}:{turn}", state.scenario_id), key, salt, len)
+}
+
+fn deterministic_percent(state: &GameState, turn: u32, key: &str, salt: &str) -> u32 {
+    deterministic_percent_seed(&format!("{}:{turn}", state.scenario_id), key, salt)
+}
+
 fn famine_population_loss(population: u32) -> u32 {
     (population / 100).clamp(100, 1_000)
+}
+
+fn advance_officer_recruitments(state: &mut GameState, report: &mut TurnReport) {
+    let tasks = std::mem::take(&mut state.officer_recruitments);
+    let mut pending = Vec::new();
+
+    for mut task in tasks {
+        let Some(recruiter) = state.officers.get(&task.recruiter_officer_id).cloned() else {
+            report.warning(format!("登用任务 {} 因执行武将不存在而取消", task.id));
+            continue;
+        };
+        let Some(target) = state.officers.get(&task.target_officer_id).cloned() else {
+            report.warning(format!("登用任务 {} 因目标武将不存在而取消", task.id));
+            continue;
+        };
+        if !recruiter.is_active() || recruiter.faction_id != task.issuer_faction_id {
+            report.warning(format!("{} 无法继续执行登用任务", recruiter.name));
+            continue;
+        }
+        if target.status != OfficerStatus::Wild || target.faction_id != WILD_FACTION_ID {
+            report.info(format!("{} 已不在野，登用任务结束", target.name));
+            continue;
+        }
+
+        task.attempt_months += 1;
+        let gain = recruitment_progress_gain(state, &task.source_city_id, &recruiter, &target);
+        task.progress = task
+            .progress
+            .saturating_add(gain)
+            .min(OFFICER_RECRUITMENT_SUCCESS_PROGRESS);
+
+        if task.progress >= OFFICER_RECRUITMENT_SUCCESS_PROGRESS {
+            complete_officer_recruitment(state, &task, &recruiter, &target, report);
+            continue;
+        }
+
+        if task.attempt_months >= 2
+            && deterministic_percent(
+                state,
+                state.turn,
+                &task.target_officer_id,
+                &format!("recruitment-refusal-{}", task.id),
+            ) < recruitment_refusal_chance(&recruiter, &target, task.attempt_months)
+        {
+            report.warning(format!("{} 拒绝了 {} 的登用", target.name, recruiter.name));
+            record_recruitment_event(
+                state,
+                GameEventSeverity::Warning,
+                format!("{} 拒绝登用", target.name),
+                format!("{} 拒绝了 {} 的登用，仍在野。", target.name, recruiter.name),
+                &task,
+                Some(task.target_officer_id.clone()),
+            );
+            continue;
+        }
+
+        report.info(format!(
+            "{} 继续登用 {}，进度 {}%",
+            recruiter.name, target.name, task.progress
+        ));
+        pending.push(task);
+    }
+
+    state.officer_recruitments = pending;
+}
+
+fn complete_officer_recruitment(
+    state: &mut GameState,
+    task: &OfficerRecruitmentTask,
+    recruiter: &Officer,
+    target: &Officer,
+    report: &mut TurnReport,
+) {
+    let loyalty = (70 + recruiter.stats.charm / 4).clamp(70, 95);
+    if let Some(target) = state.officers.get_mut(&task.target_officer_id) {
+        target.faction_id = task.issuer_faction_id.clone();
+        target.city_id = Some(task.source_city_id.clone());
+        target.status = OfficerStatus::Active;
+        target.loyalty = loyalty;
+    }
+    report.info(format!("{} 登用 {} 成功", recruiter.name, target.name));
+    record_recruitment_event(
+        state,
+        GameEventSeverity::Important,
+        format!("{} 加入麾下", target.name),
+        format!(
+            "{} 说服 {} 加入麾下，{} 现驻于 {}。",
+            recruiter.name,
+            target.name,
+            target.name,
+            city_name(state, &task.source_city_id)
+        ),
+        task,
+        Some(task.target_officer_id.clone()),
+    );
+}
+
+fn recruitment_progress_gain(
+    state: &GameState,
+    source_city_id: &str,
+    recruiter: &Officer,
+    target: &Officer,
+) -> u8 {
+    let ability = (u16::from(recruiter.stats.charm) + u16::from(recruiter.stats.politics)) / 2;
+    let target_resistance = u16::from(target.stats.charm) / 6;
+    let distance_penalty = target
+        .city_id
+        .as_deref()
+        .and_then(|target_city_id| state.road_distance_li(source_city_id, target_city_id))
+        .map(|distance| (distance / 250).min(8) as u16)
+        .unwrap_or(10);
+    (18 + ability / 6)
+        .saturating_sub(target_resistance + distance_penalty)
+        .clamp(8, 45) as u8
+}
+
+fn recruitment_refusal_chance(recruiter: &Officer, target: &Officer, attempt_months: u32) -> u32 {
+    let resistance = u32::from(target.stats.charm / 12);
+    let persuasion = u32::from((recruiter.stats.charm + recruiter.stats.politics) / 30);
+    (4 + attempt_months.saturating_sub(1) * 2 + resistance)
+        .saturating_sub(persuasion)
+        .clamp(2, 22)
+}
+
+fn record_recruitment_event(
+    state: &mut GameState,
+    severity: GameEventSeverity,
+    summary: String,
+    detail: String,
+    task: &OfficerRecruitmentTask,
+    officer_id: Option<OfficerId>,
+) {
+    let scope = if task.issuer_faction_id == state.player_faction_id {
+        GameEventScope::Player
+    } else {
+        GameEventScope::World
+    };
+    record_game_event(
+        state,
+        GameEventDraft {
+            kind: GameEventKind::OfficerLifecycle,
+            severity,
+            scope,
+            title: "武将登用".to_string(),
+            summary,
+            detail,
+            city_id: Some(task.source_city_id.clone()),
+            faction_id: Some(task.issuer_faction_id.clone()),
+            officer_id,
+            resolution: EventResolution::NoneRequired,
+        },
+    );
+}
+
+fn move_wild_officers(state: &mut GameState, report: &mut TurnReport) {
+    let recruited_targets = state
+        .officer_recruitments
+        .iter()
+        .map(|task| task.target_officer_id.as_str())
+        .collect::<BTreeSet<_>>();
+    let ids = state
+        .officers
+        .values()
+        .filter(|officer| {
+            officer.status == OfficerStatus::Wild
+                && officer.faction_id == WILD_FACTION_ID
+                && officer.is_adult_at(state.year)
+                && !recruited_targets.contains(officer.id.as_str())
+        })
+        .map(|officer| officer.id.clone())
+        .collect::<Vec<_>>();
+
+    for officer_id in ids {
+        let Some(target_city_id) = next_wild_officer_city(state, &officer_id) else {
+            continue;
+        };
+        let current_city_id = state
+            .officers
+            .get(&officer_id)
+            .and_then(|officer| officer.city_id.clone());
+        if current_city_id.as_deref() == Some(target_city_id.as_str()) {
+            continue;
+        }
+        let old_city = current_city_id
+            .as_deref()
+            .map(|city_id| city_name(state, city_id))
+            .unwrap_or_else(|| "野外".to_string());
+        let new_city = city_name(state, &target_city_id);
+        let Some(officer) = state.officers.get_mut(&officer_id) else {
+            continue;
+        };
+        officer.city_id = Some(target_city_id);
+        report.info(format!(
+            "在野武将 {} 从 {} 移动到 {}",
+            officer.name, old_city, new_city
+        ));
+    }
+}
+
+fn next_wild_officer_city(state: &GameState, officer_id: &str) -> Option<CityId> {
+    let officer = state.officers.get(officer_id)?;
+    if officer.city_id.is_none() {
+        return deterministic_city_id(state, officer_id, "wild-placement");
+    }
+    if deterministic_percent(state, state.turn, officer_id, "wild-move")
+        >= WILD_OFFICER_MOVE_CHANCE_PERCENT
+    {
+        return officer.city_id.clone();
+    }
+    let city_id = officer.city_id.as_deref()?;
+    let mut neighbors = state
+        .roads
+        .iter()
+        .filter_map(|road| {
+            if road.from == city_id && state.cities.contains_key(&road.to) {
+                Some(road.to.clone())
+            } else if road.to == city_id && state.cities.contains_key(&road.from) {
+                Some(road.from.clone())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    neighbors.sort();
+    neighbors.dedup();
+    if neighbors.is_empty() {
+        return officer.city_id.clone();
+    }
+    let index = deterministic_index(
+        state,
+        state.turn,
+        officer_id,
+        "wild-neighbor",
+        neighbors.len(),
+    );
+    neighbors.get(index).cloned()
+}
+
+fn deterministic_city_id(state: &GameState, key: &str, salt: &str) -> Option<CityId> {
+    if state.cities.is_empty() {
+        return None;
+    }
+    let index = deterministic_index(state, state.turn, key, salt, state.cities.len());
+    state.cities.keys().nth(index).cloned()
 }
 
 fn apply_due_life_events(
@@ -2139,12 +2524,23 @@ fn apply_due_life_events(
                     .map(|officer| officer.faction_id.clone());
                 let (target_faction_id, city_id, status) = resolve_life_event_assignment(
                     state,
+                    &event.officer_id,
+                    &event.id,
                     event.faction_id.as_deref(),
                     event.city_id.as_deref(),
                 );
+                let requested_player_scope = event.faction_id.as_deref()
+                    == Some(state.player_faction_id.as_str())
+                    || event.city_id.as_deref().is_some_and(|city_id| {
+                        state
+                            .cities
+                            .get(city_id)
+                            .is_some_and(|city| city.faction_id == state.player_faction_id)
+                    });
                 let visible_to_player = previous_faction_id.as_deref()
                     == Some(state.player_faction_id.as_str())
-                    || target_faction_id == state.player_faction_id;
+                    || target_faction_id == state.player_faction_id
+                    || requested_player_scope;
                 let stats = officer_profile
                     .as_ref()
                     .map(|profile| profile.stats)
@@ -2273,8 +2669,10 @@ fn apply_due_life_events(
     }
 }
 
-fn resolve_life_event_assignment(
+pub fn resolve_life_event_assignment(
     state: &GameState,
+    officer_id: &str,
+    event_id: &str,
     requested_faction_id: Option<&str>,
     requested_city_id: Option<&str>,
 ) -> (String, Option<String>, OfficerStatus) {
@@ -2285,10 +2683,17 @@ fn resolve_life_event_assignment(
                 .and_then(|city_id| state.cities.get(city_id))
                 .map(|city| city.faction_id.clone())
         })
-        .unwrap_or_else(|| "wild".to_string());
+        .unwrap_or_else(|| WILD_FACTION_ID.to_string());
 
-    if target_faction_id == "wild" || !state.faction_alive(&target_faction_id) {
-        return ("wild".to_string(), None, OfficerStatus::Wild);
+    if target_faction_id == WILD_FACTION_ID || !state.faction_alive(&target_faction_id) {
+        return (
+            WILD_FACTION_ID.to_string(),
+            requested_city_id
+                .and_then(|city_id| state.cities.get(city_id))
+                .map(|city| city.id.clone())
+                .or_else(|| deterministic_city_id(state, officer_id, "life-event-wild")),
+            OfficerStatus::Wild,
+        );
     }
 
     let city_id = requested_city_id
@@ -2303,9 +2708,19 @@ fn resolve_life_event_assignment(
                 .map(|city| city.id.clone())
         });
 
-    match city_id {
-        Some(city_id) => (target_faction_id, Some(city_id), OfficerStatus::Active),
-        None => ("wild".to_string(), None, OfficerStatus::Wild),
+    let should_enter_service = would_life_event_enter_service(state, officer_id, event_id);
+    match (city_id, should_enter_service) {
+        (Some(city_id), true) => (target_faction_id, Some(city_id), OfficerStatus::Active),
+        (Some(city_id), false) => (
+            WILD_FACTION_ID.to_string(),
+            Some(city_id),
+            OfficerStatus::Wild,
+        ),
+        (None, _) => (
+            WILD_FACTION_ID.to_string(),
+            deterministic_city_id(state, officer_id, "life-event-wild"),
+            OfficerStatus::Wild,
+        ),
     }
 }
 

@@ -39,6 +39,10 @@ pub struct GameState {
     pub next_generated_officer_sequence: u64,
     #[serde(default)]
     pub last_lifecycle_year: Option<i32>,
+    #[serde(default)]
+    pub officer_recruitments: Vec<OfficerRecruitmentTask>,
+    #[serde(default)]
+    pub next_officer_recruitment_sequence: u64,
     pub applied_event_ids: BTreeSet<String>,
     pub reports: Vec<TurnReport>,
     pub status: GameStatus,
@@ -106,6 +110,9 @@ impl GameState {
         let mut ids = BTreeSet::new();
         for command in &self.pending_commands {
             command.collect_officer_ids(&mut ids);
+        }
+        for task in &self.officer_recruitments {
+            ids.insert(task.recruiter_officer_id.as_str());
         }
         ids
     }
@@ -192,6 +199,18 @@ pub struct FamilyRelationship {
 pub enum Controller {
     Player,
     RuleAi,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OfficerRecruitmentTask {
+    pub id: String,
+    pub issuer_faction_id: FactionId,
+    pub source_city_id: CityId,
+    pub recruiter_officer_id: OfficerId,
+    pub target_officer_id: OfficerId,
+    pub progress: u8,
+    pub attempt_months: u32,
+    pub started_turn: u32,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
@@ -441,6 +460,27 @@ pub fn travel_months_for_distance(distance_li: u32) -> u32 {
     distance_li
         .div_ceil(MARCH_LI_PER_MONTH)
         .clamp(1, MAX_TRAVEL_MONTHS)
+}
+
+pub fn deterministic_index_seed(seed: &str, key: &str, salt: &str, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    deterministic_hash_seed(seed, key, salt) as usize % len
+}
+
+pub fn deterministic_percent_seed(seed: &str, key: &str, salt: &str) -> u32 {
+    (deterministic_hash_seed(seed, key, salt) % 100) as u32
+}
+
+pub fn deterministic_hash_seed(seed: &str, key: &str, salt: &str) -> u64 {
+    let input = format!("{seed}:{key}:{salt}");
+    let mut hash = 14_695_981_039_346_656_037_u64;
+    for byte in input.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(1_099_511_628_211);
+    }
+    hash
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

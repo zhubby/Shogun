@@ -3,7 +3,10 @@ use super::events::{
     GameEventKind, GameEventScope, GameEventSeverity, record_game_event,
 };
 use super::ids::{FactionId, OfficerId};
-use super::model::{FamilyRelationship, GameState, Marriage, TurnReport};
+use super::model::{
+    FamilyRelationship, GameState, Marriage, TurnReport, deterministic_index_seed,
+    deterministic_percent_seed,
+};
 use super::officer::{
     Officer, OfficerGender, OfficerRelationshipKind, OfficerStats, OfficerStatus,
 };
@@ -841,22 +844,9 @@ fn officer_name(state: &GameState, officer_id: &str) -> String {
 }
 
 fn deterministic_index(state: &GameState, year: i32, key: &str, salt: &str, len: usize) -> usize {
-    if len == 0 {
-        return 0;
-    }
-    deterministic_hash(state, year, key, salt) as usize % len
+    deterministic_index_seed(&format!("{}:{year}", state.scenario_id), key, salt, len)
 }
 
 fn deterministic_percent(state: &GameState, year: i32, key: &str, salt: &str) -> u32 {
-    (deterministic_hash(state, year, key, salt) % 100) as u32
-}
-
-fn deterministic_hash(state: &GameState, year: i32, key: &str, salt: &str) -> u64 {
-    let input = format!("{}:{year}:{key}:{salt}", state.scenario_id);
-    let mut hash = 14_695_981_039_346_656_037_u64;
-    for byte in input.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(1_099_511_628_211);
-    }
-    hash
+    deterministic_percent_seed(&format!("{}:{year}", state.scenario_id), key, salt)
 }

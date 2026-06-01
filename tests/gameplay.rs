@@ -794,6 +794,130 @@ fn recruit_consumes_resources_and_adds_troops() {
     assert!(game.cities["xiapi"].gold < before_gold);
 }
 
+fn add_wild_officer(game: &mut GameState, officer_id: &str, city_id: &str, charm: u8) {
+    let mut officer = game.officers["jian_yong"].clone();
+    officer.id = officer_id.to_string();
+    officer.name = "在野士人".to_string();
+    officer.faction_id = WILD_FACTION_ID.to_string();
+    officer.city_id = Some(city_id.to_string());
+    officer.status = OfficerStatus::Wild;
+    officer.birth_year = game.year - 30;
+    officer.stats.charm = charm;
+    officer.loyalty = 75;
+    officer.office_id = None;
+    game.officers.insert(officer.id.clone(), officer);
+}
+
+#[test]
+fn wild_officer_cannot_execute_city_command_but_can_be_recruited() {
+    let mut game = sample_game();
+    add_wild_officer(&mut game, "wild_xun", "pingyuan", 60);
+
+    let command_error =
+        validate_command_for_state(&game, &command("pingyuan", "wild_xun", CommandKind::Train))
+            .unwrap_err();
+    assert_eq!(command_error.to_string(), "在野士人 不是己方武将");
+
+    start_officer_recruitment(&mut game, "liu_bei", "pingyuan", "liu_bei", "wild_xun").unwrap();
+
+    assert_eq!(game.officer_recruitments.len(), 1);
+    assert_eq!(game.officer_recruitments[0].target_officer_id, "wild_xun");
+}
+
+#[test]
+fn officer_recruitment_locks_recruiter_but_not_city_command_slot() {
+    let mut game = sample_game();
+    add_wild_officer(&mut game, "wild_xun", "pingyuan", 60);
+    start_officer_recruitment(&mut game, "liu_bei", "pingyuan", "liu_bei", "wild_xun").unwrap();
+
+    let same_officer_error = queue_player_command(
+        &mut game,
+        command("pingyuan", "liu_bei", CommandKind::Train),
+    )
+    .unwrap_err();
+    assert_eq!(same_officer_error.to_string(), "武将 liu_bei 本月已经行动");
+
+    queue_player_command(
+        &mut game,
+        command(
+            "pingyuan",
+            "guan_yu",
+            CommandKind::Develop {
+                focus: DevelopmentFocus::Agriculture,
+            },
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(game.pending_commands.len(), 1);
+}
+
+#[test]
+fn officer_recruitment_progresses_across_months_and_can_succeed() {
+    let mut game = sample_game();
+    add_wild_officer(&mut game, "wild_xun", "pingyuan", 20);
+    game.officers.get_mut("liu_bei").unwrap().stats.charm = 100;
+    game.officers.get_mut("liu_bei").unwrap().stats.politics = 100;
+    start_officer_recruitment(&mut game, "liu_bei", "pingyuan", "liu_bei", "wild_xun").unwrap();
+
+    for _ in 0..6 {
+        if game.officer_recruitments.is_empty() {
+            break;
+        }
+        resolve_command_batch(&mut game, Vec::new());
+    }
+
+    assert!(game.officer_recruitments.is_empty());
+    let officer = &game.officers["wild_xun"];
+    assert_eq!(officer.status, OfficerStatus::Active);
+    assert_eq!(officer.faction_id, "liu_bei");
+    assert_eq!(officer.city_id.as_deref(), Some("pingyuan"));
+    assert!((70..=95).contains(&officer.loyalty));
+}
+
+#[test]
+fn officer_recruitment_can_end_with_refusal() {
+    let mut game = sample_game();
+    game.scenario_id = "refusal-seed".to_string();
+    add_wild_officer(&mut game, "wild_xun", "pingyuan", 100);
+    game.officers.get_mut("liu_bei").unwrap().stats.charm = 1;
+    game.officers.get_mut("liu_bei").unwrap().stats.politics = 1;
+    start_officer_recruitment(&mut game, "liu_bei", "pingyuan", "liu_bei", "wild_xun").unwrap();
+
+    for _ in 0..12 {
+        if game.officer_recruitments.is_empty() {
+            break;
+        }
+        resolve_command_batch(&mut game, Vec::new());
+    }
+
+    assert!(game.officer_recruitments.is_empty());
+    let officer = &game.officers["wild_xun"];
+    assert_eq!(officer.status, OfficerStatus::Wild);
+    assert_eq!(officer.faction_id, WILD_FACTION_ID);
+}
+
+#[test]
+fn wild_officers_move_between_adjacent_cities_but_recruitment_target_stays_put() {
+    let mut game = sample_game();
+    game.scenario_id = "wild-move-seed".to_string();
+    add_wild_officer(&mut game, "wild_mover", "pingyuan", 60);
+    add_wild_officer(&mut game, "wild_target", "pingyuan", 60);
+    start_officer_recruitment(&mut game, "liu_bei", "pingyuan", "liu_bei", "wild_target").unwrap();
+    let target_before = game.officers["wild_target"].city_id.clone();
+
+    for _ in 0..8 {
+        resolve_command_batch(&mut game, Vec::new());
+        if game.officers["wild_mover"].city_id.as_deref() != Some("pingyuan") {
+            break;
+        }
+    }
+
+    let moved_to = game.officers["wild_mover"].city_id.as_deref().unwrap();
+    assert!(game.are_adjacent("pingyuan", moved_to));
+    assert_eq!(game.officers["wild_target"].city_id, target_before);
+}
+
 #[test]
 fn train_increases_training() {
     let mut game = sample_game();
@@ -1636,6 +1760,36 @@ fn old_save_json_missing_events_still_deserializes() {
 
     assert!(loaded.events.is_empty());
     assert_eq!(loaded.next_event_sequence, 0);
+}
+
+#[test]
+fn old_save_json_missing_officer_recruitments_still_deserializes() {
+    let mut game_json = serde_json::to_value(sample_game()).unwrap();
+    let object = game_json.as_object_mut().unwrap();
+    object.remove("officer_recruitments");
+    object.remove("next_officer_recruitment_sequence");
+
+    let loaded: GameState = serde_json::from_value(game_json).unwrap();
+
+    assert!(loaded.officer_recruitments.is_empty());
+    assert_eq!(loaded.next_officer_recruitment_sequence, 0);
+}
+
+#[test]
+fn save_load_preserves_officer_recruitment_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let manager = SaveManager::new(temp.path());
+    let mut game = sample_game();
+    add_wild_officer(&mut game, "wild_xun", "pingyuan", 60);
+    start_officer_recruitment(&mut game, "liu_bei", "pingyuan", "liu_bei", "wild_xun").unwrap();
+
+    manager
+        .save_slot("officer_recruitment", "登用", &game)
+        .unwrap();
+    let loaded = manager.load_slot("officer_recruitment").unwrap();
+
+    assert_eq!(loaded.officer_recruitments.len(), 1);
+    assert_eq!(loaded.officer_recruitments[0].target_officer_id, "wild_xun");
 }
 
 #[test]

@@ -334,12 +334,13 @@ fn command_parameter_column(
             return;
         }
 
-        if selected_officer.is_none() {
-            ui.colored_label(war_text_muted(), t.text("command-select-officer"));
-            return;
-        }
-
         match ui_state.selected_command_action {
+            CommandAction::RecruitOfficer => {
+                recruit_officer_parameter_controls(ui, ui_state, game, city, selected_officer, t)
+            }
+            _ if selected_officer.is_none() => {
+                ui.colored_label(war_text_muted(), t.text("command-select-officer"));
+            }
             CommandAction::Develop => develop_parameter_controls(ui, ui_state, selected_officer, t),
             CommandAction::UpgradeCityCore => upgrade_parameter_controls(ui, city, t),
             CommandAction::BuildFacility => facility_parameter_controls(ui, ui_state, city, t),
@@ -375,6 +376,10 @@ fn command_preview_column(
 ) {
     war_sub_panel_frame().show(ui, |ui| {
         section_title(ui, &t.text("command-preview-title"));
+        if ui_state.selected_command_action == CommandAction::RecruitOfficer {
+            recruitment_preview_column(ui, ui_state, game, city, selected_officer, t);
+            return;
+        }
         if let Some(command) = pending_command {
             ui.colored_label(status_warning_color(), t.text("command-existing-pending"));
             ui.label(command_summary(game, command, t));
@@ -419,6 +424,78 @@ fn command_preview_column(
     });
 }
 
+fn recruitment_preview_column(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    game: &GameState,
+    city: &City,
+    selected_officer: Option<&Officer>,
+    t: &Translator,
+) {
+    if city.faction_id != game.player_faction_id {
+        ui.colored_label(war_text_muted(), t.text("command-non-owned-disabled"));
+        return;
+    }
+    let active_tasks = game
+        .officer_recruitments
+        .iter()
+        .filter(|task| task.source_city_id == city.id)
+        .collect::<Vec<_>>();
+    if !active_tasks.is_empty() {
+        ui.label(t.text("command-recruit-officer-active-title"));
+        for task in active_tasks {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(recruitment_task_line(game, task, t));
+                if ui
+                    .button(t.text("command-recruit-officer-cancel"))
+                    .clicked()
+                {
+                    cancel_recruitment_task(ui_state, &task.id, t);
+                }
+            });
+        }
+        ui.separator();
+    }
+
+    let Some(recruiter) = selected_officer else {
+        ui.colored_label(war_text_muted(), t.text("command-select-officer"));
+        return;
+    };
+    let Some(target_id) = ui_state.selected_recruitment_target.clone() else {
+        ui.colored_label(war_text_muted(), t.text("command-recruit-officer-select"));
+        return;
+    };
+    let target_name = officer_name(game, &target_id);
+    ui.label(t.text_args(
+        "preview-recruit-officer",
+        &args([
+            ("recruiter", recruiter.name.clone()),
+            ("target", target_name),
+        ]),
+    ));
+    match preview_officer_recruitment(game, &city.id, &recruiter.id, &target_id) {
+        Ok(()) => {
+            ui.colored_label(status_ready_color(), t.text("command-can-submit"));
+            if ui
+                .button(t.text("command-recruit-officer-submit"))
+                .clicked()
+            {
+                submit_officer_recruitment(ui_state, &city.id, &recruiter.id, &target_id, t);
+            }
+        }
+        Err(message) => {
+            ui.colored_label(
+                status_error_color(),
+                t.text_args("command-cannot-submit", &args([("message", message)])),
+            );
+            ui.add_enabled(
+                false,
+                egui::Button::new(t.text("command-recruit-officer-submit")),
+            );
+        }
+    }
+}
+
 const DOMESTIC_ACTIONS: [CommandAction; 5] = [
     CommandAction::Develop,
     CommandAction::UpgradeCityCore,
@@ -427,8 +504,11 @@ const DOMESTIC_ACTIONS: [CommandAction; 5] = [
     CommandAction::Train,
 ];
 const MILITARY_ACTIONS: [CommandAction; 2] = [CommandAction::Transfer, CommandAction::Expedition];
-const DIPLOMACY_ACTIONS: [CommandAction; 2] =
-    [CommandAction::AppointGovernor, CommandAction::Diplomacy];
+const DIPLOMACY_ACTIONS: [CommandAction; 3] = [
+    CommandAction::AppointGovernor,
+    CommandAction::RecruitOfficer,
+    CommandAction::Diplomacy,
+];
 
 fn ensure_command_action(ui_state: &mut GameUiState) {
     if !command_actions(ui_state.selected_command_category)
@@ -457,6 +537,7 @@ fn command_action_label(action: CommandAction, t: &Translator) -> String {
         CommandAction::UpgradeCityCore => t.text("command-upgrade-core"),
         CommandAction::BuildFacility => t.text("command-build-facility"),
         CommandAction::Recruit => t.text("command-recruit"),
+        CommandAction::RecruitOfficer => t.text("command-recruit-officer"),
         CommandAction::Train => t.text("command-train"),
         CommandAction::AppointGovernor => t.text("command-appoint-governor"),
         CommandAction::Transfer => t.text("command-transfer"),
@@ -471,6 +552,7 @@ fn command_action_hint(action: CommandAction, t: &Translator) -> String {
         CommandAction::UpgradeCityCore => t.text("command-upgrade-core-hint"),
         CommandAction::BuildFacility => t.text("command-build-facility-hint"),
         CommandAction::Recruit => t.text("command-recruit-hint"),
+        CommandAction::RecruitOfficer => t.text("command-recruit-officer-hint"),
         CommandAction::Train => t.text("command-train-hint"),
         CommandAction::AppointGovernor => t.text("command-appoint-governor-hint"),
         CommandAction::Transfer => t.text("command-transfer-hint"),
@@ -687,6 +769,79 @@ fn recruit_parameter_controls(
             ("troops", troop_pool_summary(city.troops, t)),
         ]),
     ));
+}
+
+fn recruit_officer_parameter_controls(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    game: &GameState,
+    city: &City,
+    selected_officer: Option<&Officer>,
+    t: &Translator,
+) {
+    let candidates = wild_recruitment_candidates(game);
+    if candidates.is_empty() {
+        ui.colored_label(war_text_muted(), t.text("command-recruit-officer-none"));
+        ui_state.selected_recruitment_target = None;
+        return;
+    }
+    ensure_selected_recruitment_target(ui_state, &candidates);
+    let selected_target_id = ui_state.selected_recruitment_target.clone();
+    egui::ComboBox::from_id_salt("command_recruitment_target")
+        .selected_text(
+            selected_target_id
+                .as_deref()
+                .and_then(|id| game.officers.get(id))
+                .map(|officer| wild_officer_label(game, officer, t))
+                .unwrap_or_else(|| t.text("common-none-selected")),
+        )
+        .show_ui(ui, |ui| {
+            for officer in &candidates {
+                ui.selectable_value(
+                    &mut ui_state.selected_recruitment_target,
+                    Some(officer.id.clone()),
+                    wild_officer_label(game, officer, t),
+                );
+            }
+        });
+
+    if let Some(task) = active_recruitment_for_source(game, &city.id) {
+        ui.separator();
+        ui.colored_label(war_warning(), t.text("command-recruit-officer-active"));
+        ui.label(recruitment_task_line(game, task, t));
+    }
+
+    let Some(target_id) = ui_state.selected_recruitment_target.as_deref() else {
+        return;
+    };
+    if let Some(target) = game.officers.get(target_id) {
+        ui.label(t.text_args(
+            "command-recruit-officer-target",
+            &args([
+                ("officer", target.name.clone()),
+                ("city", officer_city_name(game, target, t)),
+                ("charm", target.stats.charm.to_string()),
+            ]),
+        ));
+    }
+    if let Some(recruiter) = selected_officer {
+        let preview_task = OfficerRecruitmentTask {
+            id: "preview".to_string(),
+            issuer_faction_id: game.player_faction_id.clone(),
+            source_city_id: city.id.clone(),
+            recruiter_officer_id: recruiter.id.clone(),
+            target_officer_id: target_id.to_string(),
+            progress: 0,
+            attempt_months: 0,
+            started_turn: game.turn,
+        };
+        if let Some(gain) = officer_recruitment_progress_gain(game, &preview_task) {
+            ui.label(t.text_args(
+                "command-recruit-officer-gain",
+                &args([("gain", gain.to_string())]),
+            ));
+        }
+    }
 }
 
 fn train_parameter_controls(ui: &mut egui::Ui, selected_officer: Option<&Officer>, t: &Translator) {
@@ -1250,6 +1405,7 @@ fn build_candidate_command(
             kind: ui_state.selected_recruit_kind,
             amount: ui_state.recruit_amount,
         },
+        CommandAction::RecruitOfficer => return None,
         CommandAction::Train => CommandKind::Train,
         CommandAction::AppointGovernor => CommandKind::AppointGovernor {
             target_officer_id: officer_id.clone(),
@@ -1346,6 +1502,80 @@ fn remove_pending_command_for_city(game: &mut GameState, city_id: &str) -> Optio
         .iter()
         .position(|command| command.city_id == city_id)?;
     Some(game.pending_commands.remove(index))
+}
+
+fn preview_officer_recruitment(
+    game: &GameState,
+    source_city_id: &str,
+    recruiter_officer_id: &str,
+    target_officer_id: &str,
+) -> Result<(), String> {
+    let mut preview = game.clone();
+    start_officer_recruitment(
+        &mut preview,
+        &game.player_faction_id,
+        source_city_id,
+        recruiter_officer_id,
+        target_officer_id,
+    )
+    .map(|_| ())
+    .map_err(|error| error.to_string())
+}
+
+fn submit_officer_recruitment(
+    ui_state: &mut GameUiState,
+    source_city_id: &str,
+    recruiter_officer_id: &str,
+    target_officer_id: &str,
+    t: &Translator,
+) {
+    let Some(game) = &mut ui_state.game else {
+        ui_state.message = t.text("message-game-not-started");
+        return;
+    };
+    match start_officer_recruitment(
+        game,
+        &game.player_faction_id.clone(),
+        source_city_id,
+        recruiter_officer_id,
+        target_officer_id,
+    ) {
+        Ok(task) => {
+            ui_state.message = t.text_args(
+                "message-recruitment-started",
+                &args([
+                    ("recruiter", officer_name(game, &task.recruiter_officer_id)),
+                    ("target", officer_name(game, &task.target_officer_id)),
+                ]),
+            );
+        }
+        Err(error) => ui_state.message = error.to_string(),
+    }
+}
+
+fn cancel_recruitment_task(ui_state: &mut GameUiState, task_id: &str, t: &Translator) {
+    let Some(game) = &mut ui_state.game else {
+        ui_state.message = t.text("message-game-not-started");
+        return;
+    };
+    match cancel_officer_recruitment(game, task_id) {
+        Ok(task) => {
+            ui_state.message = t.text_args(
+                "message-recruitment-cancelled",
+                &args([("target", officer_name(game, &task.target_officer_id))]),
+            );
+        }
+        Err(error) => ui_state.message = error.to_string(),
+    }
+}
+
+fn active_recruitment_for_source<'a>(
+    game: &'a GameState,
+    city_id: &str,
+) -> Option<&'a OfficerRecruitmentTask> {
+    game.officer_recruitments
+        .iter()
+        .find(|task| task.source_city_id == city_id)
 }
 
 fn command_preview_lines(
@@ -1544,6 +1774,87 @@ fn troop_pool_summary(troops: TroopPool, t: &Translator) -> String {
             ("infantry", troops.infantry.to_string()),
             ("cavalry", troops.cavalry.to_string()),
             ("archers", troops.archers.to_string()),
+        ]),
+    )
+}
+
+fn wild_recruitment_candidates(game: &GameState) -> Vec<Officer> {
+    let tasked_targets = game
+        .officer_recruitments
+        .iter()
+        .map(|task| task.target_officer_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut officers = game
+        .officers
+        .values()
+        .filter(|officer| {
+            officer.status == OfficerStatus::Wild
+                && officer.faction_id == WILD_FACTION_ID
+                && officer.is_adult_at(game.year)
+                && officer.city_id.is_some()
+                && !tasked_targets.contains(officer.id.as_str())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    officers.sort_by(|a, b| {
+        a.city_id
+            .cmp(&b.city_id)
+            .then_with(|| b.stats.charm.cmp(&a.stats.charm))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    officers
+}
+
+fn ensure_selected_recruitment_target(
+    ui_state: &mut GameUiState,
+    candidates: &[Officer],
+) -> Option<OfficerId> {
+    if candidates.is_empty() {
+        ui_state.selected_recruitment_target = None;
+        return None;
+    }
+    let selected = ui_state
+        .selected_recruitment_target
+        .get_or_insert_with(|| candidates[0].id.clone());
+    if !candidates.iter().any(|officer| officer.id == *selected) {
+        *selected = candidates[0].id.clone();
+    }
+    Some(selected.clone())
+}
+
+fn wild_officer_label(game: &GameState, officer: &Officer, t: &Translator) -> String {
+    t.text_args(
+        "wild-officer-label",
+        &args([
+            ("officer", officer.name.clone()),
+            ("city", officer_city_name(game, officer, t)),
+            ("leadership", officer.stats.leadership.to_string()),
+            ("politics", officer.stats.politics.to_string()),
+            ("charm", officer.stats.charm.to_string()),
+        ]),
+    )
+}
+
+fn officer_city_name(game: &GameState, officer: &Officer, t: &Translator) -> String {
+    officer
+        .city_id
+        .as_deref()
+        .map(|city_id| city_name(game, city_id))
+        .unwrap_or_else(|| t.text("officer-city-unassigned"))
+}
+
+fn recruitment_task_line(
+    game: &GameState,
+    task: &OfficerRecruitmentTask,
+    t: &Translator,
+) -> String {
+    t.text_args(
+        "recruitment-task-line",
+        &args([
+            ("recruiter", officer_name(game, &task.recruiter_officer_id)),
+            ("target", officer_name(game, &task.target_officer_id)),
+            ("progress", task.progress.to_string()),
+            ("months", task.attempt_months.to_string()),
         ]),
     )
 }

@@ -198,6 +198,8 @@ impl ScenarioData {
             family_relationships: Vec::new(),
             next_generated_officer_sequence: 0,
             last_lifecycle_year: None,
+            officer_recruitments: Vec::new(),
+            next_officer_recruitment_sequence: 0,
             applied_event_ids: BTreeSet::new(),
             reports: Vec::new(),
             status: GameStatus::Running,
