@@ -37,8 +37,7 @@ pub(super) fn city_summary_intel(
                     "city-level-slots",
                     &args([
                         ("level", city.level.to_string()),
-                        ("used", city.facilities.len().to_string()),
-                        ("total", city.facility_slots().to_string()),
+                        ("slots", city.facility_slots().to_string()),
                     ]),
                 ),
             );
@@ -251,10 +250,7 @@ fn header_band(ui: &mut egui::Ui, city: &City, faction_name: &str, t: &Translato
                 ui.separator();
                 ui.label(t.text_args(
                     "city-slots",
-                    &args([
-                        ("used", city.facilities.len().to_string()),
-                        ("total", city.facility_slots().to_string()),
-                    ]),
+                    &args([("slots", city.facility_slots().to_string())]),
                 ));
                 ui.separator();
                 muted_label(

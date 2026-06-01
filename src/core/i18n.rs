@@ -152,4 +152,20 @@ mod tests {
         // Fallback: an unknown key is returned verbatim.
         assert_eq!(en.text("missing-key-for-test"), "missing-key-for-test");
     }
+
+    #[test]
+    fn translator_formats_city_slot_labels() {
+        for language in UiLanguage::available() {
+            let t = Translator::new(*language);
+            let level_slots = t.text_args(
+                "city-level-slots",
+                &args([("level", "3".to_string()), ("slots", "5".to_string())]),
+            );
+            let slots = t.text_args("city-slots", &args([("slots", "5".to_string())]));
+
+            assert!(level_slots.contains('3'));
+            assert!(level_slots.contains('5'));
+            assert!(slots.contains('5'));
+        }
+    }
 }
