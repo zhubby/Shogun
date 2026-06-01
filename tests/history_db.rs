@@ -40,11 +40,11 @@ async fn open_pool(path: &Path) -> sqlx::SqlitePool {
 
 async fn query_count(pool: &sqlx::SqlitePool, table: &str) -> i64 {
     let sql = format!("SELECT count(*) AS count FROM {table}");
-    sqlx::query(&sql)
-        .fetch_one(pool)
-        .await
-        .unwrap()
-        .get("count")
+    query_count_sql(pool, &sql).await
+}
+
+async fn query_count_sql(pool: &sqlx::SqlitePool, sql: &str) -> i64 {
+    sqlx::query(sql).fetch_one(pool).await.unwrap().get("count")
 }
 
 async fn applied_sqlx_migration_versions(pool: &sqlx::SqlitePool) -> Vec<i64> {
@@ -65,7 +65,7 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
 
     runtime().block_on(async {
         let pool = open_pool(&path).await;
-        assert_eq!(applied_sqlx_migration_versions(&pool).await, [1, 2]);
+        assert_eq!(applied_sqlx_migration_versions(&pool).await, [1, 2, 3]);
 
         let fk_rows = sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(&pool)
@@ -76,15 +76,34 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
         let city_count = query_count(&pool, "cities").await;
         let officer_count = query_count(&pool, "officers").await;
         assert!((60..=90).contains(&city_count));
-        assert_eq!(officer_count, 158);
+        assert_eq!(officer_count, 420);
+        assert_eq!(
+            query_count_sql(&pool, "SELECT count(*) AS count FROM officers WHERE gender = 'Male'")
+                .await,
+            350
+        );
+        assert_eq!(
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count FROM officers WHERE gender = 'Female'",
+            )
+            .await,
+            70
+        );
         assert_eq!(query_count(&pool, "scenarios").await, 4);
         assert!(query_count(&pool, "officer_life_events").await >= officer_count);
         assert_eq!(
-            sqlx::query("SELECT count(*) AS count FROM officers WHERE id LIKE 'supplemental_%'")
-                .fetch_one(&pool)
-                .await
-                .unwrap()
-                .get::<i64, _>("count"),
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count
+                 FROM officers
+                 WHERE id = 'zhao_yun_early'
+                    OR id LIKE 'supplemental_%'
+                    OR name = '名不详'
+                    OR tags LIKE '%supplemental%'
+                    OR notes LIKE '%低置信度补充人物%'",
+            )
+            .await,
             0
         );
         assert_eq!(
@@ -105,7 +124,73 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
             .get::<i64, _>("count"),
             81
         );
-        assert!(query_count(&pool, "officer_relationships").await >= 80);
+        assert_eq!(
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count FROM officers WHERE tags LIKE '%expansion_003%'",
+            )
+            .await,
+            263
+        );
+        assert_eq!(
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count
+                 FROM officers o
+                 WHERE o.tags LIKE '%expansion_003%'
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM officer_external_ids e
+                       WHERE e.officer_id = o.id
+                   )",
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count
+                 FROM officers o
+                 WHERE o.gender = 'Female'
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM officer_relationships r
+                       WHERE r.source_officer_id = o.id
+                          OR r.target_officer_id = o.id
+                   )",
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count
+                 FROM officer_relationships r
+                 WHERE r.relationship_kind IN ('Spouse', 'Sibling', 'SwornSibling', 'Enemy')
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM officer_relationships rev
+                       WHERE rev.source_officer_id = r.target_officer_id
+                         AND rev.target_officer_id = r.source_officer_id
+                         AND rev.relationship_kind = r.relationship_kind
+                   )",
+            )
+            .await,
+            0
+        );
+        assert!(query_count(&pool, "officer_relationships").await >= 300);
+        assert!(
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count
+                 FROM officer_relationships
+                 WHERE relationship_kind = 'Spouse'",
+            )
+            .await
+                >= 100
+        );
         assert!(
             sqlx::query("SELECT count(*) AS count FROM officer_life_events WHERE loyalty IS NOT NULL")
                 .fetch_one(&pool)
@@ -153,7 +238,7 @@ fn open_or_create_creates_database_and_runs_initial_migration() {
     assert_eq!(catalog.scenarios().unwrap().len(), 4);
     runtime().block_on(async {
         let pool = open_pool(&path).await;
-        assert_eq!(applied_sqlx_migration_versions(&pool).await, [1, 2]);
+        assert_eq!(applied_sqlx_migration_versions(&pool).await, [1, 2, 3]);
         pool.close().await;
     });
 }
