@@ -4,9 +4,9 @@ use bevy_egui::egui;
 use std::collections::BTreeMap;
 
 use super::asset_path;
-use super::display_settings::{GameSettings, GameSettingsStore, LoadedGameSettings};
 use super::i18n::{Translator, args};
 use super::map::MapBoundaryViewCache;
+use super::settings::{GameSettings, GameSettingsStore, LoadedGameSettings};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SettingsTab {

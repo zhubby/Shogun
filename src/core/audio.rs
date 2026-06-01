@@ -2,7 +2,7 @@ use rodio::cpal::traits::{DeviceTrait, HostTrait};
 use rodio::{Decoder, OutputStream, Sink};
 use std::io::Cursor;
 
-use super::display_settings::{AudioSettings, normalize_output_device_name};
+use super::settings::{AudioSettings, normalize_output_device_name};
 use super::state::Screen;
 
 const MAIN_MENU_BGM_BYTES: &[u8] = include_bytes!("../../assets/audio/bgm.mp3");

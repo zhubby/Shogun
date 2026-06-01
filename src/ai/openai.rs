@@ -90,7 +90,7 @@ impl OpenAiConfig {
         let api_key =
             env::var("OPENAI_API_KEY").map_err(|_| AiApiError::MissingEnvironmentVariable {
                 name: "OPENAI_API_KEY",
-        })?;
+            })?;
         let mut config = Self::new(api_key);
         if let Ok(api_type) = env::var("OPENAI_API_TYPE") {
             config.api_type = openai_api_type_from_env(&api_type)?;
@@ -1348,6 +1348,25 @@ mod tests {
             "https://proxy.example/v1/responses"
         );
         assert_eq!(client.url("/files"), "https://proxy.example/v1/files");
+    }
+
+    #[test]
+    fn selected_api_type_uses_complete_url_for_matching_endpoint() {
+        let client = OpenAiClient::new(
+            OpenAiConfig::new("test-token")
+                .with_api_type(OpenAiApiType::ChatCompletions)
+                .with_api_url("https://proxy.example/openai/v1/chat/completions"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            client.url("/chat/completions"),
+            "https://proxy.example/openai/v1/chat/completions"
+        );
+        assert_eq!(
+            client.url("/responses"),
+            "https://proxy.example/openai/v1/responses"
+        );
     }
 
     #[test]

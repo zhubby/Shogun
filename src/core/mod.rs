@@ -3,7 +3,6 @@ mod app_icon;
 mod audio;
 mod city_intel;
 mod city_panel;
-mod display_settings;
 mod hud;
 mod i18n;
 mod labels;
@@ -21,11 +20,10 @@ use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use std::path::{Path, PathBuf};
 
 use audio::MainMenuAudio;
-use display_settings::GameSettingsStore;
 use hud::in_game;
 use i18n::{Translator, args};
 use menu::{MainMenuAction, MainMenuAssets, main_menu, prepare_main_menu_assets_for_egui};
-use settings::apply_pending_game_settings;
+use settings::{GameSettingsStore, apply_pending_game_settings};
 use state::{GameUiState, Screen};
 use style::{configure_egui_fonts, configure_egui_theme};
 

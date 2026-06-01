@@ -1579,7 +1579,7 @@ fn close_officer_profile_editor(ui_state: &mut GameUiState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::display_settings::{GameSettings, GameSettingsStore, LoadedGameSettings};
+    use crate::core::settings::{GameSettings, GameSettingsStore, LoadedGameSettings};
 
     fn test_profile(name: &str) -> OfficerProfile {
         OfficerProfile {

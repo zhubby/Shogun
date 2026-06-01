@@ -2710,14 +2710,14 @@ pub(super) fn report_panel(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::display_settings::{GameSettings, LoadedGameSettings};
     use crate::core::i18n::{Translator, UiLanguage};
+    use crate::core::settings::{GameSettings, GameSettingsStore, LoadedGameSettings};
     use crate::core::state::{GameUiState, OfficerGenderFilter, OfficerStatusFilter};
     use crate::game::{OfficerGender, OfficerStatus, SqliteHistoricalCatalog};
 
     fn ui_state_with_game() -> GameUiState {
         let mut state = GameUiState::new(
-            crate::core::display_settings::GameSettingsStore::with_default_path(),
+            GameSettingsStore::with_default_path(),
             LoadedGameSettings {
                 settings: GameSettings::default(),
                 message: None,
