@@ -1745,19 +1745,11 @@ fn officer_detail_relationship_section(
 ) {
     war_sub_panel_frame().show(ui, |ui| {
         officer_detail_section_title(ui, &t.text("officer-detail-section-relationships"));
-        let mut has_relationships = false;
-        if let Some(profile) = &officer.profile {
-            for relationship in &profile.relationships {
-                has_relationships = true;
-                ui.label(static_relationship_line(relationship, t));
-            }
-        }
-        for line in dynamic_relationship_lines(game, officer, t) {
-            has_relationships = true;
-            ui.label(line);
-        }
-        if !has_relationships {
+        let graph = officer_relationship_graph(game, officer, t);
+        if graph.edges.is_empty() {
             ui.colored_label(war_text_muted(), t.text("officer-detail-no-relationships"));
+        } else {
+            relationship_graph(ui, &graph, t);
         }
     });
 }
@@ -1874,70 +1866,156 @@ fn officer_office_detail_name(officer: &Officer, t: &Translator) -> String {
         .unwrap_or_else(|| t.text("none"))
 }
 
-fn static_relationship_line(relationship: &OfficerRelationship, t: &Translator) -> String {
-    let mut extras = Vec::new();
-    extras.push(t.text_args(
-        "officer-detail-relation-confidence",
-        &args([("confidence", confidence_label(t, &relationship.confidence))]),
-    ));
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OfficerRelationshipGraph {
+    center_name: String,
+    edges: Vec<OfficerRelationshipGraphEdge>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct OfficerRelationshipGraphEdge {
+    target_id: OfficerId,
+    target_name: String,
+    label: String,
+    tooltip: String,
+    kind: RelationshipGraphKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RelationshipGraphKind {
+    Ruler,
+    Heir,
+    Governor,
+    Parent,
+    Child,
+    Spouse,
+    SwornSibling,
+    Enemy,
+    RulerSubject,
+    Other,
+}
+
+fn officer_relationship_graph(
+    game: &GameState,
+    officer: &Officer,
+    t: &Translator,
+) -> OfficerRelationshipGraph {
+    let mut graph = OfficerRelationshipGraph {
+        center_name: officer.name.clone(),
+        edges: Vec::new(),
+    };
+    if let Some(profile) = &officer.profile {
+        for relationship in &profile.relationships {
+            graph.edges.push(static_relationship_edge(relationship, t));
+        }
+    }
+    graph.edges.extend(dynamic_role_edges(game, officer, t));
+    graph.edges.extend(dynamic_marriage_edges(game, officer, t));
+    graph.edges.extend(dynamic_family_edges(game, officer, t));
+    graph
+}
+
+fn static_relationship_edge(
+    relationship: &OfficerRelationship,
+    t: &Translator,
+) -> OfficerRelationshipGraphEdge {
+    let label = officer_relationship_label(t, &relationship.kind);
+    let mut tooltip_parts = vec![
+        label.clone(),
+        t.text_args(
+            "officer-detail-relation-confidence",
+            &args([("confidence", confidence_label(t, &relationship.confidence))]),
+        ),
+    ];
     if !relationship.source.trim().is_empty() {
-        extras.push(t.text_args(
+        tooltip_parts.push(t.text_args(
             "officer-detail-relation-source",
             &args([("source", relationship.source.clone())]),
         ));
     }
     if !relationship.notes.trim().is_empty() {
-        extras.push(t.text_args(
+        tooltip_parts.push(t.text_args(
             "officer-detail-relation-notes",
             &args([("notes", relationship.notes.clone())]),
         ));
     }
-    t.text_args(
-        "officer-detail-static-relation",
-        &args([
-            ("kind", officer_relationship_label(t, &relationship.kind)),
-            ("target", relationship.target_name.clone()),
-            ("meta", extras.join(" | ")),
-        ]),
-    )
+
+    OfficerRelationshipGraphEdge {
+        target_id: relationship.target_id.clone(),
+        target_name: relationship.target_name.clone(),
+        label,
+        tooltip: tooltip_parts.join("\n"),
+        kind: graph_kind_for_static_relationship(&relationship.kind),
+    }
 }
 
-fn dynamic_relationship_lines(game: &GameState, officer: &Officer, t: &Translator) -> Vec<String> {
-    let mut lines = Vec::new();
-    lines.extend(dynamic_role_lines(game, officer, t));
-    lines.extend(dynamic_marriage_lines(game, officer, t));
-    lines.extend(dynamic_family_lines(game, officer, t));
-    lines
+fn graph_kind_for_static_relationship(kind: &OfficerRelationshipKind) -> RelationshipGraphKind {
+    match kind {
+        OfficerRelationshipKind::RulerSubject => RelationshipGraphKind::RulerSubject,
+        OfficerRelationshipKind::ParentChild | OfficerRelationshipKind::AdoptiveParentChild => {
+            RelationshipGraphKind::Parent
+        }
+        OfficerRelationshipKind::Spouse => RelationshipGraphKind::Spouse,
+        OfficerRelationshipKind::Sibling => RelationshipGraphKind::Other,
+        OfficerRelationshipKind::SwornSibling => RelationshipGraphKind::SwornSibling,
+        OfficerRelationshipKind::Enemy => RelationshipGraphKind::Enemy,
+    }
 }
 
-fn dynamic_role_lines(game: &GameState, officer: &Officer, t: &Translator) -> Vec<String> {
-    let mut lines = Vec::new();
+fn dynamic_role_edges(
+    game: &GameState,
+    officer: &Officer,
+    t: &Translator,
+) -> Vec<OfficerRelationshipGraphEdge> {
+    let mut edges = Vec::new();
     for faction in game.factions.values() {
         if faction.ruler_id == officer.id {
-            lines.push(t.text_args(
-                "officer-detail-dynamic-ruler",
-                &args([("faction", faction.name.clone())]),
+            edges.push(dynamic_context_edge(
+                format!("faction:ruler:{}", faction.id),
+                faction.name.clone(),
+                t.text("officer-detail-graph-ruler"),
+                t.text_args(
+                    "officer-detail-dynamic-ruler",
+                    &args([("faction", faction.name.clone())]),
+                ),
+                RelationshipGraphKind::Ruler,
             ));
         }
         if faction.heir_id.as_deref() == Some(officer.id.as_str()) {
-            lines.push(t.text_args(
-                "officer-detail-dynamic-heir",
-                &args([("faction", faction.name.clone())]),
+            edges.push(dynamic_context_edge(
+                format!("faction:heir:{}", faction.id),
+                faction.name.clone(),
+                t.text("officer-detail-graph-heir"),
+                t.text_args(
+                    "officer-detail-dynamic-heir",
+                    &args([("faction", faction.name.clone())]),
+                ),
+                RelationshipGraphKind::Heir,
             ));
         }
     }
     for city in game.cities.values() {
         if city.governor_id.as_deref() == Some(officer.id.as_str()) {
-            lines.push(t.text_args(
-                "officer-detail-dynamic-governor",
-                &args([("city", city.name.clone())]),
+            edges.push(dynamic_context_edge(
+                format!("city:governor:{}", city.id),
+                city.name.clone(),
+                t.text("officer-detail-graph-governor"),
+                t.text_args(
+                    "officer-detail-dynamic-governor",
+                    &args([("city", city.name.clone())]),
+                ),
+                RelationshipGraphKind::Governor,
             ));
         }
     }
-    lines
+    edges
 }
 
-fn dynamic_marriage_lines(game: &GameState, officer: &Officer, t: &Translator) -> Vec<String> {
+fn dynamic_marriage_edges(
+    game: &GameState,
+    officer: &Officer,
+    t: &Translator,
+) -> Vec<OfficerRelationshipGraphEdge> {
     game.marriages
         .iter()
         .filter(|marriage| marriage.involves(&officer.id))
@@ -1947,50 +2025,194 @@ fn dynamic_marriage_lines(game: &GameState, officer: &Officer, t: &Translator) -
             } else {
                 &marriage.husband_id
             };
-            t.text_args(
-                "officer-detail-dynamic-spouse",
-                &args([
-                    ("officer", officer_display_name(game, spouse_id)),
-                    ("year", marriage.year.to_string()),
-                    ("month", marriage.month.to_string()),
-                ]),
+            let spouse_name = officer_display_name(game, spouse_id);
+            dynamic_context_edge(
+                spouse_id.clone(),
+                spouse_name.clone(),
+                t.text("officer-detail-graph-spouse"),
+                t.text_args(
+                    "officer-detail-dynamic-spouse",
+                    &args([
+                        ("officer", spouse_name),
+                        ("year", marriage.year.to_string()),
+                        ("month", marriage.month.to_string()),
+                    ]),
+                ),
+                RelationshipGraphKind::Spouse,
             )
         })
         .collect()
 }
 
-fn dynamic_family_lines(game: &GameState, officer: &Officer, t: &Translator) -> Vec<String> {
-    let parents = game
-        .family_relationships
-        .iter()
-        .filter(|relationship| relationship.child_id == officer.id)
-        .map(|relationship| officer_display_name(game, &relationship.parent_id))
-        .collect::<Vec<_>>();
-    let children = game
-        .family_relationships
-        .iter()
-        .filter(|relationship| relationship.parent_id == officer.id)
-        .map(|relationship| officer_display_name(game, &relationship.child_id))
-        .collect::<Vec<_>>();
-
-    let mut lines = Vec::new();
-    if !parents.is_empty() {
-        lines.push(t.text_args(
-            "officer-detail-dynamic-parents",
-            &args([("officers", relationship_names(parents, t))]),
-        ));
+fn dynamic_family_edges(
+    game: &GameState,
+    officer: &Officer,
+    t: &Translator,
+) -> Vec<OfficerRelationshipGraphEdge> {
+    let mut edges = Vec::new();
+    for relationship in &game.family_relationships {
+        if relationship.child_id == officer.id {
+            let parent_name = officer_display_name(game, &relationship.parent_id);
+            edges.push(dynamic_context_edge(
+                relationship.parent_id.clone(),
+                parent_name.clone(),
+                t.text("officer-detail-graph-parent"),
+                t.text_args(
+                    "officer-detail-dynamic-parent",
+                    &args([("officer", parent_name)]),
+                ),
+                RelationshipGraphKind::Parent,
+            ));
+        }
+        if relationship.parent_id == officer.id {
+            let child_name = officer_display_name(game, &relationship.child_id);
+            edges.push(dynamic_context_edge(
+                relationship.child_id.clone(),
+                child_name.clone(),
+                t.text("officer-detail-graph-child"),
+                t.text_args(
+                    "officer-detail-dynamic-child",
+                    &args([("officer", child_name)]),
+                ),
+                RelationshipGraphKind::Child,
+            ));
+        }
     }
-    if !children.is_empty() {
-        lines.push(t.text_args(
-            "officer-detail-dynamic-children",
-            &args([("officers", relationship_names(children, t))]),
-        ));
-    }
-    lines
+    edges
 }
 
-fn relationship_names(names: Vec<String>, t: &Translator) -> String {
-    names.join(&t.text("list-separator"))
+fn dynamic_context_edge(
+    target_id: OfficerId,
+    target_name: String,
+    label: String,
+    tooltip: String,
+    kind: RelationshipGraphKind,
+) -> OfficerRelationshipGraphEdge {
+    OfficerRelationshipGraphEdge {
+        target_id,
+        target_name,
+        label,
+        tooltip,
+        kind,
+    }
+}
+
+fn relationship_graph(ui: &mut egui::Ui, graph: &OfficerRelationshipGraph, t: &Translator) {
+    let desired_size = egui::vec2(ui.available_width().max(360.0), 260.0);
+    let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(
+        rect,
+        4.0,
+        egui::Color32::from_rgba_unmultiplied(18, 15, 11, 150),
+    );
+    painter.rect_stroke(
+        rect.shrink(1.0),
+        4.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(138, 101, 58, 95)),
+        egui::StrokeKind::Inside,
+    );
+
+    let center = rect.center();
+    draw_relationship_node(
+        ui,
+        &painter,
+        center,
+        34.0,
+        &graph.center_name,
+        war_gold(),
+        t.text("officer-detail-graph-center"),
+    );
+
+    let radius_x = (rect.width() * 0.36).max(118.0);
+    let radius_y = (rect.height() * 0.34).max(72.0);
+    for (index, edge) in graph.edges.iter().enumerate() {
+        let angle = relationship_node_angle(index, graph.edges.len());
+        let pos = egui::pos2(
+            center.x + angle.cos() * radius_x,
+            center.y + angle.sin() * radius_y,
+        );
+        let color = relationship_kind_color(edge.kind);
+        painter.line_segment([center, pos], egui::Stroke::new(1.6, color));
+        painter.text(
+            center.lerp(pos, 0.55),
+            egui::Align2::CENTER_CENTER,
+            &edge.label,
+            egui::FontId::proportional(11.0),
+            color,
+        );
+        draw_relationship_node(
+            ui,
+            &painter,
+            pos,
+            28.0,
+            &edge.target_name,
+            color,
+            edge.tooltip.clone(),
+        );
+    }
+}
+
+fn relationship_node_angle(index: usize, count: usize) -> f32 {
+    -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * index as f32 / count.max(1) as f32
+}
+
+fn draw_relationship_node(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    name: &str,
+    color: egui::Color32,
+    tooltip: String,
+) {
+    let rect = egui::Rect::from_center_size(center, egui::vec2(radius * 2.2, radius * 1.45));
+    let response = ui.interact(
+        rect,
+        egui::Id::new(("relationship_node", name)),
+        egui::Sense::hover(),
+    );
+    if response.hovered() {
+        response.on_hover_text(tooltip);
+    }
+    painter.circle_filled(
+        center,
+        radius,
+        egui::Color32::from_rgba_unmultiplied(35, 29, 22, 235),
+    );
+    painter.circle_stroke(center, radius, egui::Stroke::new(1.4, color));
+    painter.text(
+        center,
+        egui::Align2::CENTER_CENTER,
+        compact_node_label(name),
+        egui::FontId::proportional(13.0),
+        war_text(),
+    );
+}
+
+fn compact_node_label(name: &str) -> String {
+    let chars = name.chars().collect::<Vec<_>>();
+    if chars.len() <= 4 {
+        name.to_string()
+    } else {
+        chars.into_iter().take(4).collect()
+    }
+}
+
+fn relationship_kind_color(kind: RelationshipGraphKind) -> egui::Color32 {
+    match kind {
+        RelationshipGraphKind::Spouse => egui::Color32::from_rgb(217, 126, 118),
+        RelationshipGraphKind::Parent | RelationshipGraphKind::Child => {
+            egui::Color32::from_rgb(119, 184, 141)
+        }
+        RelationshipGraphKind::Ruler
+        | RelationshipGraphKind::Heir
+        | RelationshipGraphKind::Governor => war_gold(),
+        RelationshipGraphKind::SwornSibling => egui::Color32::from_rgb(120, 178, 211),
+        RelationshipGraphKind::Enemy => war_danger(),
+        RelationshipGraphKind::RulerSubject => egui::Color32::from_rgb(190, 151, 88),
+        RelationshipGraphKind::Other => war_text_muted(),
+    }
 }
 
 fn officer_display_name(game: &GameState, officer_id: &str) -> String {
@@ -3395,28 +3617,59 @@ mod tests {
         let t = zh();
         let game = state.game.as_ref().unwrap();
 
-        let liu_bei_lines = dynamic_relationship_lines(game, &game.officers["liu_bei"], &t);
+        let liu_bei_graph = officer_relationship_graph(game, &game.officers["liu_bei"], &t);
         assert!(
-            liu_bei_lines
+            liu_bei_graph
+                .edges
                 .iter()
-                .any(|line| line.contains("刘备军 君主"))
+                .any(|edge| edge.kind == RelationshipGraphKind::Ruler
+                    && edge.target_name == "刘备军")
         );
-        assert!(liu_bei_lines.iter().any(|line| line.contains("平原 太守")));
-        assert!(liu_bei_lines.iter().any(|line| line.contains("配偶: 张飞")));
-        assert!(liu_bei_lines.iter().any(|line| line.contains("子女: 赵云")));
-
-        let guan_yu_lines = dynamic_relationship_lines(game, &game.officers["guan_yu"], &t);
         assert!(
-            guan_yu_lines
+            liu_bei_graph
+                .edges
                 .iter()
-                .any(|line| line.contains("刘备军 继承人"))
+                .any(|edge| edge.kind == RelationshipGraphKind::Governor
+                    && edge.target_name == "平原")
+        );
+        assert!(
+            liu_bei_graph.edges.iter().any(
+                |edge| edge.kind == RelationshipGraphKind::Spouse && edge.target_name == "张飞"
+            )
+        );
+        assert!(
+            liu_bei_graph
+                .edges
+                .iter()
+                .any(|edge| edge.kind == RelationshipGraphKind::Child
+                    && edge.target_name == "赵云")
         );
 
-        let zhao_yun_lines = dynamic_relationship_lines(game, &game.officers["zhao_yun"], &t);
+        let guan_yu_graph = officer_relationship_graph(game, &game.officers["guan_yu"], &t);
         assert!(
-            zhao_yun_lines
+            guan_yu_graph.edges.iter().any(
+                |edge| edge.kind == RelationshipGraphKind::Heir && edge.target_name == "刘备军"
+            )
+        );
+
+        let zhao_yun_graph = officer_relationship_graph(game, &game.officers["zhao_yun"], &t);
+        assert!(
+            zhao_yun_graph
+                .edges
                 .iter()
-                .any(|line| line.contains("父母: 刘备、关羽"))
+                .filter(|edge| edge.kind == RelationshipGraphKind::Parent)
+                .map(|edge| edge.target_name.as_str())
+                .collect::<Vec<_>>()
+                .contains(&"刘备")
+        );
+        assert!(
+            zhao_yun_graph
+                .edges
+                .iter()
+                .filter(|edge| edge.kind == RelationshipGraphKind::Parent)
+                .map(|edge| edge.target_name.as_str())
+                .collect::<Vec<_>>()
+                .contains(&"关羽")
         );
     }
 }
