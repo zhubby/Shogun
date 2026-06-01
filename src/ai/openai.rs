@@ -10,6 +10,7 @@ use std::pin::Pin;
 use std::time::Duration;
 
 pub const OPENAI_DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
+pub const OPENAI_DEFAULT_API_URL: &str = "https://api.openai.com/v1/responses";
 
 pub type OpenAiObject = BTreeMap<String, Value>;
 pub type OpenAiEventStream = Pin<Box<dyn Stream<Item = AiApiResult<OpenAiStreamEvent>> + Send>>;
@@ -22,10 +23,52 @@ pub fn openai_data_url(mime_type: impl AsRef<str>, bytes: impl AsRef<[u8]>) -> S
     )
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAiApiType {
+    #[default]
+    Responses,
+    ChatCompletions,
+    Completions,
+}
+
+impl OpenAiApiType {
+    pub const fn variants() -> &'static [Self] {
+        &OPENAI_API_TYPE_VARIANTS
+    }
+
+    pub const fn endpoint_path(self) -> &'static str {
+        match self {
+            Self::Responses => "/responses",
+            Self::ChatCompletions => "/chat/completions",
+            Self::Completions => "/completions",
+        }
+    }
+
+    pub fn default_api_url(self) -> String {
+        self.api_url_from_base_url(OPENAI_DEFAULT_BASE_URL)
+    }
+
+    pub fn api_url_from_base_url(self, base_url: &str) -> String {
+        endpoint_url_from_base(base_url, self.endpoint_path())
+    }
+
+    pub fn api_url_from_existing_url(self, api_url: &str) -> Option<String> {
+        derive_base_url_from_api_url(api_url).map(|base_url| self.api_url_from_base_url(&base_url))
+    }
+}
+
+const OPENAI_API_TYPE_VARIANTS: [OpenAiApiType; 3] = [
+    OpenAiApiType::Responses,
+    OpenAiApiType::ChatCompletions,
+    OpenAiApiType::Completions,
+];
+
 #[derive(Clone, Debug)]
 pub struct OpenAiConfig {
     pub api_key: String,
-    pub base_url: String,
+    pub api_type: OpenAiApiType,
+    pub api_url: String,
     pub organization: Option<String>,
     pub project: Option<String>,
     pub timeout: Option<Duration>,
@@ -35,7 +78,8 @@ impl OpenAiConfig {
     pub fn new(api_key: impl Into<String>) -> Self {
         Self {
             api_key: api_key.into(),
-            base_url: OPENAI_DEFAULT_BASE_URL.to_string(),
+            api_type: OpenAiApiType::default(),
+            api_url: OPENAI_DEFAULT_API_URL.to_string(),
             organization: None,
             project: None,
             timeout: Some(Duration::from_secs(120)),
@@ -46,18 +90,33 @@ impl OpenAiConfig {
         let api_key =
             env::var("OPENAI_API_KEY").map_err(|_| AiApiError::MissingEnvironmentVariable {
                 name: "OPENAI_API_KEY",
-            })?;
+        })?;
         let mut config = Self::new(api_key);
-        if let Ok(base_url) = env::var("OPENAI_BASE_URL") {
-            config.base_url = base_url;
+        if let Ok(api_type) = env::var("OPENAI_API_TYPE") {
+            config.api_type = openai_api_type_from_env(&api_type)?;
+        }
+        if let Ok(api_url) = env::var("OPENAI_API_URL") {
+            config.api_url = api_url;
+        } else if let Ok(base_url) = env::var("OPENAI_BASE_URL") {
+            config = config.with_base_url(base_url);
         }
         config.organization = env::var("OPENAI_ORGANIZATION").ok();
         config.project = env::var("OPENAI_PROJECT").ok();
         Ok(config)
     }
 
+    pub fn with_api_url(mut self, api_url: impl Into<String>) -> Self {
+        self.api_url = api_url.into();
+        self
+    }
+
+    pub fn with_api_type(mut self, api_type: OpenAiApiType) -> Self {
+        self.api_type = api_type;
+        self
+    }
+
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
+        self.api_url = self.api_type.api_url_from_base_url(&base_url.into());
         self
     }
 
@@ -82,9 +141,18 @@ impl OpenAiConfig {
                 "OpenAI API key cannot be empty".to_string(),
             ));
         }
-        if self.base_url.trim().is_empty() {
+        let api_url = self.api_url.trim();
+        if api_url.is_empty() {
             return Err(AiApiError::InvalidConfig(
-                "OpenAI base URL cannot be empty".to_string(),
+                "OpenAI API URL cannot be empty".to_string(),
+            ));
+        }
+        let parsed = reqwest::Url::parse(api_url).map_err(|_| {
+            AiApiError::InvalidConfig("OpenAI API URL must be a complete URL".to_string())
+        })?;
+        if !matches!(parsed.scheme(), "http" | "https") {
+            return Err(AiApiError::InvalidConfig(
+                "OpenAI API URL must use http or https".to_string(),
             ));
         }
         Ok(())
@@ -281,12 +349,49 @@ impl OpenAiClient {
     }
 
     fn url(&self, path: &str) -> String {
-        format!(
-            "{}/{}",
-            self.config.base_url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        )
+        let path = path.trim_start_matches('/');
+        if path == self.config.api_type.endpoint_path().trim_start_matches('/') {
+            return self.config.api_url.trim_end_matches('/').to_string();
+        }
+        derive_base_url_from_api_url(&self.config.api_url)
+            .map(|base_url| endpoint_url_from_base(&base_url, path))
+            .unwrap_or_else(|| self.config.api_url.trim_end_matches('/').to_string())
     }
+}
+
+fn openai_api_type_from_env(value: &str) -> AiApiResult<OpenAiApiType> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "responses" | "response" => Ok(OpenAiApiType::Responses),
+        "chat_completions" | "chat-completions" | "chat/completions" | "chat" => {
+            Ok(OpenAiApiType::ChatCompletions)
+        }
+        "completions" | "completion" => Ok(OpenAiApiType::Completions),
+        value => Err(AiApiError::InvalidConfig(format!(
+            "unsupported OpenAI API type {value}"
+        ))),
+    }
+}
+
+fn endpoint_url_from_base(base_url: &str, path: &str) -> String {
+    format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    )
+}
+
+fn derive_base_url_from_api_url(api_url: &str) -> Option<String> {
+    let api_url = api_url.trim().trim_end_matches('/');
+    for api_type in OpenAiApiType::variants() {
+        let suffix = api_type.endpoint_path();
+        if let Some(base_url) = api_url.strip_suffix(suffix) {
+            return Some(base_url.to_string());
+        }
+    }
+    if let Some(base_url) = api_url.strip_suffix("/files") {
+        return Some(base_url.to_string());
+    }
+    None
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -1211,6 +1316,38 @@ mod tests {
             chat_value["image_url"]["url"],
             "data:image/png;base64,ZmFrZQ=="
         );
+    }
+
+    #[test]
+    fn config_uses_complete_responses_url_for_reasoning_requests() {
+        let client = OpenAiClient::new(
+            OpenAiConfig::new("test-token")
+                .with_api_url("https://proxy.example/openai/v1/responses"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            client.url("/responses"),
+            "https://proxy.example/openai/v1/responses"
+        );
+    }
+
+    #[test]
+    fn legacy_base_url_builder_targets_responses_endpoint() {
+        let client = OpenAiClient::new(
+            OpenAiConfig::new("test-token").with_base_url("https://proxy.example/v1"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            client.config().api_url,
+            "https://proxy.example/v1/responses"
+        );
+        assert_eq!(
+            client.url("/responses"),
+            "https://proxy.example/v1/responses"
+        );
+        assert_eq!(client.url("/files"), "https://proxy.example/v1/files");
     }
 
     #[test]

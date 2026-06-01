@@ -1,3 +1,4 @@
+use crate::ai::{BAILIAN_DEFAULT_IMAGE_MODEL, OPENAI_DEFAULT_API_URL, OpenAiApiType};
 use bevy::window::{
     MonitorSelection, PresentMode, VideoModeSelection, Window, WindowMode, WindowResolution,
 };
@@ -8,12 +9,13 @@ use std::path::{Path, PathBuf};
 
 use super::i18n::{Translator, UiLanguage, args};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub(super) struct GameSettings {
     pub(super) general: GeneralSettings,
     pub(super) display: DisplaySettings,
     pub(super) audio: AudioSettings,
+    pub(super) ai: AiSettings,
 }
 
 impl GameSettings {
@@ -22,17 +24,8 @@ impl GameSettings {
             general: self.general,
             display: self.display.validate()?,
             audio: self.audio.normalized(),
+            ai: self.ai.normalized()?,
         })
-    }
-}
-
-impl Default for GameSettings {
-    fn default() -> Self {
-        Self {
-            general: GeneralSettings::default(),
-            display: DisplaySettings::default(),
-            audio: AudioSettings::default(),
-        }
     }
 }
 
@@ -79,6 +72,85 @@ pub(super) fn normalize_output_device_name(device_name: Option<String>) -> Optio
         let trimmed = name.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_string())
     })
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub(super) struct AiSettings {
+    pub(super) reasoning: ReasoningAiSettings,
+    pub(super) multimodal: MultimodalAiSettings,
+}
+
+impl AiSettings {
+    pub(super) fn normalized(self) -> Result<Self, GameSettingsError> {
+        Ok(Self {
+            reasoning: self.reasoning.normalized()?,
+            multimodal: self.multimodal.normalized(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub(super) struct ReasoningAiSettings {
+    pub(super) api_type: OpenAiApiType,
+    pub(super) api_url: String,
+    pub(super) token: String,
+    pub(super) model_name: String,
+}
+
+impl ReasoningAiSettings {
+    fn normalized(mut self) -> Result<Self, GameSettingsError> {
+        self.api_url = self.api_url.trim().to_string();
+        self.token = self.token.trim().to_string();
+        self.model_name = self.model_name.trim().to_string();
+        if !self.api_url.is_empty() {
+            let parsed = reqwest::Url::parse(&self.api_url).map_err(|_| {
+                GameSettingsError::Invalid("OpenAI API URL 必须是完整 URL".to_string())
+            })?;
+            if !matches!(parsed.scheme(), "http" | "https") {
+                return Err(GameSettingsError::Invalid(
+                    "OpenAI API URL 必须使用 http 或 https".to_string(),
+                ));
+            }
+        }
+        Ok(self)
+    }
+}
+
+impl Default for ReasoningAiSettings {
+    fn default() -> Self {
+        Self {
+            api_type: OpenAiApiType::default(),
+            api_url: OPENAI_DEFAULT_API_URL.to_string(),
+            token: String::new(),
+            model_name: String::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub(super) struct MultimodalAiSettings {
+    pub(super) api_key: String,
+    pub(super) model_name: String,
+}
+
+impl MultimodalAiSettings {
+    fn normalized(mut self) -> Self {
+        self.api_key = self.api_key.trim().to_string();
+        self.model_name = self.model_name.trim().to_string();
+        self
+    }
+}
+
+impl Default for MultimodalAiSettings {
+    fn default() -> Self {
+        Self {
+            api_key: String::new(),
+            model_name: BAILIAN_DEFAULT_IMAGE_MODEL.to_string(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -284,6 +356,7 @@ fn parse_game_settings(body: &str) -> Result<GameSettings, GameSettingsError> {
     let settings = if value.get("general").is_some()
         || value.get("display").is_some()
         || value.get("audio").is_some()
+        || value.get("ai").is_some()
     {
         serde_json::from_value::<GameSettings>(value).map_err(GameSettingsError::Json)?
     } else {
@@ -293,6 +366,7 @@ fn parse_game_settings(body: &str) -> Result<GameSettings, GameSettingsError> {
             general: GeneralSettings::default(),
             display,
             audio: AudioSettings::default(),
+            ai: AiSettings::default(),
         }
     };
     settings.validated()
@@ -392,6 +466,17 @@ mod tests {
                 master_volume: 0.42,
                 output_device_name: Some("Built-in Output".to_string()),
             },
+            ai: AiSettings {
+                reasoning: ReasoningAiSettings {
+                    api_url: "https://proxy.example/v1/responses".to_string(),
+                    token: "test-token".to_string(),
+                    model_name: "reasoning-model".to_string(),
+                },
+                multimodal: MultimodalAiSettings {
+                    api_key: "dashscope-key".to_string(),
+                    model_name: "wan2.7-image-pro".to_string(),
+                },
+            },
         };
 
         store.save(settings.clone()).unwrap();
@@ -428,6 +513,7 @@ mod tests {
         );
         assert_eq!(loaded.settings.audio, AudioSettings::default());
         assert_eq!(loaded.settings.general, GeneralSettings::default());
+        assert_eq!(loaded.settings.ai, AiSettings::default());
         assert!(loaded.message.is_none());
     }
 
@@ -460,6 +546,43 @@ mod tests {
             DisplayResolution::new(1366, 768)
         );
         assert_eq!(loaded.settings.audio.master_volume, 0.5);
+        assert_eq!(loaded.settings.ai, AiSettings::default());
+        assert!(loaded.message.is_none());
+    }
+
+    #[test]
+    fn ai_settings_load_and_trim_api_values() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{
+  "ai": {
+    "reasoning": {
+      "api_url": " https://proxy.example/v1/responses ",
+      "token": " token-value ",
+      "model_name": " reasoning-model "
+    },
+    "multimodal": {
+      "api_key": " bailian-key ",
+      "model_name": " wan2.7-image-pro "
+    }
+  }
+}"#,
+        )
+        .unwrap();
+        let store = GameSettingsStore::new(path);
+
+        let loaded = store.load();
+
+        assert_eq!(
+            loaded.settings.ai.reasoning.api_url,
+            "https://proxy.example/v1/responses"
+        );
+        assert_eq!(loaded.settings.ai.reasoning.token, "token-value");
+        assert_eq!(loaded.settings.ai.reasoning.model_name, "reasoning-model");
+        assert_eq!(loaded.settings.ai.multimodal.api_key, "bailian-key");
+        assert_eq!(loaded.settings.ai.multimodal.model_name, "wan2.7-image-pro");
         assert!(loaded.message.is_none());
     }
 

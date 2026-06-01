@@ -11,6 +11,7 @@ use tokio::time::{Instant, sleep};
 const BAILIAN_BEIJING_BASE_URL: &str = "https://dashscope.aliyuncs.com/api/v1";
 const BAILIAN_SINGAPORE_BASE_URL: &str = "https://dashscope-intl.aliyuncs.com/api/v1";
 const MAX_BAILIAN_SEED: u32 = 2_147_483_647;
+pub const BAILIAN_DEFAULT_IMAGE_MODEL: &str = "wan2.7-image-pro";
 
 pub type BailianObject = BTreeMap<String, Value>;
 
@@ -389,12 +390,12 @@ impl BailianImageParameters {
                 }));
             }
         }
-        if let Some(seed) = self.seed {
-            if seed > MAX_BAILIAN_SEED {
-                return Err(AiApiError::Validation(format!(
-                    "Bailian seed must be between 0 and {MAX_BAILIAN_SEED}"
-                )));
-            }
+        if let Some(seed) = self.seed
+            && seed > MAX_BAILIAN_SEED
+        {
+            return Err(AiApiError::Validation(format!(
+                "Bailian seed must be between 0 and {MAX_BAILIAN_SEED}"
+            )));
         }
         if let Some(bbox_list) = &self.bbox_list {
             if bbox_list.len() != image_count {

@@ -13,6 +13,7 @@ pub(super) enum SettingsTab {
     Display,
     Audio,
     Language,
+    Ai,
 }
 
 #[derive(Resource)]

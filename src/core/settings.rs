@@ -88,6 +88,7 @@ pub(super) fn settings_controls(
             SettingsTab::Display => display_settings_controls(ui, ui_state, t),
             SettingsTab::Audio => audio_settings_controls(ui, ui_state, t),
             SettingsTab::Language => language_settings_controls(ui, ui_state, t),
+            SettingsTab::Ai => ai_settings_controls(ui, ui_state, t),
         }
 
         if ui_state.pending_settings != ui_state.applied_settings {
@@ -132,6 +133,11 @@ fn settings_tabs(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) 
             &mut ui_state.settings_tab,
             SettingsTab::Language,
             t.text("settings-tab-language"),
+        );
+        ui.selectable_value(
+            &mut ui_state.settings_tab,
+            SettingsTab::Ai,
+            t.text("settings-tab-ai"),
         );
     });
 }
@@ -254,6 +260,80 @@ fn language_settings_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: 
             });
     });
     ui.colored_label(war_text_muted(), t.text("settings-language-apply-hint"));
+}
+
+fn ai_settings_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
+    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.label(egui::RichText::new(t.text("settings-ai-reasoning")).strong());
+        settings_text_field(
+            ui,
+            t,
+            "settings-ai-openai-api-url",
+            "ai_reasoning_api_url",
+            &mut ui_state.pending_settings.ai.reasoning.api_url,
+            false,
+        );
+        settings_text_field(
+            ui,
+            t,
+            "settings-ai-openai-token",
+            "ai_reasoning_token",
+            &mut ui_state.pending_settings.ai.reasoning.token,
+            true,
+        );
+        settings_text_field(
+            ui,
+            t,
+            "settings-ai-openai-model",
+            "ai_reasoning_model",
+            &mut ui_state.pending_settings.ai.reasoning.model_name,
+            false,
+        );
+
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(8.0);
+
+        ui.label(egui::RichText::new(t.text("settings-ai-multimodal")).strong());
+        settings_text_field(
+            ui,
+            t,
+            "settings-ai-bailian-api-key",
+            "ai_multimodal_api_key",
+            &mut ui_state.pending_settings.ai.multimodal.api_key,
+            true,
+        );
+        settings_text_field(
+            ui,
+            t,
+            "settings-ai-bailian-model",
+            "ai_multimodal_model",
+            &mut ui_state.pending_settings.ai.multimodal.model_name,
+            false,
+        );
+    });
+}
+
+fn settings_text_field(
+    ui: &mut egui::Ui,
+    t: &Translator,
+    label_key: &str,
+    id_salt: &str,
+    value: &mut String,
+    password: bool,
+) {
+    ui.horizontal_wrapped(|ui| {
+        ui.label(egui::RichText::new(t.text(label_key)).color(war_text_muted()));
+        let width = ui.available_width().clamp(260.0, 430.0);
+        let edit = egui::TextEdit::singleline(value)
+            .id_salt(id_salt)
+            .desired_width(width);
+        if password {
+            ui.add(edit.password(true));
+        } else {
+            ui.add(edit);
+        }
+    });
 }
 
 pub(super) fn apply_pending_game_settings(
