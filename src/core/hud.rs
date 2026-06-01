@@ -1235,18 +1235,40 @@ pub(super) fn city_list_hud(
     if !ui_state.city_list_open {
         return;
     }
-    let max_height = (screen.height() - HUD_TOP_HEIGHT - 170.0).clamp(240.0, 520.0);
+
+    egui::Area::new(egui::Id::new("hud_city_list_scrim"))
+        .order(egui::Order::Middle)
+        .fixed_pos(screen.min)
+        .show(ctx, |ui| {
+            let (rect, response) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
+            ui.painter().rect_filled(
+                rect,
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 120),
+            );
+            if response.clicked() {
+                ui_state.city_list_open = false;
+            }
+        });
+
+    let modal_width = (screen.width() * 0.64)
+        .clamp(520.0, 860.0)
+        .min((screen.width() - HUD_MARGIN * 2.0).max(360.0));
+    let modal_height = (screen.height() * 0.72)
+        .clamp(420.0, 640.0)
+        .min((screen.height() - HUD_MARGIN * 2.0).max(320.0));
     egui::Area::new(egui::Id::new("hud_city_list"))
         .order(egui::Order::Foreground)
-        .anchor(
-            egui::Align2::LEFT_TOP,
-            egui::vec2(HUD_MARGIN, HUD_TOP_OFFSET + HUD_TOP_HEIGHT + 338.0),
-        )
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
         .show(ctx, |ui| {
             war_panel_frame().show(ui, |ui| {
-                ui.set_width(285.0);
-                ui.set_max_height(max_height);
-                city_list(ui, ui_state, t);
+                ui.set_width(modal_width);
+                ui.set_min_height(modal_height);
+                if modal_title_bar(ui, t, &t.text("city-list-title")) {
+                    ui_state.city_list_open = false;
+                }
+                ui.separator();
+                city_list(ui, ui_state, t, modal_width, modal_height);
             });
         });
 }
@@ -1872,7 +1894,13 @@ pub(super) fn map_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Tr
     }
 }
 
-pub(super) fn city_list(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
+pub(super) fn city_list(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    width: f32,
+    height: f32,
+) {
     let Some(game) = &ui_state.game else {
         return;
     };
@@ -1885,35 +1913,88 @@ pub(super) fn city_list(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Trans
                 .get(&city.faction_id)
                 .map(|faction| faction.name.clone())
                 .unwrap_or_else(|| t.text("unknown"));
-            (city.id.clone(), city.name.clone(), faction_name)
+            (
+                city.id.clone(),
+                city.name.clone(),
+                faction_name,
+                city.gold,
+                city.food,
+                city.troops.total(),
+            )
         })
         .collect();
     rows.sort_by(|a, b| a.1.cmp(&b.1));
 
-    ui.heading(t.text("city-list-title"));
-    egui::ScrollArea::vertical()
-        .id_salt("city_list")
-        .max_height(460.0)
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            for (city_id, city_name, faction_name) in rows {
-                let selected = ui_state.selected_city_id.as_deref() == Some(city_id.as_str());
-                let response =
-                    ui.selectable_label(selected, format!("{} ({})", city_name, faction_name));
-                if response.clicked() {
-                    ui_state.selected_city_id = Some(city_id.clone());
-                }
-                if response.secondary_clicked() {
-                    ui_state.selected_city_id = Some(city_id.clone());
-                }
-                response.context_menu(|ui| {
-                    if ui.button(t.text("open-command-tent")).clicked() {
-                        open_city(ui_state, city_id.clone());
-                        ui.close();
+    let body_height = (height - 70.0).max(300.0);
+    let list_width = (width * 0.46).clamp(245.0, 360.0);
+    let preview_width = (width - list_width - 22.0).max(240.0);
+
+    ui.columns(2, |columns| {
+        columns[0].set_width(list_width);
+        war_sub_panel_frame().show(&mut columns[0], |ui| {
+            ui.set_width(list_width);
+            egui::ScrollArea::vertical()
+                .id_salt("city_list")
+                .max_height(body_height)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    for (city_id, city_name, faction_name, gold, food, troops) in rows {
+                        let selected =
+                            ui_state.selected_city_id.as_deref() == Some(city_id.as_str());
+                        let label = format!(
+                            "{}\n{}  {}",
+                            city_name,
+                            faction_name,
+                            t.text_args(
+                                "city-list-row-resources",
+                                &args([
+                                    ("gold", gold.to_string()),
+                                    ("food", food.to_string()),
+                                    ("troops", troops.to_string()),
+                                ]),
+                            )
+                        );
+                        let response = ui.add_sized(
+                            [ui.available_width(), 56.0],
+                            egui::Button::selectable(selected, label),
+                        );
+
+                        if response.clicked() {
+                            ui_state.selected_city_id = Some(city_id.clone());
+                        }
+                        if response.double_clicked() {
+                            open_city(ui_state, city_id.clone());
+                            ui_state.city_list_open = false;
+                        }
                     }
                 });
+        });
+
+        let preview = ui_state.game.as_ref().and_then(|game| {
+            let city = game.cities.get(ui_state.selected_city_id.as_deref()?)?;
+            let faction_name = game
+                .factions
+                .get(&city.faction_id)
+                .map(|faction| faction.name.clone())
+                .unwrap_or_else(|| t.text("unknown"));
+            Some((city.id.clone(), city.clone(), faction_name))
+        });
+
+        war_sub_panel_frame().show(&mut columns[1], |ui| {
+            ui.set_width(preview_width);
+            ui.set_min_height(body_height);
+            if let Some((city_id, city, faction_name)) = preview {
+                city_summary_intel(ui, &city, &faction_name, t);
+                ui.add_space(10.0);
+                if ui.button(t.text("open-command-tent")).clicked() {
+                    open_city(ui_state, city_id);
+                    ui_state.city_list_open = false;
+                }
+            } else {
+                ui.label(t.text("selected-city-none"));
             }
         });
+    });
 }
 
 pub(super) fn officer_browser_filters(

@@ -218,6 +218,7 @@ map-boundary-asset-missing = Boundary asset unavailable
 map-road-distance = {$distance} li / {$months} mo.
 map-troops-ten-thousand = {$value}0k
 city-list-title = City List
+city-list-row-resources = Gold {$gold} / Food {$food} / Troops {$troops}
 
 technology-title = Technology
 technology-tree = Tech Tree
