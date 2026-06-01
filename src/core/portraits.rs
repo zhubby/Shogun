@@ -30,10 +30,9 @@ pub(super) const OFFICER_PORTRAIT_PROMPT_TEMPLATE: &str = "\
 A portrait of [人名], [身份描述], in Three Kingdoms historical strategy game character illustration style,
 semi-realistic anime aesthetic, dramatic cinematic lighting, rim light,
 dark atmospheric background, highly detailed digital painting, masterpiece";
-pub(super) const OFFICER_PORTRAIT_SIZE: &str = "576*768";
+pub(super) const OFFICER_PORTRAIT_SIZE: &str = "768*1024";
 
 const OFFICER_PORTRAIT_PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
-const OFFICER_PORTRAIT_DEBUG_LOG_LIMIT: usize = 80;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum OfficerPortraitTaskState {
@@ -45,7 +44,6 @@ pub(super) enum OfficerPortraitTaskState {
 
 pub(super) struct OfficerPortraitStore {
     task_states: BTreeMap<OfficerId, OfficerPortraitTaskState>,
-    debug_logs: BTreeMap<OfficerId, Vec<String>>,
     textures: BTreeMap<OfficerId, OfficerPortraitTexture>,
     sender: Sender<OfficerPortraitTaskEvent>,
     receiver: Mutex<Receiver<OfficerPortraitTaskEvent>>,
@@ -56,7 +54,6 @@ impl Default for OfficerPortraitStore {
         let (sender, receiver) = mpsc::channel();
         Self {
             task_states: BTreeMap::new(),
-            debug_logs: BTreeMap::new(),
             textures: BTreeMap::new(),
             sender,
             receiver: Mutex::new(receiver),
@@ -74,23 +71,12 @@ impl OfficerPortraitStore {
 
         for event in events {
             match event {
-                OfficerPortraitTaskEvent::Log {
-                    officer_id,
-                    message,
-                } => {
-                    self.push_debug_log(officer_id, message);
-                }
                 OfficerPortraitTaskEvent::Succeeded { officer_id, path } => {
-                    self.push_debug_log(
-                        officer_id.clone(),
-                        format!("完成: 已保存 {}", path.display()),
-                    );
                     self.textures.remove(&officer_id);
                     self.task_states
                         .insert(officer_id, OfficerPortraitTaskState::Succeeded { path });
                 }
                 OfficerPortraitTaskEvent::Failed { officer_id, error } => {
-                    self.push_debug_log(officer_id.clone(), format!("失败: {error}"));
                     self.task_states
                         .insert(officer_id, OfficerPortraitTaskState::Failed(error));
                 }
@@ -103,10 +89,6 @@ impl OfficerPortraitStore {
             .get(officer_id)
             .cloned()
             .unwrap_or(OfficerPortraitTaskState::Idle)
-    }
-
-    pub(super) fn debug_log(&self, officer_id: &str) -> Vec<String> {
-        self.debug_logs.get(officer_id).cloned().unwrap_or_default()
     }
 
     pub(super) fn start_generation(
@@ -141,22 +123,17 @@ impl OfficerPortraitStore {
             }
         };
 
-        self.debug_logs.insert(officer_id.clone(), Vec::new());
-        self.push_debug_log(
-            officer_id.clone(),
-            format!(
-                "启动: officer_id={}, model={}, path={}",
-                officer_id,
-                normalized_model_name(&model_name),
-                path.display()
-            ),
-        );
         self.task_states
             .insert(officer_id.clone(), OfficerPortraitTaskState::Generating);
 
         let sender = self.sender.clone();
         thread::spawn(move || {
-            let logger = OfficerPortraitDebugLogger::new(officer_id.clone(), sender.clone());
+            let logger = OfficerPortraitDebugLogger::new(officer_id.clone());
+            logger.info(format!(
+                "启动: model={}, path={}",
+                normalized_model_name(&model_name),
+                path.display()
+            ));
             let result =
                 run_officer_portrait_generation(api_key, model_name, draft, path.clone(), &logger);
             let event = match result {
@@ -195,15 +172,6 @@ impl OfficerPortraitStore {
         self.textures.insert(officer_id.to_string(), texture);
         Ok(Some(view))
     }
-
-    fn push_debug_log(&mut self, officer_id: OfficerId, message: String) {
-        let logs = self.debug_logs.entry(officer_id).or_default();
-        logs.push(message);
-        if logs.len() > OFFICER_PORTRAIT_DEBUG_LOG_LIMIT {
-            let overflow = logs.len() - OFFICER_PORTRAIT_DEBUG_LOG_LIMIT;
-            logs.drain(0..overflow);
-        }
-    }
 }
 
 struct OfficerPortraitTexture {
@@ -228,10 +196,6 @@ pub(super) struct OfficerPortraitTextureView {
 }
 
 enum OfficerPortraitTaskEvent {
-    Log {
-        officer_id: OfficerId,
-        message: String,
-    },
     Succeeded {
         officer_id: OfficerId,
         path: PathBuf,
@@ -244,43 +208,31 @@ enum OfficerPortraitTaskEvent {
 
 struct OfficerPortraitDebugLogger {
     officer_id: OfficerId,
-    sender: Sender<OfficerPortraitTaskEvent>,
 }
 
 impl OfficerPortraitDebugLogger {
-    fn new(officer_id: OfficerId, sender: Sender<OfficerPortraitTaskEvent>) -> Self {
-        Self { officer_id, sender }
+    fn new(officer_id: OfficerId) -> Self {
+        Self { officer_id }
     }
 
     fn info(&self, message: impl Into<String>) {
         let message = message.into();
-        info!(target: "shogun::portrait", "{message}");
-        self.send(message);
+        info!(target: "shogun::portrait", "[{}] {message}", self.officer_id);
     }
 
     fn warn(&self, message: impl Into<String>) {
         let message = message.into();
-        warn!(target: "shogun::portrait", "{message}");
-        self.send(message);
+        warn!(target: "shogun::portrait", "[{}] {message}", self.officer_id);
     }
 
     fn error(&self, message: impl Into<String>) {
         let message = message.into();
-        error!(target: "shogun::portrait", "{message}");
-        self.send(message);
+        error!(target: "shogun::portrait", "[{}] {message}", self.officer_id);
     }
 
     fn debug(&self, message: impl Into<String>) {
         let message = message.into();
-        debug!(target: "shogun::portrait", "{message}");
-        self.send(message);
-    }
-
-    fn send(&self, message: String) {
-        let _ = self.sender.send(OfficerPortraitTaskEvent::Log {
-            officer_id: self.officer_id.clone(),
-            message,
-        });
+        debug!(target: "shogun::portrait", "[{}] {message}", self.officer_id);
     }
 }
 
@@ -492,12 +444,17 @@ fn first_output_image_url(response: &BailianImageGenerationResponse) -> Option<S
 }
 
 fn image_task_error(response: &BailianImageGenerationResponse, fallback: &str) -> String {
-    let summary = bailian_response_debug_summary(response);
-    if summary.is_empty() {
-        fallback.to_string()
-    } else {
-        format!("{fallback}: {summary}")
-    }
+    response
+        .message
+        .clone()
+        .or_else(|| response.code.clone())
+        .or_else(|| {
+            response
+                .output
+                .as_ref()
+                .and_then(|output| output.task_status.clone())
+        })
+        .unwrap_or_else(|| fallback.to_string())
 }
 
 fn localize_ai_error(error: AiApiError) -> String {
@@ -843,13 +800,13 @@ mod tests {
         let value = serde_json::to_value(&request).unwrap();
 
         assert_eq!(value["model"], BAILIAN_DEFAULT_IMAGE_MODEL);
-        assert_eq!(value["parameters"]["size"], "576*768");
+        assert_eq!(value["parameters"]["size"], "768*1024");
         assert_eq!(value["parameters"]["n"], 1);
         assert_eq!(value["parameters"]["watermark"], false);
     }
 
     #[test]
-    fn portrait_task_error_includes_bailian_debug_details() {
+    fn portrait_debug_summary_includes_bailian_failure_details() {
         let response: BailianImageGenerationResponse = serde_json::from_value(json!({
             "request_id": "req_failed",
             "output": {
@@ -861,12 +818,13 @@ mod tests {
         }))
         .unwrap();
 
-        let error = image_task_error(&response, "百炼任务失败");
+        let summary = bailian_response_debug_summary(&response);
 
-        assert!(error.contains("request_id=req_failed"));
-        assert!(error.contains("task_id=task_failed"));
-        assert!(error.contains("task_status=FAILED"));
-        assert!(error.contains("output_code=InvalidParameter"));
-        assert!(error.contains("output_message=size is not supported"));
+        assert_eq!(image_task_error(&response, "百炼任务失败"), "FAILED");
+        assert!(summary.contains("request_id=req_failed"));
+        assert!(summary.contains("task_id=task_failed"));
+        assert!(summary.contains("task_status=FAILED"));
+        assert!(summary.contains("output_code=InvalidParameter"));
+        assert!(summary.contains("output_message=size is not supported"));
     }
 }

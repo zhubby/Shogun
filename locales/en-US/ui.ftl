@@ -115,7 +115,6 @@ officer-portrait-generated = Generated
 officer-portrait-failed = Generation failed: {$error}
 officer-portrait-load-failed = Failed to load portrait: {$error}
 officer-portrait-api-key-required = Add a Bailian API key in AI settings first.
-officer-portrait-debug-log = Debug log
 officer-edit-name-required = Name is required
 officer-edit-year-invalid = Year must be empty or an integer
 message-officer-saved = Saved {$name}
