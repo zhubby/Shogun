@@ -1,0 +1,21 @@
+[book]
+authors = ["Shogun Contributors"]
+language = "zh"
+multilingual = false
+src = "src"
+title = "Shogun 三国争霸 设计文档"
+description = "三国争霸策略游戏的架构设计与技术文档"
+
+[build]
+create-missing = false
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/zhubby/Shogun"
+site-url = "/Shogun/"
+
+[output.html.search]
+enable = true
+limit-results = 30
+use-hierarchical-headings = true

@@ -5,3 +5,4 @@
 assets/data/*.sqlite
 assets/data/*.sqlite-*
 materials/
+docs/book/
