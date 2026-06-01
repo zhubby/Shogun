@@ -91,22 +91,39 @@ pub(super) fn runtime_assets_dir() -> PathBuf {
 }
 
 fn asset_dir_candidates() -> Vec<PathBuf> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf));
+    let cwd = std::env::current_dir().ok();
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").ok().map(PathBuf::from);
+
+    asset_dir_candidates_from(exe_dir.as_deref(), cwd.as_deref(), manifest_dir.as_deref())
+}
+
+fn asset_dir_candidates_from(
+    exe_dir: Option<&Path>,
+    cwd: Option<&Path>,
+    manifest_dir: Option<&Path>,
+) -> Vec<PathBuf> {
     let mut candidates = Vec::new();
 
-    if let Some(exe_dir) = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-    {
+    if let Some(exe_dir) = exe_dir {
         candidates.push(exe_dir.join("../Resources/assets"));
         candidates.push(exe_dir.join("assets"));
+        candidates.push(
+            exe_dir
+                .join("../../share")
+                .join(env!("CARGO_PKG_NAME"))
+                .join("assets"),
+        );
     }
 
-    if let Ok(cwd) = std::env::current_dir() {
+    if let Some(cwd) = cwd {
         candidates.push(cwd.join("assets"));
     }
 
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        candidates.push(PathBuf::from(manifest_dir).join("assets"));
+    if let Some(manifest_dir) = manifest_dir {
+        candidates.push(manifest_dir.join("assets"));
     }
 
     candidates
@@ -126,6 +143,25 @@ mod tests {
     #[test]
     fn runtime_assets_dir_resolves_project_assets() {
         assert!(runtime_assets_dir().join("icons/banner_logo.png").is_file());
+    }
+
+    #[test]
+    fn asset_dir_candidates_cover_packaged_layouts() {
+        let candidates = asset_dir_candidates_from(
+            Some(Path::new("/opt/Shogun.app/Contents/MacOS")),
+            Some(Path::new("/opt/shogun/share/shogun")),
+            Some(Path::new("/repo/Shogun")),
+        );
+
+        assert!(candidates.contains(&PathBuf::from(
+            "/opt/Shogun.app/Contents/MacOS/../Resources/assets"
+        )));
+        assert!(candidates.contains(&PathBuf::from("/opt/Shogun.app/Contents/MacOS/assets")));
+        assert!(candidates.contains(&PathBuf::from(
+            "/opt/Shogun.app/Contents/MacOS/../../share/shogun/assets"
+        )));
+        assert!(candidates.contains(&PathBuf::from("/opt/shogun/share/shogun/assets")));
+        assert!(candidates.contains(&PathBuf::from("/repo/Shogun/assets")));
     }
 }
 
