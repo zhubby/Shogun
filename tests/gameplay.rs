@@ -9,6 +9,13 @@ fn sample_game() -> GameState {
         .unwrap()
 }
 
+fn event_by_kind(game: &GameState, kind: GameEventKind) -> &GameEvent {
+    game.events
+        .iter()
+        .find(|event| event.kind == kind)
+        .expect("expected event kind")
+}
+
 fn command(city_id: &str, officer_id: &str, kind: CommandKind) -> Command {
     Command {
         issuer_faction_id: "liu_bei".to_string(),
@@ -247,6 +254,9 @@ fn city_core_upgrade_consumes_resources_and_unlocks_growth() {
     assert!(city.facility_slots() >= before.facility_slots());
     assert!(city.gold < before.gold);
     assert!(city.materials < before.materials);
+    let event = event_by_kind(&game, GameEventKind::CityDevelopment);
+    assert_eq!(event.city_id.as_deref(), Some("pingyuan"));
+    assert!(event.summary.contains("城镇核心"));
 }
 
 #[test]
@@ -284,6 +294,9 @@ fn build_facility_adds_or_upgrades_facility() {
             .map(|facility| facility.level),
         Some(1)
     );
+    assert!(game.events.iter().any(
+        |event| event.kind == GameEventKind::CityDevelopment && event.summary.contains("市场")
+    ));
 
     queue_player_command(
         &mut game,
@@ -861,6 +874,19 @@ fn strong_expedition_can_capture_city() {
         Some("xuchang")
     );
     assert!(game.army_movements.is_empty());
+    assert!(
+        game.events
+            .iter()
+            .any(|event| event.kind == GameEventKind::Battle
+                && event.summary.contains("攻下")
+                && event.city_id.as_deref() == Some("xuchang"))
+    );
+    assert!(
+        game.events
+            .iter()
+            .any(|event| event.kind == GameEventKind::CityCaptured
+                && event.city_id.as_deref() == Some("xuchang"))
+    );
 }
 
 #[test]
@@ -961,6 +987,53 @@ fn defending_governor_can_prevent_borderline_capture() {
 }
 
 #[test]
+fn faction_destroyed_event_is_recorded_once() {
+    let mut game = sample_game();
+    for city in game
+        .cities
+        .values_mut()
+        .filter(|city| city.faction_id == "cao_cao" && city.id != "xuchang")
+    {
+        city.faction_id = "liu_bei".to_string();
+    }
+    {
+        let source = game.cities.get_mut("xiapi").unwrap();
+        source.troops = TroopPool::new(20_000, 5_000, 5_000);
+        source.training = 100;
+        source.facilities.clear();
+        let target = game.cities.get_mut("xuchang").unwrap();
+        target.troops = TroopPool::new(100, 0, 0);
+        target.training = 1;
+        target.defense = 1;
+        target.facilities.clear();
+    }
+    appoint_official_post(&mut game, "liu_bei", "zhang_fei", "da_jiangjun").unwrap();
+    queue_player_command(
+        &mut game,
+        command(
+            "xiapi",
+            "zhang_fei",
+            expedition("xuchang", "zhang_fei", TroopKind::Infantry, 8_000),
+        ),
+    )
+    .unwrap();
+    let commands = game.pending_commands.clone();
+    resolve_command_batch(&mut game, commands);
+    resolve_until_arrival(&mut game, "xiapi", "xuchang");
+    resolve_command_batch(&mut game, Vec::new());
+
+    let destroyed_events = game
+        .events
+        .iter()
+        .filter(|event| {
+            event.kind == GameEventKind::FactionDestroyed
+                && event.faction_id.as_deref() == Some("cao_cao")
+        })
+        .count();
+    assert_eq!(destroyed_events, 1);
+}
+
+#[test]
 fn failed_expedition_returns_surviving_troop_pool_and_officers() {
     let mut game = sample_game();
     {
@@ -993,6 +1066,13 @@ fn failed_expedition_returns_surviving_troop_pool_and_officers() {
     assert_eq!(game.officers["zhang_fei"].city_id.as_deref(), Some("xiapi"));
     assert!(game.cities["xiapi"].troops.total() > 0);
     assert!(game.cities["xiapi"].troops.infantry > 0);
+    assert!(
+        game.events
+            .iter()
+            .any(|event| event.kind == GameEventKind::Battle
+                && event.summary.contains("失败")
+                && event.city_id.as_deref() == Some("xuchang"))
+    );
 }
 
 #[test]
@@ -1216,6 +1296,40 @@ fn old_save_json_missing_technologies_still_deserializes() {
 }
 
 #[test]
+fn old_save_json_missing_events_still_deserializes() {
+    let mut game_json = serde_json::to_value(sample_game()).unwrap();
+    let object = game_json.as_object_mut().unwrap();
+    object.remove("events");
+    object.remove("next_event_sequence");
+
+    let loaded: GameState = serde_json::from_value(game_json).unwrap();
+
+    assert!(loaded.events.is_empty());
+    assert_eq!(loaded.next_event_sequence, 0);
+}
+
+#[test]
+fn save_load_preserves_event_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let manager = SaveManager::new(temp.path());
+    let mut game = sample_game();
+    {
+        let city = game.cities.get_mut("pingyuan").unwrap();
+        city.food = 0;
+        city.gold = 200;
+    }
+    resolve_command_batch(&mut game, Vec::new());
+    assert_eq!(pending_event_count(&game), 1);
+
+    manager.save_slot("events", "事件", &game).unwrap();
+    let loaded = manager.load_slot("events").unwrap();
+
+    assert_eq!(pending_event_count(&loaded), 1);
+    assert_eq!(loaded.events[0].kind, GameEventKind::Famine);
+    assert_eq!(loaded.next_event_sequence, 1);
+}
+
+#[test]
 fn save_load_preserves_technology_state() {
     let temp = tempfile::tempdir().unwrap();
     let manager = SaveManager::new(temp.path());
@@ -1230,6 +1344,104 @@ fn save_load_preserves_technology_state() {
     assert_eq!(state.active, Some(TechnologyId::MilitiaDrill));
     assert!(state.funded.contains(&TechnologyId::MilitiaDrill));
     assert_eq!(technology_progress(state, TechnologyId::MilitiaDrill), 1);
+}
+
+#[test]
+fn technology_completion_records_player_event() {
+    let mut game = sample_game();
+    start_research(&mut game, "liu_bei", TechnologyId::MilitiaDrill).unwrap();
+    resolve_command_batch(&mut game, Vec::new());
+    resolve_command_batch(&mut game, Vec::new());
+
+    assert!(
+        game.events
+            .iter()
+            .any(|event| event.kind == GameEventKind::TechnologyCompleted
+                && event.summary.contains("乡勇操练"))
+    );
+}
+
+#[test]
+fn famine_relief_spends_gold_and_resolves_event() {
+    let mut game = sample_game();
+    {
+        let city = game.cities.get_mut("pingyuan").unwrap();
+        city.food = 0;
+        city.gold = 200;
+        city.order = 40;
+    }
+    resolve_command_batch(&mut game, Vec::new());
+    let event_id = event_by_kind(&game, GameEventKind::Famine).id.clone();
+    let before_gold = game.cities["pingyuan"].gold;
+    let before_order = game.cities["pingyuan"].order;
+
+    resolve_event_decision(&mut game, &event_id, "relief").unwrap();
+
+    assert_eq!(game.cities["pingyuan"].gold, before_gold - 120);
+    assert_eq!(game.cities["pingyuan"].order, before_order + 6);
+    assert_eq!(pending_event_count(&game), 0);
+    assert!(matches!(
+        game.events
+            .iter()
+            .find(|event| event.id == event_id)
+            .unwrap()
+            .resolution,
+        EventResolution::Resolved { .. }
+    ));
+}
+
+#[test]
+fn famine_expiry_applies_default_choice() {
+    let mut game = sample_game();
+    {
+        let city = game.cities.get_mut("pingyuan").unwrap();
+        city.food = 0;
+        city.gold = 200;
+        city.population = 50_000;
+        city.order = 40;
+    }
+    resolve_command_batch(&mut game, Vec::new());
+    let event_id = event_by_kind(&game, GameEventKind::Famine).id.clone();
+    let before_population = game.cities["pingyuan"].population;
+    let before_order = game.cities["pingyuan"].order;
+
+    game.turn += 1;
+    expire_due_event_decisions(&mut game);
+
+    assert_eq!(game.cities["pingyuan"].population, before_population - 500);
+    assert_eq!(game.cities["pingyuan"].order, before_order - 10);
+    assert!(matches!(
+        game.events
+            .iter()
+            .find(|event| event.id == event_id)
+            .unwrap()
+            .resolution,
+        EventResolution::Expired { .. }
+    ));
+}
+
+#[test]
+fn famine_decision_cancels_if_city_is_no_longer_player_owned() {
+    let mut game = sample_game();
+    {
+        let city = game.cities.get_mut("pingyuan").unwrap();
+        city.food = 0;
+        city.gold = 200;
+    }
+    resolve_command_batch(&mut game, Vec::new());
+    let event_id = event_by_kind(&game, GameEventKind::Famine).id.clone();
+    game.cities.get_mut("pingyuan").unwrap().faction_id = "cao_cao".to_string();
+
+    resolve_event_decision(&mut game, &event_id, "relief").unwrap();
+
+    assert!(matches!(
+        game.events
+            .iter()
+            .find(|event| event.id == event_id)
+            .unwrap()
+            .resolution,
+        EventResolution::Cancelled { .. }
+    ));
 }
 
 #[test]

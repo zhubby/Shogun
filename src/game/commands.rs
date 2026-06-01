@@ -2,6 +2,7 @@ use super::city::{
     CITY_MAX_LEVEL, City, CityEconomyEffects, FACILITY_MAX_LEVEL, FacilityKind, ResourceCost,
     city_core_upgrade_cost, facility_upgrade_cost, project_city_monthly_change_with_effects,
 };
+use super::events::*;
 use super::history_db::{HistoricalCatalog, LifeEventKind};
 use super::ids::{CityId, FactionId, OfficerId};
 use super::model::*;
@@ -55,6 +56,9 @@ fn resolve_command_batch_inner(
 ) -> TurnReport {
     ensure_faction_technology_states(state);
     begin_ai_research(state);
+    expire_due_event_decisions(state);
+    let previous_status = state.status.clone();
+    let alive_before = alive_faction_ids(state);
     let mut report = TurnReport::new(state);
     let mut reservations = CommandReservations::default();
     let command_count = commands.len();
@@ -80,14 +84,17 @@ fn resolve_command_batch_inner(
     resolve_due_army_movements(state, &mut report);
     apply_monthly_income(state, &mut report);
     advance_research_and_report(state, &mut report);
+    record_destroyed_factions(state, &alive_before);
     state.pending_commands.clear();
     state.refresh_status();
+    record_status_change(state, &previous_status);
     if state.status == GameStatus::Running {
         state.advance_month();
         if let Some(catalog) = catalog {
             apply_due_life_events(state, catalog, &mut report);
             state.refresh_status();
         }
+        trigger_monthly_incidents(state);
     }
     append_turn_summary(state, &mut report);
     state.reports.push(report.clone());
@@ -121,6 +128,23 @@ fn advance_research_and_report(state: &mut GameState, report: &mut TurnReport) {
             .unwrap_or(completed.faction_id.as_str());
         let spec = technology_spec(completed.technology_id);
         report.info(format!("{faction_name} 完成科技：{}", spec.name));
+        if completed.faction_id == state.player_faction_id {
+            record_game_event(
+                state,
+                GameEventDraft {
+                    kind: GameEventKind::TechnologyCompleted,
+                    severity: GameEventSeverity::Important,
+                    scope: GameEventScope::Player,
+                    title: "科技完成".to_string(),
+                    summary: format!("{faction_name} 完成科技：{}", spec.name),
+                    detail: format!("{} 已完成研究。{}", spec.name, spec.effect),
+                    city_id: None,
+                    faction_id: Some(completed.faction_id.clone()),
+                    officer_id: None,
+                    resolution: EventResolution::NoneRequired,
+                },
+            );
+        }
     }
 }
 
@@ -612,6 +636,7 @@ fn apply_upgrade_city_core(state: &mut GameState, command: &Command, report: &mu
         .officers
         .get(command.officer_id.as_ref().unwrap())
         .unwrap();
+    let officer_name = officer.name.clone();
     let city = state.cities.get_mut(&command.city_id).unwrap();
     let next_level = city.level + 1;
     let cost = city_core_upgrade_cost(next_level);
@@ -621,10 +646,31 @@ fn apply_upgrade_city_core(state: &mut GameState, command: &Command, report: &mu
     city.level = next_level.min(CITY_MAX_LEVEL);
     city.order = city.order.saturating_sub(2);
     city.clamp_fields();
+    let city_name = city.name.clone();
+    let city_level = city.level;
     report.info(format!(
         "{} 主持扩建，{} 城镇核心升至 {} 级",
-        officer.name, city.name, city.level
+        officer_name, city_name, city_level
     ));
+    if command.issuer_faction_id == state.player_faction_id {
+        record_game_event(
+            state,
+            GameEventDraft {
+                kind: GameEventKind::CityDevelopment,
+                severity: GameEventSeverity::Info,
+                scope: GameEventScope::Player,
+                title: "城镇升级".to_string(),
+                summary: format!("{city_name} 城镇核心升至 {city_level} 级"),
+                detail: format!(
+                    "{officer_name} 主持扩建，{city_name} 的城镇核心升至 {city_level} 级。"
+                ),
+                city_id: Some(command.city_id.clone()),
+                faction_id: Some(command.issuer_faction_id.clone()),
+                officer_id: command.officer_id.clone(),
+                resolution: EventResolution::NoneRequired,
+            },
+        );
+    }
 }
 
 fn apply_build_facility(
@@ -637,6 +683,7 @@ fn apply_build_facility(
         .officers
         .get(command.officer_id.as_ref().unwrap())
         .unwrap();
+    let officer_name = officer.name.clone();
     let city = state.cities.get_mut(&command.city_id).unwrap();
     let target_level = next_facility_level(city, kind).unwrap();
     let cost = facility_upgrade_cost(kind, target_level);
@@ -657,10 +704,31 @@ fn apply_build_facility(
     }
     city.order = city.order.saturating_sub(1);
     city.clamp_fields();
+    let city_name = city.name.clone();
+    let facility_name = facility_kind_name(kind);
     report.info(format!(
         "{} 主持建设，{} 的 {:?} 达到 {} 级",
-        officer.name, city.name, kind, target_level
+        officer_name, city_name, kind, target_level
     ));
+    if command.issuer_faction_id == state.player_faction_id {
+        record_game_event(
+            state,
+            GameEventDraft {
+                kind: GameEventKind::CityDevelopment,
+                severity: GameEventSeverity::Info,
+                scope: GameEventScope::Player,
+                title: "设施建设".to_string(),
+                summary: format!("{city_name} 的 {facility_name} 达到 {target_level} 级"),
+                detail: format!(
+                    "{officer_name} 主持建设，{city_name} 的 {facility_name} 达到 {target_level} 级。"
+                ),
+                city_id: Some(command.city_id.clone()),
+                faction_id: Some(command.issuer_faction_id.clone()),
+                officer_id: command.officer_id.clone(),
+                resolution: EventResolution::NoneRequired,
+            },
+        );
+    }
 }
 
 fn apply_recruit(
@@ -993,6 +1061,8 @@ fn resolve_expedition_battle(
             movement.troops.total().min(100),
         );
         let old_faction = target_city.faction_id.clone();
+        let old_faction_name = faction_name(state, &old_faction);
+        let attacker_faction_name = faction_name(state, &movement.issuer_faction_id);
         {
             let target = state.cities.get_mut(&movement.target_city_id).unwrap();
             target.faction_id = movement.issuer_faction_id.clone();
@@ -1010,6 +1080,48 @@ fn resolve_expedition_battle(
             target_city.name,
             surviving_troops.total()
         ));
+        record_battle_event(
+            state,
+            BattleEventDraft {
+                severity: GameEventSeverity::Important,
+                attacker_faction_id: movement.issuer_faction_id.clone(),
+                defender_faction_id: old_faction.clone(),
+                target_city_id: movement.target_city_id.clone(),
+                title: "攻城胜利".to_string(),
+                summary: format!(
+                    "{} 攻下 {}，剩余兵力 {}",
+                    attacker.name,
+                    target_city.name,
+                    surviving_troops.total()
+                ),
+                detail: format!(
+                    "{attacker_faction_name} 自 {} 出征，击败 {old_faction_name}，夺取 {}。",
+                    city_name(state, &movement.source_city_id),
+                    target_city.name
+                ),
+            },
+        );
+        record_game_event(
+            state,
+            GameEventDraft {
+                kind: GameEventKind::CityCaptured,
+                severity: GameEventSeverity::Critical,
+                scope: GameEventScope::World,
+                title: "城池易主".to_string(),
+                summary: format!(
+                    "{} 由 {old_faction_name} 转归 {attacker_faction_name}",
+                    target_city.name
+                ),
+                detail: format!(
+                    "{} 被 {} 攻下，原属 {old_faction_name}，现属 {attacker_faction_name}，守城秩序下降。",
+                    target_city.name, attacker.name
+                ),
+                city_id: Some(movement.target_city_id.clone()),
+                faction_id: Some(movement.issuer_faction_id.clone()),
+                officer_id: Some(movement.commander_id.clone()),
+                resolution: EventResolution::NoneRequired,
+            },
+        );
     } else {
         let attacker_loss = percent_loss(
             movement.troops.total(),
@@ -1026,6 +1138,25 @@ fn resolve_expedition_battle(
             "{} 进攻 {} 失败，损失 {}",
             attacker.name, target_city.name, attacker_loss
         ));
+        record_battle_event(
+            state,
+            BattleEventDraft {
+                severity: GameEventSeverity::Warning,
+                attacker_faction_id: movement.issuer_faction_id.clone(),
+                defender_faction_id: target_city.faction_id.clone(),
+                target_city_id: movement.target_city_id.clone(),
+                title: "攻城失败".to_string(),
+                summary: format!(
+                    "{} 进攻 {} 失败，损失 {}",
+                    attacker.name, target_city.name, attacker_loss
+                ),
+                detail: format!(
+                    "{} 守住 {}，攻方败军撤回。",
+                    faction_name(state, &target_city.faction_id),
+                    target_city.name
+                ),
+            },
+        );
         let mut retreat_troops = movement.troops.surviving_after_loss(attacker_loss);
         retreat_troops.add_total_preserving_ratio(
             movement.troops.total() * attacker_bonuses.retreat_survival_percent as u32 / 100,
@@ -1191,12 +1322,58 @@ fn return_movement_to_friendly_city(
     }
 }
 
+struct BattleEventDraft {
+    severity: GameEventSeverity,
+    attacker_faction_id: FactionId,
+    defender_faction_id: FactionId,
+    target_city_id: CityId,
+    title: String,
+    summary: String,
+    detail: String,
+}
+
+fn record_battle_event(state: &mut GameState, draft: BattleEventDraft) {
+    if draft.attacker_faction_id != state.player_faction_id
+        && draft.defender_faction_id != state.player_faction_id
+    {
+        return;
+    }
+    let faction_id = if draft.attacker_faction_id == state.player_faction_id {
+        draft.attacker_faction_id
+    } else {
+        draft.defender_faction_id
+    };
+    record_game_event(
+        state,
+        GameEventDraft {
+            kind: GameEventKind::Battle,
+            severity: draft.severity,
+            scope: GameEventScope::Player,
+            title: draft.title,
+            summary: draft.summary,
+            detail: draft.detail,
+            city_id: Some(draft.target_city_id),
+            faction_id: Some(faction_id),
+            officer_id: None,
+            resolution: EventResolution::NoneRequired,
+        },
+    );
+}
+
 fn city_name(state: &GameState, city_id: &str) -> String {
     state
         .cities
         .get(city_id)
         .map(|city| city.name.clone())
         .unwrap_or_else(|| city_id.to_string())
+}
+
+fn faction_name(state: &GameState, faction_id: &str) -> String {
+    state
+        .factions
+        .get(faction_id)
+        .map(|faction| faction.name.clone())
+        .unwrap_or_else(|| faction_id.to_string())
 }
 
 fn apply_diplomacy(
@@ -1503,6 +1680,153 @@ fn append_turn_summary(state: &GameState, report: &mut TurnReport) {
     }
 }
 
+fn alive_faction_ids(state: &GameState) -> BTreeSet<FactionId> {
+    state
+        .factions
+        .keys()
+        .filter(|faction_id| state.faction_alive(faction_id))
+        .cloned()
+        .collect()
+}
+
+fn record_destroyed_factions(state: &mut GameState, alive_before: &BTreeSet<FactionId>) {
+    for faction_id in alive_before {
+        if state.faction_alive(faction_id) {
+            continue;
+        }
+        let already_recorded = state.events.iter().any(|event| {
+            event.kind == GameEventKind::FactionDestroyed
+                && event.faction_id.as_deref() == Some(faction_id.as_str())
+        });
+        if already_recorded {
+            continue;
+        }
+        let faction_name = faction_name(state, faction_id);
+        record_game_event(
+            state,
+            GameEventDraft {
+                kind: GameEventKind::FactionDestroyed,
+                severity: GameEventSeverity::Critical,
+                scope: GameEventScope::World,
+                title: "势力覆灭".to_string(),
+                summary: format!("{faction_name} 失去全部城池"),
+                detail: format!("{faction_name} 已失去全部城池，退出当前争霸局势。"),
+                city_id: None,
+                faction_id: Some(faction_id.clone()),
+                officer_id: None,
+                resolution: EventResolution::NoneRequired,
+            },
+        );
+    }
+}
+
+fn record_status_change(state: &mut GameState, previous_status: &GameStatus) {
+    if previous_status != &GameStatus::Running || state.status == GameStatus::Running {
+        return;
+    }
+    let (title, severity, summary, detail) = match &state.status {
+        GameStatus::Victory { reason } => (
+            "胜利",
+            GameEventSeverity::Critical,
+            format!("胜利：{reason}"),
+            format!("玩家势力达成胜利条件：{reason}。"),
+        ),
+        GameStatus::Defeat { reason } => (
+            "失败",
+            GameEventSeverity::Critical,
+            format!("失败：{reason}"),
+            format!("玩家势力触发失败条件：{reason}。"),
+        ),
+        GameStatus::Running => return,
+    };
+    record_game_event(
+        state,
+        GameEventDraft {
+            kind: GameEventKind::GameStatus,
+            severity,
+            scope: GameEventScope::Player,
+            title: title.to_string(),
+            summary,
+            detail,
+            city_id: None,
+            faction_id: Some(state.player_faction_id.clone()),
+            officer_id: None,
+            resolution: EventResolution::NoneRequired,
+        },
+    );
+}
+
+fn trigger_monthly_incidents(state: &mut GameState) {
+    let Some(city) = state
+        .cities
+        .values()
+        .filter(|city| city.faction_id == state.player_faction_id)
+        .filter(|city| !has_pending_famine_for_city(state, &city.id))
+        .find(|city| city.food < famine_food_threshold(city.population))
+        .cloned()
+    else {
+        return;
+    };
+
+    let population_loss = famine_population_loss(city.population);
+    record_game_event(
+        state,
+        GameEventDraft {
+            kind: GameEventKind::Famine,
+            severity: GameEventSeverity::Warning,
+            scope: GameEventScope::Player,
+            title: "饥荒".to_string(),
+            summary: format!("{} 粮食不足，发生饥荒", city.name),
+            detail: format!(
+                "{} 粮食低于维持人口所需，民心动摇。可消耗 120 金赈灾，或放任事态发展。",
+                city.name
+            ),
+            city_id: Some(city.id.clone()),
+            faction_id: Some(city.faction_id.clone()),
+            officer_id: None,
+            resolution: EventResolution::PendingDecision {
+                deadline_turn: state.turn + 1,
+                default_choice_id: "ignore".to_string(),
+                choices: vec![
+                    EventChoice {
+                        id: "relief".to_string(),
+                        label: "开仓赈灾".to_string(),
+                        description: "消耗 120 金安抚灾民，治安 +6。".to_string(),
+                        requirements: EventChoiceRequirements {
+                            city_gold: 120,
+                            ..EventChoiceRequirements::default()
+                        },
+                        effects: EventChoiceEffects {
+                            city_gold: -120,
+                            city_order: 6,
+                            ..EventChoiceEffects::default()
+                        },
+                    },
+                    EventChoice {
+                        id: "ignore".to_string(),
+                        label: "放任不管".to_string(),
+                        description: format!("不消耗资源，人口 -{population_loss}，治安 -10。"),
+                        requirements: EventChoiceRequirements::default(),
+                        effects: EventChoiceEffects {
+                            city_order: -10,
+                            city_population: -(population_loss as i32),
+                            ..EventChoiceEffects::default()
+                        },
+                    },
+                ],
+            },
+        },
+    );
+}
+
+fn famine_food_threshold(population: u32) -> i32 {
+    (population / 200).min(i32::MAX as u32) as i32
+}
+
+fn famine_population_loss(population: u32) -> u32 {
+    (population / 100).clamp(100, 1_000)
+}
+
 fn apply_due_life_events(
     state: &mut GameState,
     catalog: &dyn HistoricalCatalog,
@@ -1531,11 +1855,18 @@ fn apply_due_life_events(
 
         match event.kind {
             LifeEventKind::Appear | LifeEventKind::ServeFaction | LifeEventKind::MoveToCity => {
+                let previous_faction_id = state
+                    .officers
+                    .get(&event.officer_id)
+                    .map(|officer| officer.faction_id.clone());
                 let (target_faction_id, city_id, status) = resolve_life_event_assignment(
                     state,
                     event.faction_id.as_deref(),
                     event.city_id.as_deref(),
                 );
+                let visible_to_player = previous_faction_id.as_deref()
+                    == Some(state.player_faction_id.as_str())
+                    || target_faction_id == state.player_faction_id;
                 let stats = officer_profile
                     .as_ref()
                     .map(|profile| profile.stats)
@@ -1583,9 +1914,37 @@ fn apply_due_life_events(
                     "{} 于 {}年{}月进入局势",
                     officer_name, event.year, event.month
                 ));
+                if visible_to_player {
+                    let location = city_id
+                        .as_deref()
+                        .map(|id| city_name(state, id))
+                        .unwrap_or_else(|| "野外".to_string());
+                    record_game_event(
+                        state,
+                        GameEventDraft {
+                            kind: GameEventKind::HistoricalLife,
+                            severity: GameEventSeverity::Info,
+                            scope: GameEventScope::Player,
+                            title: "武将履历".to_string(),
+                            summary: format!("{officer_name} 进入局势"),
+                            detail: format!(
+                                "{officer_name} 于 {}年{}月进入局势，当前在 {location}。",
+                                event.year, event.month
+                            ),
+                            city_id,
+                            faction_id: Some(target_faction_id),
+                            officer_id: Some(event.officer_id.clone()),
+                            resolution: EventResolution::NoneRequired,
+                        },
+                    );
+                }
             }
             LifeEventKind::BecomeUnavailable | LifeEventKind::Die => {
                 if let Some(officer) = state.officers.get_mut(&event.officer_id) {
+                    let visible_to_player = officer.faction_id == state.player_faction_id;
+                    let officer_faction_id = officer.faction_id.clone();
+                    let old_city_id = officer.city_id.clone();
+                    let officer_name = officer.name.clone();
                     officer.city_id = None;
                     officer.office_id = None;
                     officer.status = if event.kind == LifeEventKind::Die {
@@ -1599,6 +1958,23 @@ fn apply_due_life_events(
                         }
                     }
                     report.info(format!("{} 离开当前局势", officer.name));
+                    if visible_to_player {
+                        record_game_event(
+                            state,
+                            GameEventDraft {
+                                kind: GameEventKind::HistoricalLife,
+                                severity: GameEventSeverity::Warning,
+                                scope: GameEventScope::Player,
+                                title: "武将履历".to_string(),
+                                summary: format!("{officer_name} 离开当前局势"),
+                                detail: format!("{officer_name} 于履历事件中离开当前局势。"),
+                                city_id: old_city_id,
+                                faction_id: Some(officer_faction_id),
+                                officer_id: Some(event.officer_id.clone()),
+                                resolution: EventResolution::NoneRequired,
+                            },
+                        );
+                    }
                 }
             }
         }
@@ -1657,6 +2033,23 @@ pub fn recruit_cost_for_kind(kind: TroopKind, amount: u32) -> ResourceCost {
         gold: (((amount / 10) as i32 + 30) * multiplier) / 100,
         food: (((amount / 4) as i32 + 80) * multiplier) / 100,
         materials: 0,
+    }
+}
+
+fn facility_kind_name(kind: FacilityKind) -> &'static str {
+    match kind {
+        FacilityKind::Farmland => "农田",
+        FacilityKind::Irrigation => "水利",
+        FacilityKind::Market => "市场",
+        FacilityKind::TradeDepot => "商栈",
+        FacilityKind::Workshop => "工坊",
+        FacilityKind::Quarry => "采石场",
+        FacilityKind::Barracks => "兵营",
+        FacilityKind::DrillGround => "校场",
+        FacilityKind::Walls => "城墙",
+        FacilityKind::Administration => "官署",
+        FacilityKind::Granary => "粮仓",
+        FacilityKind::RelayStation => "驿站",
     }
 }
 

@@ -1,4 +1,5 @@
 use super::city::{City, FacilityKind};
+use super::events::GameEvent;
 use super::ids::{CityId, FactionId, OfficerId};
 use super::officer::Officer;
 use super::technology::FactionTechnologyState;
@@ -26,6 +27,10 @@ pub struct GameState {
     pub army_movements: Vec<ArmyMovement>,
     #[serde(default)]
     pub technologies: BTreeMap<FactionId, FactionTechnologyState>,
+    #[serde(default)]
+    pub events: Vec<GameEvent>,
+    #[serde(default)]
+    pub next_event_sequence: u64,
     pub applied_event_ids: BTreeSet<String>,
     pub reports: Vec<TurnReport>,
     pub status: GameStatus,
