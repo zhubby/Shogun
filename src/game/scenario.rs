@@ -2,6 +2,7 @@ use super::city::{City, CityFacility};
 use super::ids::{CityId, FactionId, OfficerId, OfficialPostId};
 use super::model::*;
 use super::officer::{Officer, OfficerGender, OfficerStats, OfficerStatus, official_post_spec};
+use super::personnel::normalize_personnel_state;
 use super::technology::FactionTechnologyState;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -58,6 +59,7 @@ impl ScenarioData {
                     id: seed.id.clone(),
                     name: seed.name.clone(),
                     ruler_id: seed.ruler_id.clone(),
+                    heir_id: None,
                     color: seed.color,
                     selectable: self.player_selectable_factions.contains(&seed.id),
                     controlled_by: if seed.id == player_faction_id {
@@ -110,7 +112,8 @@ impl ScenarioData {
                     office_id: seed.office_id.clone(),
                     stats: seed.stats,
                     loyalty: seed.loyalty,
-                    gender: OfficerGender::Male,
+                    birth_year: seed.birth_year.unwrap_or(self.start_year - 30),
+                    gender: seed.gender.clone().unwrap_or_default(),
                     status: OfficerStatus::Active,
                     profile: None,
                 },
@@ -173,7 +176,7 @@ impl ScenarioData {
             .map(|faction_id| (faction_id.clone(), FactionTechnologyState::default()))
             .collect();
 
-        Ok(GameState {
+        let mut state = GameState {
             version: SAVE_VERSION,
             scenario_id: self.id.clone(),
             scenario_name: self.name.clone(),
@@ -191,10 +194,16 @@ impl ScenarioData {
             technologies,
             events: Vec::new(),
             next_event_sequence: 0,
+            marriages: Vec::new(),
+            family_relationships: Vec::new(),
+            next_generated_officer_sequence: 0,
+            last_lifecycle_year: None,
             applied_event_ids: BTreeSet::new(),
             reports: Vec::new(),
             status: GameStatus::Running,
-        })
+        };
+        normalize_personnel_state(&mut state);
+        Ok(state)
     }
 }
 
@@ -237,6 +246,10 @@ pub struct OfficerSeed {
     pub city_id: Option<CityId>,
     #[serde(default)]
     pub office_id: Option<OfficialPostId>,
+    #[serde(default)]
+    pub birth_year: Option<i32>,
+    #[serde(default)]
+    pub gender: Option<OfficerGender>,
     pub stats: OfficerStats,
     pub loyalty: u8,
 }

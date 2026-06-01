@@ -41,6 +41,8 @@ pub enum GameEventKind {
     FactionDestroyed,
     TechnologyCompleted,
     HistoricalLife,
+    OfficerLifecycle,
+    Succession,
     Famine,
     GameStatus,
 }
@@ -115,6 +117,8 @@ pub struct EventChoiceEffects {
     pub city_order: i32,
     #[serde(default)]
     pub city_population: i32,
+    #[serde(default)]
+    pub set_faction_ruler_id: Option<super::ids::OfficerId>,
 }
 
 #[derive(Clone, Debug)]
@@ -312,6 +316,10 @@ fn apply_choice_effects(
     choice: &EventChoice,
     outcome: DecisionOutcome,
 ) -> Result<(), EventError> {
+    if choice.effects.set_faction_ruler_id.is_some() {
+        return apply_succession_choice_effects(state, event_index, choice, outcome);
+    }
+
     let event_id = state.events[event_index].id.clone();
     let Some(city_id) = state.events[event_index].city_id.clone() else {
         set_cancelled(state, event_index, "事件缺少目标城池");
@@ -347,6 +355,61 @@ fn apply_choice_effects(
     city.order = apply_i32_to_u8(city.order, choice.effects.city_order, 0, 100);
     city.population = apply_i32_to_u32(city.population, choice.effects.city_population);
     city.clamp_fields();
+
+    let turn = state.turn;
+    let label = choice.label.clone();
+    state.events[event_index].viewed = true;
+    state.events[event_index].popup_pending = false;
+    state.events[event_index].resolution = match outcome {
+        DecisionOutcome::Resolved => EventResolution::Resolved {
+            choice_id: Some(choice.id.clone()),
+            label,
+            turn,
+        },
+        DecisionOutcome::Expired => EventResolution::Expired {
+            choice_id: choice.id.clone(),
+            label,
+            turn,
+        },
+    };
+    Ok(())
+}
+
+fn apply_succession_choice_effects(
+    state: &mut GameState,
+    event_index: usize,
+    choice: &EventChoice,
+    outcome: DecisionOutcome,
+) -> Result<(), EventError> {
+    let Some(faction_id) = state.events[event_index].faction_id.clone() else {
+        set_cancelled(state, event_index, "事件缺少目标势力");
+        return Ok(());
+    };
+    let Some(new_ruler_id) = choice.effects.set_faction_ruler_id.clone() else {
+        set_cancelled(state, event_index, "事件缺少继承人");
+        return Ok(());
+    };
+
+    {
+        let Some(officer) = state.officers.get(&new_ruler_id) else {
+            set_cancelled(state, event_index, "继承人已不存在");
+            return Ok(());
+        };
+        if officer.faction_id != faction_id
+            || !officer.is_active()
+            || !officer.is_adult_at(state.year)
+        {
+            set_cancelled(state, event_index, "继承人当前不可继位");
+            return Ok(());
+        }
+    }
+
+    let Some(faction) = state.factions.get_mut(&faction_id) else {
+        set_cancelled(state, event_index, "目标势力已不存在");
+        return Ok(());
+    };
+    faction.ruler_id = new_ruler_id.clone();
+    faction.heir_id = Some(new_ruler_id);
 
     let turn = state.turn;
     let label = choice.label.clone();

@@ -10,6 +10,7 @@ use super::officer::{
     Officer, OfficerStats, OfficerStatus, OfficialPostEffect, OfficialRank, official_post_spec,
     official_rank_loyalty_bonus, official_rank_order, official_rank_salary_bonus,
 };
+use super::personnel::{apply_annual_lifecycle, normalize_personnel_state};
 use super::technology::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -62,6 +63,7 @@ fn resolve_command_batch_inner(
     commands: Vec<Command>,
     catalog: Option<&dyn HistoricalCatalog>,
 ) -> TurnReport {
+    normalize_personnel_state(state);
     ensure_faction_technology_states(state);
     begin_ai_research(state);
     expire_due_event_decisions(state);
@@ -102,6 +104,7 @@ fn resolve_command_batch_inner(
             apply_due_life_events(state, catalog, &mut report);
             state.refresh_status();
         }
+        apply_annual_lifecycle(state, &mut report);
         trigger_monthly_incidents(state);
     }
     append_turn_summary(state, &mut report);
@@ -2160,6 +2163,10 @@ fn apply_due_life_events(
                         officer.faction_id = target_faction_id.clone();
                         officer.city_id = city_id.clone();
                         officer.status = status.clone();
+                        officer.birth_year = officer_profile
+                            .as_ref()
+                            .and_then(|profile| profile.birth_year)
+                            .unwrap_or(event.year - 18);
                         if let Some(loyalty) = event.loyalty {
                             officer.loyalty = loyalty;
                         }
@@ -2177,6 +2184,10 @@ fn apply_due_life_events(
                         office_id: None,
                         stats,
                         loyalty: event.loyalty.unwrap_or(75),
+                        birth_year: officer_profile
+                            .as_ref()
+                            .and_then(|profile| profile.birth_year)
+                            .unwrap_or(event.year - 18),
                         gender: officer_profile
                             .as_ref()
                             .map(|profile| profile.gender.clone())
@@ -2214,7 +2225,7 @@ fn apply_due_life_events(
                     );
                 }
             }
-            LifeEventKind::BecomeUnavailable | LifeEventKind::Die => {
+            LifeEventKind::BecomeUnavailable => {
                 if let Some(officer) = state.officers.get_mut(&event.officer_id) {
                     let visible_to_player = officer.faction_id == state.player_faction_id;
                     let officer_faction_id = officer.faction_id.clone();
@@ -2222,11 +2233,7 @@ fn apply_due_life_events(
                     let officer_name = officer.name.clone();
                     officer.city_id = None;
                     officer.office_id = None;
-                    officer.status = if event.kind == LifeEventKind::Die {
-                        OfficerStatus::Dead
-                    } else {
-                        OfficerStatus::Unavailable
-                    };
+                    officer.status = OfficerStatus::Unavailable;
                     for city in state.cities.values_mut() {
                         if city.governor_id.as_deref() == Some(&event.officer_id) {
                             city.governor_id = None;
@@ -2250,6 +2257,14 @@ fn apply_due_life_events(
                             },
                         );
                     }
+                }
+            }
+            LifeEventKind::Die => {
+                if state.officers.contains_key(&event.officer_id) {
+                    report.info(format!(
+                        "{} 的历史卒年已记录为资料，不再强制离场",
+                        officer_name
+                    ));
                 }
             }
         }

@@ -460,6 +460,7 @@ pub fn official_rank_label(rank: OfficialRank) -> &'static str {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub enum OfficerStatus {
     Active,
+    Minor,
     Wild,
     Unavailable,
     Dead,
@@ -614,6 +615,8 @@ pub struct Officer {
     pub stats: OfficerStats,
     pub loyalty: u8,
     #[serde(default)]
+    pub birth_year: i32,
+    #[serde(default)]
     pub gender: OfficerGender,
     pub status: OfficerStatus,
     pub profile: Option<OfficerProfile>,
@@ -622,6 +625,14 @@ pub struct Officer {
 impl Officer {
     pub fn is_active(&self) -> bool {
         self.status == OfficerStatus::Active
+    }
+
+    pub fn age_at(&self, year: i32) -> u32 {
+        year.saturating_sub(self.birth_year).max(0) as u32
+    }
+
+    pub fn is_adult_at(&self, year: i32) -> bool {
+        self.age_at(year) >= 18
     }
 }
 

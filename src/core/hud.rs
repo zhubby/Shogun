@@ -1,5 +1,6 @@
 use crate::game::*;
 use bevy_egui::egui;
+use std::collections::BTreeSet;
 
 use super::actions::{
     clear_pending_commands, enter_game, finish_current_turn, open_city, refresh_saves,
@@ -10,7 +11,7 @@ use super::i18n::{Translator, args};
 use super::labels::{officer_gender_label, technology_branch_label};
 use super::map::{map_panel, reset_map_view, zoom_map};
 use super::state::{
-    GameUiState, OfficerBrowserFilters, OfficerGenderFilter, OfficerStatusFilter, Screen,
+    GameUiState, OfficerBrowserFilters, OfficerGenderFilter, OfficerStatusFilter, Screen, ShrineTab,
 };
 use super::style::{
     modal_title_bar, war_bar_frame, war_border, war_danger, war_gold, war_panel_frame,
@@ -41,6 +42,7 @@ pub(super) fn in_game_hud(ctx: &egui::Context, ui_state: &mut GameUiState, t: &T
     bottom_map_actions_hud(ctx, ui_state, t);
     officer_browser_hud(ctx, ui_state, t, screen);
     retainer_hud(ctx, ui_state, t, screen);
+    shrine_hud(ctx, ui_state, t, screen);
     technology_hud(ctx, ui_state, t, screen);
     event_center_hud(ctx, ui_state, t, screen);
     event_popup_hud(ctx, ui_state, t, screen);
@@ -202,6 +204,15 @@ pub(super) fn bottom_map_actions_hud(
                     };
                     if ui.button(retainer_label).clicked() {
                         ui_state.retainers_open = !ui_state.retainers_open;
+                    }
+
+                    let shrine_label = if ui_state.shrine_open {
+                        t.text("hud-collapse-shrine")
+                    } else {
+                        t.text("hud-shrine")
+                    };
+                    if ui.button(shrine_label).clicked() {
+                        ui_state.shrine_open = !ui_state.shrine_open;
                     }
 
                     let technology_label = if ui_state.technology_open {
@@ -665,6 +676,8 @@ fn event_kind_label(kind: &GameEventKind, t: &Translator) -> String {
         GameEventKind::FactionDestroyed => t.text("event-kind-faction-destroyed"),
         GameEventKind::TechnologyCompleted => t.text("event-kind-technology-completed"),
         GameEventKind::HistoricalLife => t.text("event-kind-historical-life"),
+        GameEventKind::OfficerLifecycle => t.text("event-kind-officer-lifecycle"),
+        GameEventKind::Succession => t.text("event-kind-succession"),
         GameEventKind::Famine => t.text("event-kind-famine"),
         GameEventKind::GameStatus => t.text("event-kind-game-status"),
     }
@@ -1512,6 +1525,296 @@ pub(super) fn retainer_hud(
         });
 }
 
+pub(super) fn shrine_hud(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    screen: egui::Rect,
+) {
+    if !ui_state.shrine_open {
+        return;
+    }
+
+    let width = (screen.width() * 0.82).clamp(760.0, 1120.0);
+    let height = (screen.height() * 0.76).clamp(420.0, 680.0);
+    egui::Area::new(egui::Id::new("hud_shrine"))
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            war_panel_frame().show(ui, |ui| {
+                ui.set_width(width);
+                ui.set_min_height(height);
+                if modal_title_bar(ui, t, &t.text("shrine-title")) {
+                    ui_state.shrine_open = false;
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    for (tab, label) in [
+                        (ShrineTab::Succession, t.text("shrine-tab-succession")),
+                        (ShrineTab::Marriage, t.text("shrine-tab-marriage")),
+                        (ShrineTab::Children, t.text("shrine-tab-children")),
+                    ] {
+                        if ui
+                            .selectable_label(ui_state.shrine_tab == tab, label)
+                            .clicked()
+                        {
+                            ui_state.shrine_tab = tab;
+                        }
+                    }
+                });
+                ui.separator();
+                match ui_state.shrine_tab {
+                    ShrineTab::Succession => shrine_succession_panel(ui, ui_state, t),
+                    ShrineTab::Marriage => shrine_marriage_panel(ui, ui_state, t, height - 112.0),
+                    ShrineTab::Children => shrine_children_panel(ui, ui_state, t, height - 112.0),
+                }
+            });
+        });
+}
+
+fn shrine_succession_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
+    let Some(game) = ui_state.game.as_ref() else {
+        ui.label(t.text("message-no-game-state"));
+        return;
+    };
+    let faction_id = game.player_faction_id.clone();
+    let Some(faction) = game.factions.get(&faction_id) else {
+        ui.label(t.text("unknown-faction"));
+        return;
+    };
+    let ruler_name = game
+        .officers
+        .get(&faction.ruler_id)
+        .map(|officer| officer.name.clone())
+        .unwrap_or_else(|| faction.ruler_id.clone());
+    let heir_name = faction
+        .heir_id
+        .as_deref()
+        .and_then(|id| game.officers.get(id))
+        .map(|officer| officer.name.clone())
+        .unwrap_or_else(|| t.text("shrine-no-heir"));
+    ui.heading(egui::RichText::new(t.text("shrine-succession-heading")).color(war_gold()));
+    ui.label(t.text_args(
+        "shrine-current-ruler",
+        &args([("ruler", ruler_name), ("heir", heir_name)]),
+    ));
+    ui.add_space(8.0);
+
+    let candidates = succession_candidate_ids(game, &faction_id, None);
+    if candidates.is_empty() {
+        ui.colored_label(war_warning(), t.text("shrine-no-heir-candidates"));
+        return;
+    }
+
+    egui::ScrollArea::vertical()
+        .id_salt("shrine_succession_candidates")
+        .max_height(420.0)
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for candidate_id in candidates {
+                let Some(officer) = ui_state
+                    .game
+                    .as_ref()
+                    .and_then(|game| game.officers.get(&candidate_id))
+                else {
+                    continue;
+                };
+                let label = t.text_args(
+                    "shrine-heir-candidate",
+                    &args([
+                        ("name", officer.name.clone()),
+                        (
+                            "age",
+                            officer
+                                .age_at(ui_state.game.as_ref().unwrap().year)
+                                .to_string(),
+                        ),
+                        ("loyalty", officer.loyalty.to_string()),
+                    ]),
+                );
+                if ui.button(label).clicked()
+                    && let Some(game) = ui_state.game.as_mut()
+                {
+                    match set_default_heir(game, &faction_id, &candidate_id) {
+                        Ok(()) => {
+                            let name = game.officers[&candidate_id].name.clone();
+                            ui_state.message =
+                                t.text_args("message-heir-set", &args([("officer", name)]));
+                        }
+                        Err(error) => ui_state.message = error.to_string(),
+                    }
+                }
+            }
+        });
+}
+
+fn shrine_marriage_panel(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    max_height: f32,
+) {
+    let Some(game) = ui_state.game.as_ref() else {
+        ui.label(t.text("message-no-game-state"));
+        return;
+    };
+    let faction_id = game.player_faction_id.clone();
+    let marriages = game.marriages.clone();
+    ui.heading(egui::RichText::new(t.text("shrine-marriage-heading")).color(war_gold()));
+    let mut marry_request = None;
+    ui.horizontal_wrapped(|ui| {
+        officer_combo_for_marriage(
+            ui,
+            game,
+            &faction_id,
+            &mut ui_state.shrine_marriage_first,
+            "shrine_marriage_first",
+            t.text("shrine-marriage-first"),
+        );
+        officer_combo_for_marriage(
+            ui,
+            game,
+            &faction_id,
+            &mut ui_state.shrine_marriage_second,
+            "shrine_marriage_second",
+            t.text("shrine-marriage-second"),
+        );
+        if ui.button(t.text("shrine-marry")).clicked()
+            && let (Some(first_id), Some(second_id)) = (
+                ui_state.shrine_marriage_first.clone(),
+                ui_state.shrine_marriage_second.clone(),
+            )
+        {
+            marry_request = Some((first_id, second_id));
+        }
+    });
+    if let Some((first_id, second_id)) = marry_request
+        && let Some(game) = ui_state.game.as_mut()
+    {
+        match marry_officers(game, &faction_id, &first_id, &second_id) {
+            Ok(marriage) => {
+                let husband = game.officers[&marriage.husband_id].name.clone();
+                let wife = game.officers[&marriage.wife_id].name.clone();
+                ui_state.message = t.text_args(
+                    "message-marriage-created",
+                    &args([("husband", husband), ("wife", wife)]),
+                );
+            }
+            Err(error) => ui_state.message = error.to_string(),
+        }
+    }
+    ui.separator();
+    egui::ScrollArea::vertical()
+        .id_salt("shrine_marriages")
+        .max_height(max_height.max(260.0))
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            if marriages.is_empty() {
+                ui.label(t.text("shrine-marriage-empty"));
+            }
+            let Some(game) = ui_state.game.as_ref() else {
+                return;
+            };
+            for marriage in &marriages {
+                let husband = game
+                    .officers
+                    .get(&marriage.husband_id)
+                    .map(|officer| officer.name.clone())
+                    .unwrap_or_else(|| marriage.husband_id.clone());
+                let wife = game
+                    .officers
+                    .get(&marriage.wife_id)
+                    .map(|officer| officer.name.clone())
+                    .unwrap_or_else(|| marriage.wife_id.clone());
+                ui.label(t.text_args(
+                    "shrine-marriage-row",
+                    &args([
+                        ("husband", husband),
+                        ("wife", wife),
+                        ("year", marriage.year.to_string()),
+                        ("month", marriage.month.to_string()),
+                    ]),
+                ));
+            }
+        });
+}
+
+fn officer_combo_for_marriage(
+    ui: &mut egui::Ui,
+    game: &GameState,
+    faction_id: &str,
+    selected: &mut Option<OfficerId>,
+    id_salt: &'static str,
+    label: String,
+) {
+    let selected_text = selected
+        .as_deref()
+        .and_then(|id| game.officers.get(id))
+        .map(|officer| officer.name.clone())
+        .unwrap_or(label);
+    egui::ComboBox::from_id_salt(id_salt)
+        .selected_text(selected_text)
+        .show_ui(ui, |ui| {
+            for officer in game.officers.values().filter(|officer| {
+                officer.faction_id == faction_id
+                    && officer.is_active()
+                    && officer.is_adult_at(game.year)
+            }) {
+                ui.selectable_value(selected, Some(officer.id.clone()), &officer.name);
+            }
+        });
+}
+
+fn shrine_children_panel(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    max_height: f32,
+) {
+    let Some(game) = ui_state.game.as_ref() else {
+        ui.label(t.text("message-no-game-state"));
+        return;
+    };
+    ui.heading(egui::RichText::new(t.text("shrine-children-heading")).color(war_gold()));
+    let child_ids = game
+        .family_relationships
+        .iter()
+        .map(|relationship| relationship.child_id.clone())
+        .collect::<BTreeSet<_>>();
+    if child_ids.is_empty() {
+        ui.label(t.text("shrine-children-empty"));
+        return;
+    }
+    egui::ScrollArea::vertical()
+        .id_salt("shrine_children")
+        .max_height(max_height.max(260.0))
+        .auto_shrink([false, false])
+        .show(ui, |ui| {
+            for child_id in child_ids {
+                let Some(child) = game.officers.get(&child_id) else {
+                    continue;
+                };
+                let parents = game
+                    .family_relationships
+                    .iter()
+                    .filter(|relationship| relationship.child_id == child_id)
+                    .filter_map(|relationship| game.officers.get(&relationship.parent_id))
+                    .map(|officer| officer.name.clone())
+                    .collect::<Vec<_>>()
+                    .join("、");
+                ui.label(t.text_args(
+                    "shrine-child-row",
+                    &args([
+                        ("name", child.name.clone()),
+                        ("age", child.age_at(game.year).to_string()),
+                        ("status", officer_status_label(&child.status, t)),
+                        ("parents", parents),
+                    ]),
+                ));
+            }
+        });
+}
+
 pub(super) fn selected_city_summary(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
     let summary = ui_state.game.as_ref().and_then(|game| {
         let city = game.cities.get(ui_state.selected_city_id.as_deref()?)?;
@@ -1679,6 +1982,7 @@ pub(super) fn officer_browser_filters(
                 for filter in [
                     OfficerStatusFilter::All,
                     OfficerStatusFilter::Active,
+                    OfficerStatusFilter::Minor,
                     OfficerStatusFilter::Wild,
                     OfficerStatusFilter::Unavailable,
                     OfficerStatusFilter::Dead,
@@ -1748,12 +2052,13 @@ pub(super) fn officer_browser_table(
         .show(ui, |ui| {
             egui::Grid::new((options.id_salt, "grid"))
                 .striped(true)
-                .num_columns(13)
+                .num_columns(14)
                 .min_col_width(42.0)
                 .spacing(egui::vec2(12.0, 6.0))
                 .show(ui, |ui| {
                     ui.strong(t.text("officer-column-name"));
                     ui.strong(t.text("officer-column-gender"));
+                    ui.strong(t.text("officer-column-age"));
                     ui.strong(t.text("officer-column-faction"));
                     ui.strong(t.text("officer-column-city"));
                     ui.strong(t.text("officer-column-office"));
@@ -1779,6 +2084,7 @@ pub(super) fn officer_browser_table(
                         };
                         officer_row_cell(&mut cell_context, &row, selected, &row.name);
                         officer_row_cell(&mut cell_context, &row, selected, &row.gender);
+                        officer_row_cell(&mut cell_context, &row, selected, row.age.to_string());
                         officer_row_cell(&mut cell_context, &row, selected, &row.faction_name);
                         officer_row_cell(&mut cell_context, &row, selected, &row.city_name);
                         officer_row_cell(&mut cell_context, &row, selected, &row.office_name);
@@ -1837,6 +2143,7 @@ pub(super) struct OfficerBrowserRow {
     name: String,
     faction_id: FactionId,
     gender: String,
+    age: u32,
     faction_name: String,
     city_name: String,
     office_name: String,
@@ -2006,6 +2313,7 @@ pub(super) fn filtered_officer_rows(
                 name: officer.name.clone(),
                 faction_id: officer.faction_id.clone(),
                 gender: officer_gender_label(t, &officer.gender),
+                age: officer.age_at(game.year),
                 faction_name,
                 city_name,
                 office_name,
@@ -2110,6 +2418,7 @@ fn officer_status_matches(status: &OfficerStatus, filter: OfficerStatusFilter) -
     match filter {
         OfficerStatusFilter::All => true,
         OfficerStatusFilter::Active => *status == OfficerStatus::Active,
+        OfficerStatusFilter::Minor => *status == OfficerStatus::Minor,
         OfficerStatusFilter::Wild => *status == OfficerStatus::Wild,
         OfficerStatusFilter::Unavailable => *status == OfficerStatus::Unavailable,
         OfficerStatusFilter::Dead => *status == OfficerStatus::Dead,
@@ -2128,6 +2437,7 @@ fn officer_status_filter_label(filter: OfficerStatusFilter, t: &Translator) -> S
     match filter {
         OfficerStatusFilter::All => t.text("officer-filter-all-statuses"),
         OfficerStatusFilter::Active => t.text("officer-status-active"),
+        OfficerStatusFilter::Minor => t.text("officer-status-minor"),
         OfficerStatusFilter::Wild => t.text("officer-status-wild"),
         OfficerStatusFilter::Unavailable => t.text("officer-status-unavailable"),
         OfficerStatusFilter::Dead => t.text("officer-status-dead"),
@@ -2137,6 +2447,7 @@ fn officer_status_filter_label(filter: OfficerStatusFilter, t: &Translator) -> S
 fn officer_status_label(status: &OfficerStatus, t: &Translator) -> String {
     match status {
         OfficerStatus::Active => t.text("officer-status-active"),
+        OfficerStatus::Minor => t.text("officer-status-minor"),
         OfficerStatus::Wild => t.text("officer-status-wild"),
         OfficerStatus::Unavailable => t.text("officer-status-unavailable"),
         OfficerStatus::Dead => t.text("officer-status-dead"),

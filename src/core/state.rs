@@ -34,6 +34,10 @@ pub(super) struct GameUiState {
     pub(super) officer_browser_open: bool,
     pub(super) officer_browser_filters: OfficerBrowserFilters,
     pub(super) retainers_open: bool,
+    pub(super) shrine_open: bool,
+    pub(super) shrine_tab: ShrineTab,
+    pub(super) shrine_marriage_first: Option<OfficerId>,
+    pub(super) shrine_marriage_second: Option<OfficerId>,
     pub(super) technology_open: bool,
     pub(super) events_open: bool,
     pub(super) selected_event_id: Option<String>,
@@ -171,6 +175,10 @@ impl GameUiState {
             officer_browser_open: false,
             officer_browser_filters: OfficerBrowserFilters::default(),
             retainers_open: false,
+            shrine_open: false,
+            shrine_tab: ShrineTab::Succession,
+            shrine_marriage_first: None,
+            shrine_marriage_second: None,
             technology_open: false,
             events_open: false,
             selected_event_id: None,
@@ -435,9 +443,18 @@ pub(super) enum OfficerStatusFilter {
     #[default]
     All,
     Active,
+    Minor,
     Wild,
     Unavailable,
     Dead,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum ShrineTab {
+    #[default]
+    Succession,
+    Marriage,
+    Children,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

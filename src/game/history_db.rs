@@ -11,6 +11,7 @@ use super::officer::{
     Officer, OfficerCatalog, OfficerGender, OfficerProfile, OfficerProfileUpdate,
     OfficerRelationship, OfficerRelationshipKind, OfficerStats, OfficerStatus,
 };
+use super::personnel::normalize_personnel_state;
 use super::technology::FactionTechnologyState;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -467,6 +468,7 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
                     id: row.get("id"),
                     name: row.get("name"),
                     ruler_id: row.get("ruler_id"),
+                    heir_id: None,
                     color: [row.get("color_r"), row.get("color_g"), row.get("color_b")],
                     selectable: row.get::<bool, _>("selectable"),
                     controlled_by: Controller::RuleAi,
@@ -629,7 +631,7 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
             .map(|faction_id| (faction_id.clone(), FactionTechnologyState::default()))
             .collect();
 
-        Ok(GameState {
+        let mut state = GameState {
             version: SAVE_VERSION,
             scenario_id: scenario.id,
             scenario_name: scenario.name,
@@ -647,10 +649,16 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
             technologies,
             events: Vec::new(),
             next_event_sequence: 0,
+            marriages: Vec::new(),
+            family_relationships: Vec::new(),
+            next_generated_officer_sequence: 0,
+            last_lifecycle_year: None,
             applied_event_ids,
             reports: Vec::new(),
             status: GameStatus::Running,
-        })
+        };
+        normalize_personnel_state(&mut state);
+        Ok(state)
     }
 
     fn life_events_until(&self, year: i32, month: u8) -> Result<Vec<LifeEvent>, HistoryDbError> {
@@ -715,6 +723,7 @@ fn apply_initial_life_event(
                         office_id: None,
                         stats: profile.stats,
                         loyalty: event.loyalty.unwrap_or(80),
+                        birth_year: profile.birth_year.unwrap_or(event.year - 18),
                         gender: profile.gender.clone(),
                         status: OfficerStatus::Active,
                         profile: Some(profile.clone()),

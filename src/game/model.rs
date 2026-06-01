@@ -6,7 +6,7 @@ use super::technology::FactionTechnologyState;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const SAVE_VERSION: u32 = 6;
+pub const SAVE_VERSION: u32 = 7;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GameState {
@@ -31,6 +31,14 @@ pub struct GameState {
     pub events: Vec<GameEvent>,
     #[serde(default)]
     pub next_event_sequence: u64,
+    #[serde(default)]
+    pub marriages: Vec<Marriage>,
+    #[serde(default)]
+    pub family_relationships: Vec<FamilyRelationship>,
+    #[serde(default)]
+    pub next_generated_officer_sequence: u64,
+    #[serde(default)]
+    pub last_lifecycle_year: Option<i32>,
     pub applied_event_ids: BTreeSet<String>,
     pub reports: Vec<TurnReport>,
     pub status: GameStatus,
@@ -144,9 +152,40 @@ pub struct Faction {
     pub id: FactionId,
     pub name: String,
     pub ruler_id: OfficerId,
+    #[serde(default)]
+    pub heir_id: Option<OfficerId>,
     pub color: [f32; 3],
     pub selectable: bool,
     pub controlled_by: Controller,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Marriage {
+    pub husband_id: OfficerId,
+    pub wife_id: OfficerId,
+    pub year: i32,
+    pub month: u8,
+}
+
+impl Marriage {
+    pub fn new(husband_id: OfficerId, wife_id: OfficerId, year: i32, month: u8) -> Self {
+        Self {
+            husband_id,
+            wife_id,
+            year,
+            month,
+        }
+    }
+
+    pub fn involves(&self, officer_id: &str) -> bool {
+        self.husband_id == officer_id || self.wife_id == officer_id
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FamilyRelationship {
+    pub parent_id: OfficerId,
+    pub child_id: OfficerId,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

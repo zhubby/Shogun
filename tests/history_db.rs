@@ -65,7 +65,7 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
 
     runtime().block_on(async {
         let pool = open_pool(&path).await;
-        assert_eq!(applied_sqlx_migration_versions(&pool).await, [1]);
+        assert_eq!(applied_sqlx_migration_versions(&pool).await, [1, 2]);
 
         let fk_rows = sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(&pool)
@@ -153,7 +153,7 @@ fn open_or_create_creates_database_and_runs_initial_migration() {
     assert_eq!(catalog.scenarios().unwrap().len(), 4);
     runtime().block_on(async {
         let pool = open_pool(&path).await;
-        assert_eq!(applied_sqlx_migration_versions(&pool).await, [1]);
+        assert_eq!(applied_sqlx_migration_versions(&pool).await, [1, 2]);
         pool.close().await;
     });
 }
@@ -373,6 +373,11 @@ fn fixed_scenarios_build_with_valid_selectable_factions_and_governors() {
                     .values()
                     .all(|officer| officer.profile.is_some())
             );
+            assert!(
+                game.officers
+                    .values()
+                    .all(|officer| officer.birth_year != 0)
+            );
 
             for city in game.cities.values() {
                 assert!((1..=CITY_MAX_LEVEL).contains(&city.level));
@@ -424,12 +429,12 @@ fn life_events_apply_appearances_deaths_and_do_not_repeat() {
     let first_report = resolve_command_batch_with_history(&mut death_game, Vec::new(), &catalog);
 
     assert!(death_game.applied_event_ids.contains("death_sun_ce"));
-    assert_eq!(death_game.officers["sun_ce"].status, OfficerStatus::Dead);
+    assert_eq!(death_game.officers["sun_ce"].status, OfficerStatus::Active);
     assert!(
         first_report
             .entries
             .iter()
-            .any(|entry| entry.message.contains("孙策"))
+            .any(|entry| entry.message.contains("历史卒年已记录为资料"))
     );
 
     let applied_count = death_game.applied_event_ids.len();

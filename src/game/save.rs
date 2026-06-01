@@ -1,5 +1,6 @@
 use super::ids::FactionId;
 use super::model::*;
+use super::personnel::normalize_personnel_state;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -83,7 +84,9 @@ impl SaveManager {
                 found: envelope.version,
             });
         }
-        Ok(envelope.state)
+        let mut state = envelope.state;
+        normalize_personnel_state(&mut state);
+        Ok(state)
     }
 
     pub fn delete_slot(&self, slot_id: &str) -> Result<(), SaveError> {
