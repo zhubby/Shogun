@@ -195,7 +195,7 @@ hud-collapse-technology = 收起科技
 hud-technology = 科技
 game-status-victory = 胜利: {$reason}
 game-status-defeat = 失败: {$reason}
-command-tent-title = 中军帐
+command-tent-title = 议事厅
 report-title = 战报
 officer-browser-title = 武将一览
 retainer-title = 臣僚任命
@@ -211,7 +211,7 @@ message-research-started = 已投入 {$gold} 金开始研究 {$name}
 
 selected-city-none = 未选择城池
 selected-city-missing = 选中的城池不存在
-open-command-tent = 打开中军帐
+open-command-tent = 打开议事厅
 map-title = 地图
 map-boundaries = 州郡边界
 map-boundary-asset-missing = 边界资产不可用

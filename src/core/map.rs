@@ -542,6 +542,67 @@ pub(super) fn draw_city_marker(
     let scale = ui_state.map_zoom.sqrt().clamp(0.85, 1.35);
     let marker_scale = scale * city_marker_rank_scale(city);
     let marker_center = pos + egui::vec2(0.0, -5.0 * scale);
+    let faction_fill = draw_city_marker_icon(
+        painter,
+        marker_center,
+        marker_scale,
+        scale,
+        color,
+        selected,
+        player_owned,
+    );
+
+    let base = egui::Rect::from_center_size(
+        pos + egui::vec2(0.0, 25.0 * scale),
+        egui::vec2(48.0 * scale, 18.0 * scale),
+    );
+    painter.rect(
+        base,
+        4.0,
+        egui::Color32::from_rgba_unmultiplied(20, 18, 14, 222),
+        egui::Stroke::new(1.0, faction_fill),
+        egui::StrokeKind::Outside,
+    );
+    painter.text(
+        base.center(),
+        egui::Align2::CENTER_CENTER,
+        compact_troops(city.troops.total(), t),
+        egui::FontId::proportional(12.0 * scale),
+        war_text(),
+    );
+
+    let label_center = pos + egui::vec2(0.0, 54.0 * scale);
+    let label_width = (city.name.chars().count() as f32 * 17.0 + 28.0).max(68.0);
+    let label_rect =
+        egui::Rect::from_center_size(label_center, egui::vec2(label_width, 25.0 * scale));
+    painter.rect(
+        label_rect,
+        4.0,
+        egui::Color32::from_rgba_unmultiplied(17, 16, 13, if selected { 238 } else { 204 }),
+        egui::Stroke::new(
+            if selected { 1.5 } else { 1.0 },
+            if selected { war_gold() } else { war_border() },
+        ),
+        egui::StrokeKind::Outside,
+    );
+    painter.text(
+        label_center,
+        egui::Align2::CENTER_CENTER,
+        &city.name,
+        egui::FontId::proportional(15.0 * scale),
+        if selected { war_gold() } else { war_text() },
+    );
+}
+
+pub(super) fn draw_city_marker_icon(
+    painter: &egui::Painter,
+    marker_center: egui::Pos2,
+    marker_scale: f32,
+    shadow_scale: f32,
+    color: egui::Color32,
+    selected: bool,
+    player_owned: bool,
+) -> egui::Color32 {
     let radius = 20.0 * marker_scale;
     let faction_fill = if player_owned {
         color
@@ -552,7 +613,7 @@ pub(super) fn draw_city_marker(
     let ring = if selected { war_gold() } else { faction_fill };
 
     painter.circle_filled(
-        marker_center + egui::vec2(2.5 * scale, 3.5 * scale),
+        marker_center + egui::vec2(2.5 * shadow_scale, 3.5 * shadow_scale),
         radius + 5.0 * marker_scale,
         shadow,
     );
@@ -581,7 +642,7 @@ pub(super) fn draw_city_marker(
         egui::vec2(32.0 * marker_scale, 16.0 * marker_scale),
     );
     painter.rect(
-        wall.translate(egui::vec2(1.8 * scale, 2.0 * scale)),
+        wall.translate(egui::vec2(1.8 * shadow_scale, 2.0 * shadow_scale)),
         2.0 * marker_scale,
         shadow,
         egui::Stroke::NONE,
@@ -646,46 +707,7 @@ pub(super) fn draw_city_marker(
         egui::StrokeKind::Outside,
     );
 
-    let base = egui::Rect::from_center_size(
-        pos + egui::vec2(0.0, 25.0 * scale),
-        egui::vec2(48.0 * scale, 18.0 * scale),
-    );
-    painter.rect(
-        base,
-        4.0,
-        egui::Color32::from_rgba_unmultiplied(20, 18, 14, 222),
-        egui::Stroke::new(1.0, faction_fill),
-        egui::StrokeKind::Outside,
-    );
-    painter.text(
-        base.center(),
-        egui::Align2::CENTER_CENTER,
-        compact_troops(city.troops.total(), t),
-        egui::FontId::proportional(12.0 * scale),
-        war_text(),
-    );
-
-    let label_center = pos + egui::vec2(0.0, 54.0 * scale);
-    let label_width = (city.name.chars().count() as f32 * 17.0 + 28.0).max(68.0);
-    let label_rect =
-        egui::Rect::from_center_size(label_center, egui::vec2(label_width, 25.0 * scale));
-    painter.rect(
-        label_rect,
-        4.0,
-        egui::Color32::from_rgba_unmultiplied(17, 16, 13, if selected { 238 } else { 204 }),
-        egui::Stroke::new(
-            if selected { 1.5 } else { 1.0 },
-            if selected { war_gold() } else { war_border() },
-        ),
-        egui::StrokeKind::Outside,
-    );
-    painter.text(
-        label_center,
-        egui::Align2::CENTER_CENTER,
-        &city.name,
-        egui::FontId::proportional(15.0 * scale),
-        if selected { war_gold() } else { war_text() },
-    );
+    faction_fill
 }
 
 pub(super) fn city_marker_rank_scale(city: &City) -> f32 {

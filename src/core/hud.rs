@@ -9,13 +9,13 @@ use super::city_intel::city_summary_intel;
 use super::city_panel::selected_city_panel;
 use super::i18n::{Translator, args};
 use super::labels::{officer_gender_label, technology_branch_label};
-use super::map::{map_panel, reset_map_view, zoom_map};
+use super::map::{draw_city_marker_icon, faction_color, map_panel, reset_map_view, zoom_map};
 use super::state::{
     GameUiState, OfficerBrowserFilters, OfficerGenderFilter, OfficerStatusFilter, Screen, ShrineTab,
 };
 use super::style::{
     modal_title_bar, war_bar_frame, war_border, war_danger, war_gold, war_panel_frame,
-    war_sub_panel_frame, war_success, war_text_muted, war_warning,
+    war_sub_panel_frame, war_success, war_text, war_text_muted, war_warning,
 };
 use super::{HUD_MARGIN, HUD_TOP_HEIGHT, HUD_TOP_OFFSET, MAP_ZOOM_STEP};
 
@@ -1908,11 +1908,11 @@ pub(super) fn city_list(
         .cities
         .values()
         .map(|city| {
-            let faction_name = game
-                .factions
-                .get(&city.faction_id)
+            let faction = game.factions.get(&city.faction_id);
+            let faction_name = faction
                 .map(|faction| faction.name.clone())
                 .unwrap_or_else(|| t.text("unknown"));
+            let color = faction.map(faction_color).unwrap_or_else(war_border);
             (
                 city.id.clone(),
                 city.name.clone(),
@@ -1920,6 +1920,8 @@ pub(super) fn city_list(
                 city.gold,
                 city.food,
                 city.troops.total(),
+                color,
+                city.faction_id == game.player_faction_id,
             )
         })
         .collect();
@@ -1938,25 +1940,35 @@ pub(super) fn city_list(
                 .max_height(body_height)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    for (city_id, city_name, faction_name, gold, food, troops) in rows {
+                    for (
+                        city_id,
+                        city_name,
+                        faction_name,
+                        gold,
+                        food,
+                        troops,
+                        color,
+                        player_owned,
+                    ) in rows
+                    {
                         let selected =
                             ui_state.selected_city_id.as_deref() == Some(city_id.as_str());
-                        let label = format!(
-                            "{}\n{}  {}",
-                            city_name,
-                            faction_name,
-                            t.text_args(
-                                "city-list-row-resources",
-                                &args([
-                                    ("gold", gold.to_string()),
-                                    ("food", food.to_string()),
-                                    ("troops", troops.to_string()),
-                                ]),
-                            )
+                        let resources = t.text_args(
+                            "city-list-row-resources",
+                            &args([
+                                ("gold", gold.to_string()),
+                                ("food", food.to_string()),
+                                ("troops", troops.to_string()),
+                            ]),
                         );
-                        let response = ui.add_sized(
-                            [ui.available_width(), 56.0],
-                            egui::Button::selectable(selected, label),
+                        let response = city_list_row(
+                            ui,
+                            selected,
+                            &city_name,
+                            &faction_name,
+                            &resources,
+                            color,
+                            player_owned,
                         );
 
                         if response.clicked() {
@@ -1995,6 +2007,83 @@ pub(super) fn city_list(
             }
         });
     });
+}
+
+fn city_list_row(
+    ui: &mut egui::Ui,
+    selected: bool,
+    city_name: &str,
+    faction_name: &str,
+    resources: &str,
+    color: egui::Color32,
+    player_owned: bool,
+) -> egui::Response {
+    let row_size = egui::vec2(ui.available_width(), 64.0);
+    let (rect, response) = ui.allocate_exact_size(row_size, egui::Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return response;
+    }
+
+    let fill = if selected {
+        egui::Color32::from_rgba_unmultiplied(113, 80, 42, 220)
+    } else if response.hovered() {
+        egui::Color32::from_rgba_unmultiplied(52, 42, 29, 220)
+    } else {
+        egui::Color32::from_rgba_unmultiplied(24, 21, 16, 96)
+    };
+    let stroke = egui::Stroke::new(
+        if selected { 1.6 } else { 1.0 },
+        if selected {
+            war_gold()
+        } else {
+            color.gamma_multiply(0.65)
+        },
+    );
+
+    let painter = ui.painter().with_clip_rect(rect);
+    painter.rect(
+        rect.shrink(1.0),
+        5.0,
+        fill,
+        stroke,
+        egui::StrokeKind::Inside,
+    );
+
+    let icon_center = egui::pos2(rect.left() + 31.0, rect.center().y + 1.0);
+    draw_city_marker_icon(
+        &painter,
+        icon_center,
+        0.42,
+        0.42,
+        color,
+        selected,
+        player_owned,
+    );
+
+    let text_x = rect.left() + 62.0;
+    painter.text(
+        egui::pos2(text_x, rect.top() + 8.0),
+        egui::Align2::LEFT_TOP,
+        city_name,
+        egui::FontId::proportional(18.0),
+        if selected { war_gold() } else { war_text() },
+    );
+    painter.text(
+        egui::pos2(text_x, rect.top() + 31.0),
+        egui::Align2::LEFT_TOP,
+        faction_name,
+        egui::FontId::proportional(13.0),
+        war_text_muted(),
+    );
+    painter.text(
+        egui::pos2(text_x, rect.top() + 47.0),
+        egui::Align2::LEFT_TOP,
+        resources,
+        egui::FontId::proportional(12.0),
+        war_text_muted(),
+    );
+
+    response
 }
 
 pub(super) fn officer_browser_filters(

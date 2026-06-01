@@ -195,7 +195,7 @@ hud-collapse-technology = Hide Tech
 hud-technology = Tech
 game-status-victory = Victory: {$reason}
 game-status-defeat = Defeat: {$reason}
-command-tent-title = Command Tent
+command-tent-title = Council Hall
 report-title = Reports
 officer-browser-title = Officer Browser
 retainer-title = Retainer Posts
@@ -211,7 +211,7 @@ message-research-started = Started research on {$name} for {$gold} gold
 
 selected-city-none = No city selected
 selected-city-missing = Selected city was not found
-open-command-tent = Open Command Tent
+open-command-tent = Open Council Hall
 map-title = Map
 map-boundaries = Boundaries
 map-boundary-asset-missing = Boundary asset unavailable
