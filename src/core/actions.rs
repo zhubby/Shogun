@@ -42,6 +42,7 @@ pub(super) fn enter_game(ui_state: &mut GameUiState, game: GameState, message: S
     ui_state.technology_open = false;
     ui_state.events_open = false;
     ui_state.selected_event_id = None;
+    ui_state.officer_detail_id = None;
     ui_state.event_message.clear();
     ui_state.reports_open = true;
     ui_state.save_panel_open = false;

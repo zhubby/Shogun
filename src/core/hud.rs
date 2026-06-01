@@ -8,7 +8,9 @@ use super::actions::{
 use super::city_intel::city_summary_intel;
 use super::city_panel::selected_city_panel;
 use super::i18n::{Translator, args};
-use super::labels::{officer_gender_label, technology_branch_label};
+use super::labels::{
+    confidence_label, officer_gender_label, officer_relationship_label, technology_branch_label,
+};
 use super::map::{draw_city_marker_icon, faction_color, map_panel, reset_map_view, zoom_map};
 use super::state::{
     GameUiState, OfficerBrowserFilters, OfficerGenderFilter, OfficerStatusFilter, Screen, ShrineTab,
@@ -43,6 +45,7 @@ pub(super) fn in_game_hud(ctx: &egui::Context, ui_state: &mut GameUiState, t: &T
     officer_browser_hud(ctx, ui_state, t, screen);
     retainer_hud(ctx, ui_state, t, screen);
     shrine_hud(ctx, ui_state, t, screen);
+    officer_detail_modal(ctx, ui_state, t, screen);
     technology_hud(ctx, ui_state, t, screen);
     event_center_hud(ctx, ui_state, t, screen);
     event_popup_hud(ctx, ui_state, t, screen);
@@ -1419,7 +1422,7 @@ pub(super) fn officer_browser_hud(
                 }
                 ui.separator();
                 if let Some(game) = &ui_state.game {
-                    officer_browser_table(
+                    let response = officer_browser_table(
                         ui,
                         game,
                         &ui_state.officer_browser_filters,
@@ -1432,6 +1435,9 @@ pub(super) fn officer_browser_hud(
                         },
                         t,
                     );
+                    if let Some(officer_id) = response.view_officer_id {
+                        ui_state.officer_detail_id = Some(officer_id);
+                    }
                 }
             });
         });
@@ -1489,6 +1495,9 @@ pub(super) fn retainer_hud(
                     },
                     t,
                 );
+                if let Some(officer_id) = response.view_officer_id {
+                    ui_state.officer_detail_id = Some(officer_id);
+                }
 
                 if response.appoint_officer_id.is_some() || response.dismiss_officer_id.is_some() {
                     let Some(game) = ui_state.game.as_mut() else {
@@ -1545,6 +1554,457 @@ pub(super) fn retainer_hud(
                 }
             });
         });
+}
+
+pub(super) fn officer_detail_modal(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    screen: egui::Rect,
+) {
+    let close_requested = if let Some(game) = ui_state.game.as_ref() {
+        officer_detail_modal_for_game(ctx, ui_state.officer_detail_id.as_deref(), t, screen, game)
+    } else {
+        ui_state.officer_detail_id.is_some()
+    };
+    if close_requested {
+        ui_state.officer_detail_id = None;
+    }
+}
+
+pub(super) fn officer_detail_modal_for_game(
+    ctx: &egui::Context,
+    officer_detail_id: Option<&str>,
+    t: &Translator,
+    screen: egui::Rect,
+    game: &GameState,
+) -> bool {
+    let Some(officer_id) = officer_detail_id else {
+        return false;
+    };
+    let mut close_requested = false;
+
+    if !game.officers.contains_key(officer_id) {
+        return true;
+    } else {
+        let width = (screen.width() * 0.72).clamp(680.0, 920.0);
+        let height = (screen.height() * 0.76).clamp(440.0, 680.0);
+        egui::Area::new(egui::Id::new("officer_detail_modal"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+            .show(ctx, |ui| {
+                war_panel_frame().show(ui, |ui| {
+                    ui.set_width(width);
+                    ui.set_min_height(height);
+                    let Some(officer) = game.officers.get(officer_id) else {
+                        close_requested = true;
+                        return;
+                    };
+                    let title = t.text_args(
+                        "officer-detail-title",
+                        &args([("officer", officer.name.clone())]),
+                    );
+                    if modal_title_bar(ui, t, &title) {
+                        close_requested = true;
+                        return;
+                    }
+                    ui.separator();
+                    officer_detail_header(ui, game, officer, t);
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .id_salt(("officer_detail_body", &officer.id))
+                        .max_height(height - 126.0)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.columns(2, |columns| {
+                                columns[0].set_width((width * 0.36).max(260.0));
+                                officer_detail_status_section(&mut columns[0], game, officer, t);
+                                columns[0].add_space(8.0);
+                                officer_detail_stats_section(&mut columns[0], officer, t);
+
+                                officer_detail_relationship_section(
+                                    &mut columns[1],
+                                    game,
+                                    officer,
+                                    t,
+                                );
+                                columns[1].add_space(8.0);
+                                officer_detail_history_section(&mut columns[1], officer, t);
+                            });
+                        });
+                });
+            });
+    }
+    close_requested
+}
+
+fn officer_detail_header(ui: &mut egui::Ui, game: &GameState, officer: &Officer, t: &Translator) {
+    let profile = officer.profile.as_ref();
+    let courtesy = profile
+        .and_then(|profile| profile.courtesy_name.as_deref())
+        .map(str::to_string)
+        .unwrap_or_else(|| t.text("none"));
+    let native_place = profile
+        .and_then(|profile| profile.native_place.as_deref())
+        .map(str::to_string)
+        .unwrap_or_else(|| t.text("unknown"));
+    let life = officer_life_span(officer, t);
+    let faction = faction_name(game, &officer.faction_id);
+    let city = officer_city_detail_name(game, officer, t);
+
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            egui::RichText::new(&officer.name)
+                .size(24.0)
+                .color(war_gold())
+                .strong(),
+        );
+        ui.separator();
+        ui.label(t.text_args(
+            "officer-detail-header-courtesy",
+            &args([("courtesy", courtesy)]),
+        ));
+        ui.separator();
+        ui.label(t.text_args(
+            "officer-detail-header-origin",
+            &args([
+                ("gender", officer_gender_label(t, &officer.gender)),
+                ("native_place", native_place),
+                ("life", life),
+            ]),
+        ));
+        ui.separator();
+        ui.label(t.text_args(
+            "officer-detail-header-posting",
+            &args([("faction", faction), ("city", city)]),
+        ));
+    });
+}
+
+fn officer_detail_status_section(
+    ui: &mut egui::Ui,
+    game: &GameState,
+    officer: &Officer,
+    t: &Translator,
+) {
+    war_sub_panel_frame().show(ui, |ui| {
+        officer_detail_section_title(ui, &t.text("officer-detail-section-status"));
+        detail_kv(
+            ui,
+            &t.text("officer-column-status"),
+            officer_status_label(&officer.status, t),
+        );
+        detail_kv(
+            ui,
+            &t.text("officer-column-age"),
+            officer.age_at(game.year).to_string(),
+        );
+        detail_kv(
+            ui,
+            &t.text("officer-column-loyalty"),
+            officer.loyalty.to_string(),
+        );
+        detail_kv(
+            ui,
+            &t.text("officer-column-office"),
+            officer_office_detail_name(officer, t),
+        );
+        detail_kv(
+            ui,
+            &t.text("officer-column-salary"),
+            officer_monthly_salary(officer).to_string(),
+        );
+        if let Some(profile) = &officer.profile {
+            detail_kv(
+                ui,
+                &t.text("officer-detail-confidence"),
+                confidence_label(t, &profile.confidence),
+            );
+        } else {
+            detail_kv(ui, &t.text("officer-detail-confidence"), t.text("unknown"));
+        }
+    });
+}
+
+fn officer_detail_stats_section(ui: &mut egui::Ui, officer: &Officer, t: &Translator) {
+    war_sub_panel_frame().show(ui, |ui| {
+        officer_detail_section_title(ui, &t.text("officer-detail-section-stats"));
+        ability_bar(ui, t.text("stat-leadership"), officer.stats.leadership);
+        ability_bar(ui, t.text("stat-strength"), officer.stats.strength);
+        ability_bar(ui, t.text("stat-intelligence"), officer.stats.intelligence);
+        ability_bar(ui, t.text("stat-politics"), officer.stats.politics);
+        ability_bar(ui, t.text("stat-charm"), officer.stats.charm);
+    });
+}
+
+fn officer_detail_relationship_section(
+    ui: &mut egui::Ui,
+    game: &GameState,
+    officer: &Officer,
+    t: &Translator,
+) {
+    war_sub_panel_frame().show(ui, |ui| {
+        officer_detail_section_title(ui, &t.text("officer-detail-section-relationships"));
+        let mut has_relationships = false;
+        if let Some(profile) = &officer.profile {
+            for relationship in &profile.relationships {
+                has_relationships = true;
+                ui.label(static_relationship_line(relationship, t));
+            }
+        }
+        for line in dynamic_relationship_lines(game, officer, t) {
+            has_relationships = true;
+            ui.label(line);
+        }
+        if !has_relationships {
+            ui.colored_label(war_text_muted(), t.text("officer-detail-no-relationships"));
+        }
+    });
+}
+
+fn officer_detail_history_section(ui: &mut egui::Ui, officer: &Officer, t: &Translator) {
+    war_sub_panel_frame().show(ui, |ui| {
+        officer_detail_section_title(ui, &t.text("officer-detail-section-history"));
+        if let Some(profile) = &officer.profile {
+            if !profile.tags.is_empty() {
+                detail_kv(ui, &t.text("officer-detail-tags"), profile.tags.join(", "));
+            }
+            if !profile.biography.is_empty() {
+                ui.label(egui::RichText::new(t.text("officer-biography")).color(war_text_muted()));
+                egui::ScrollArea::vertical()
+                    .id_salt(("officer_detail_bio", &profile.id))
+                    .max_height(160.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.label(&profile.biography);
+                    });
+            }
+            if !profile.notes.is_empty() {
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(t.text("officer-detail-notes")).color(war_text_muted()),
+                );
+                ui.label(&profile.notes);
+            }
+            if profile.tags.is_empty() && profile.biography.is_empty() && profile.notes.is_empty() {
+                ui.colored_label(war_text_muted(), t.text("officer-detail-no-history"));
+            }
+        } else {
+            ui.colored_label(war_text_muted(), t.text("officer-detail-no-history"));
+        }
+    });
+}
+
+fn officer_detail_section_title(ui: &mut egui::Ui, title: &str) {
+    ui.label(egui::RichText::new(title).color(war_gold()).strong());
+    ui.add_space(4.0);
+}
+
+fn detail_kv(ui: &mut egui::Ui, key: &str, value: String) {
+    ui.horizontal_wrapped(|ui| {
+        ui.add_sized(
+            [88.0, 20.0],
+            egui::Label::new(egui::RichText::new(key).color(war_text_muted())),
+        );
+        ui.label(value);
+    });
+}
+
+fn ability_bar(ui: &mut egui::Ui, label: String, value: u8) {
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [54.0, 18.0],
+            egui::Label::new(egui::RichText::new(label).color(war_text_muted())),
+        );
+        ui.add_sized(
+            [132.0, 14.0],
+            egui::ProgressBar::new(f32::from(value) / 100.0)
+                .fill(ability_color(value))
+                .text(value.to_string()),
+        );
+    });
+}
+
+fn ability_color(value: u8) -> egui::Color32 {
+    match value {
+        85..=u8::MAX => war_success(),
+        65..=84 => war_gold(),
+        45..=64 => war_warning(),
+        _ => war_danger(),
+    }
+}
+
+fn officer_life_span(officer: &Officer, t: &Translator) -> String {
+    let profile = officer.profile.as_ref();
+    let birth = profile
+        .and_then(|profile| profile.birth_year)
+        .or((officer.birth_year != 0).then_some(officer.birth_year))
+        .map(|year| year.to_string())
+        .unwrap_or_else(|| t.text("unknown"));
+    let death = profile
+        .and_then(|profile| profile.death_year)
+        .map(|year| year.to_string())
+        .unwrap_or_else(|| t.text("unknown"));
+    format!("{birth}-{death}")
+}
+
+fn officer_city_detail_name(game: &GameState, officer: &Officer, t: &Translator) -> String {
+    officer
+        .city_id
+        .as_deref()
+        .and_then(|city_id| game.cities.get(city_id))
+        .map(|city| city.name.clone())
+        .unwrap_or_else(|| t.text("officer-city-unassigned"))
+}
+
+fn officer_office_detail_name(officer: &Officer, t: &Translator) -> String {
+    officer
+        .office_id
+        .as_deref()
+        .and_then(official_post_spec)
+        .map(|spec| {
+            t.text_args(
+                "officer-detail-office-ranked",
+                &args([
+                    ("office", spec.name.to_string()),
+                    ("rank", official_rank_label(spec.rank).to_string()),
+                ]),
+            )
+        })
+        .unwrap_or_else(|| t.text("none"))
+}
+
+fn static_relationship_line(relationship: &OfficerRelationship, t: &Translator) -> String {
+    let mut extras = Vec::new();
+    extras.push(t.text_args(
+        "officer-detail-relation-confidence",
+        &args([("confidence", confidence_label(t, &relationship.confidence))]),
+    ));
+    if !relationship.source.trim().is_empty() {
+        extras.push(t.text_args(
+            "officer-detail-relation-source",
+            &args([("source", relationship.source.clone())]),
+        ));
+    }
+    if !relationship.notes.trim().is_empty() {
+        extras.push(t.text_args(
+            "officer-detail-relation-notes",
+            &args([("notes", relationship.notes.clone())]),
+        ));
+    }
+    t.text_args(
+        "officer-detail-static-relation",
+        &args([
+            ("kind", officer_relationship_label(t, &relationship.kind)),
+            ("target", relationship.target_name.clone()),
+            ("meta", extras.join(" | ")),
+        ]),
+    )
+}
+
+fn dynamic_relationship_lines(game: &GameState, officer: &Officer, t: &Translator) -> Vec<String> {
+    let mut lines = Vec::new();
+    lines.extend(dynamic_role_lines(game, officer, t));
+    lines.extend(dynamic_marriage_lines(game, officer, t));
+    lines.extend(dynamic_family_lines(game, officer, t));
+    lines
+}
+
+fn dynamic_role_lines(game: &GameState, officer: &Officer, t: &Translator) -> Vec<String> {
+    let mut lines = Vec::new();
+    for faction in game.factions.values() {
+        if faction.ruler_id == officer.id {
+            lines.push(t.text_args(
+                "officer-detail-dynamic-ruler",
+                &args([("faction", faction.name.clone())]),
+            ));
+        }
+        if faction.heir_id.as_deref() == Some(officer.id.as_str()) {
+            lines.push(t.text_args(
+                "officer-detail-dynamic-heir",
+                &args([("faction", faction.name.clone())]),
+            ));
+        }
+    }
+    for city in game.cities.values() {
+        if city.governor_id.as_deref() == Some(officer.id.as_str()) {
+            lines.push(t.text_args(
+                "officer-detail-dynamic-governor",
+                &args([("city", city.name.clone())]),
+            ));
+        }
+    }
+    lines
+}
+
+fn dynamic_marriage_lines(game: &GameState, officer: &Officer, t: &Translator) -> Vec<String> {
+    game.marriages
+        .iter()
+        .filter(|marriage| marriage.involves(&officer.id))
+        .map(|marriage| {
+            let spouse_id = if marriage.husband_id == officer.id {
+                &marriage.wife_id
+            } else {
+                &marriage.husband_id
+            };
+            t.text_args(
+                "officer-detail-dynamic-spouse",
+                &args([
+                    ("officer", officer_display_name(game, spouse_id)),
+                    ("year", marriage.year.to_string()),
+                    ("month", marriage.month.to_string()),
+                ]),
+            )
+        })
+        .collect()
+}
+
+fn dynamic_family_lines(game: &GameState, officer: &Officer, t: &Translator) -> Vec<String> {
+    let parents = game
+        .family_relationships
+        .iter()
+        .filter(|relationship| relationship.child_id == officer.id)
+        .map(|relationship| officer_display_name(game, &relationship.parent_id))
+        .collect::<Vec<_>>();
+    let children = game
+        .family_relationships
+        .iter()
+        .filter(|relationship| relationship.parent_id == officer.id)
+        .map(|relationship| officer_display_name(game, &relationship.child_id))
+        .collect::<Vec<_>>();
+
+    let mut lines = Vec::new();
+    if !parents.is_empty() {
+        lines.push(t.text_args(
+            "officer-detail-dynamic-parents",
+            &args([("officers", relationship_names(parents, t))]),
+        ));
+    }
+    if !children.is_empty() {
+        lines.push(t.text_args(
+            "officer-detail-dynamic-children",
+            &args([("officers", relationship_names(children, t))]),
+        ));
+    }
+    lines
+}
+
+fn relationship_names(names: Vec<String>, t: &Translator) -> String {
+    names.join(&t.text("list-separator"))
+}
+
+fn officer_display_name(game: &GameState, officer_id: &str) -> String {
+    game.officers
+        .get(officer_id)
+        .map(|officer| officer.name.clone())
+        .unwrap_or_else(|| officer_id.to_string())
+}
+
+fn faction_name(game: &GameState, faction_id: &str) -> String {
+    game.factions
+        .get(faction_id)
+        .map(|faction| faction.name.clone())
+        .unwrap_or_else(|| faction_id.to_string())
 }
 
 pub(super) fn shrine_hud(
@@ -2222,10 +2682,11 @@ pub(super) fn officer_browser_table(
         .show(ui, |ui| {
             egui::Grid::new((options.id_salt, "grid"))
                 .striped(true)
-                .num_columns(14)
+                .num_columns(15)
                 .min_col_width(42.0)
                 .spacing(egui::vec2(12.0, 6.0))
                 .show(ui, |ui| {
+                    ui.strong(t.text("officer-column-tools"));
                     ui.strong(t.text("officer-column-name"));
                     ui.strong(t.text("officer-column-gender"));
                     ui.strong(t.text("officer-column-age"));
@@ -2252,6 +2713,7 @@ pub(super) fn officer_browser_table(
                             retainer_faction_id: options.retainer_faction_id,
                             t,
                         };
+                        officer_row_tools(&mut cell_context, &row);
                         officer_row_cell(&mut cell_context, &row, selected, &row.name);
                         officer_row_cell(&mut cell_context, &row, selected, &row.gender);
                         officer_row_cell(&mut cell_context, &row, selected, row.age.to_string());
@@ -2330,10 +2792,29 @@ pub(super) struct OfficerBrowserRow {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct OfficerBrowserTableResponse {
     pub(super) selected_officer_id: Option<OfficerId>,
+    pub(super) view_officer_id: Option<OfficerId>,
     pub(super) edit_officer_id: Option<OfficerId>,
     pub(super) appoint_officer_id: Option<OfficerId>,
     pub(super) appoint_office_id: Option<OfficialPostId>,
     pub(super) dismiss_officer_id: Option<OfficerId>,
+}
+
+fn officer_row_tools(context: &mut OfficerRowCellContext<'_, '_>, row: &OfficerBrowserRow) {
+    let response = context
+        .ui
+        .add_sized(
+            [28.0, 24.0],
+            egui::Button::new(
+                egui::RichText::new(egui_phosphor::regular::EYE)
+                    .size(16.0)
+                    .color(war_gold()),
+            ),
+        )
+        .on_hover_text(context.t.text("officer-action-view"));
+    if response.clicked() {
+        context.table_response.selected_officer_id = Some(row.id.clone());
+        context.table_response.view_officer_id = Some(row.id.clone());
+    }
 }
 
 fn officer_row_cell(
@@ -2713,7 +3194,9 @@ mod tests {
     use crate::core::i18n::{Translator, UiLanguage};
     use crate::core::settings::{GameSettings, GameSettingsStore, LoadedGameSettings};
     use crate::core::state::{GameUiState, OfficerGenderFilter, OfficerStatusFilter};
-    use crate::game::{OfficerGender, OfficerStatus, SqliteHistoricalCatalog};
+    use crate::game::{
+        FamilyRelationship, Marriage, OfficerGender, OfficerStatus, SqliteHistoricalCatalog,
+    };
 
     fn ui_state_with_game() -> GameUiState {
         let mut state = GameUiState::new(
@@ -2885,5 +3368,55 @@ mod tests {
         );
         assert!(rows.iter().all(|row| row.id != "cao_cao"));
         assert!(rows.iter().all(|row| row.id != "jian_yong"));
+    }
+
+    #[test]
+    fn dynamic_relationship_lines_include_current_game_relationships() {
+        let mut state = ui_state_with_game();
+        {
+            let game = state.game.as_mut().unwrap();
+            game.factions.get_mut("liu_bei").unwrap().heir_id = Some("guan_yu".to_string());
+            game.cities.get_mut("pingyuan").unwrap().governor_id = Some("liu_bei".to_string());
+            game.marriages.push(Marriage::new(
+                "liu_bei".to_string(),
+                "zhang_fei".to_string(),
+                200,
+                1,
+            ));
+            game.family_relationships.push(FamilyRelationship {
+                parent_id: "liu_bei".to_string(),
+                child_id: "zhao_yun".to_string(),
+            });
+            game.family_relationships.push(FamilyRelationship {
+                parent_id: "guan_yu".to_string(),
+                child_id: "zhao_yun".to_string(),
+            });
+        }
+        let t = zh();
+        let game = state.game.as_ref().unwrap();
+
+        let liu_bei_lines = dynamic_relationship_lines(game, &game.officers["liu_bei"], &t);
+        assert!(
+            liu_bei_lines
+                .iter()
+                .any(|line| line.contains("刘备军 君主"))
+        );
+        assert!(liu_bei_lines.iter().any(|line| line.contains("平原 太守")));
+        assert!(liu_bei_lines.iter().any(|line| line.contains("配偶: 张飞")));
+        assert!(liu_bei_lines.iter().any(|line| line.contains("子女: 赵云")));
+
+        let guan_yu_lines = dynamic_relationship_lines(game, &game.officers["guan_yu"], &t);
+        assert!(
+            guan_yu_lines
+                .iter()
+                .any(|line| line.contains("刘备军 继承人"))
+        );
+
+        let zhao_yun_lines = dynamic_relationship_lines(game, &game.officers["zhao_yun"], &t);
+        assert!(
+            zhao_yun_lines
+                .iter()
+                .any(|line| line.contains("父母: 刘备、关羽"))
+        );
     }
 }

@@ -15,7 +15,10 @@ use crate::game::{
 
 use super::HUD_MARGIN;
 use super::actions::{enter_game, refresh_saves, start_history_game};
-use super::hud::{OfficerBrowserTableOptions, officer_browser_filters, officer_browser_table};
+use super::hud::{
+    OfficerBrowserTableOptions, officer_browser_filters, officer_browser_table,
+    officer_detail_modal_for_game,
+};
 use super::i18n::{Translator, args};
 use super::labels::{confidence_label, officer_gender_label};
 use super::portraits::{
@@ -133,6 +136,27 @@ pub(super) fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) -> Main
     }
     if ui_state.officer_edit_open {
         officer_profile_edit_modal(ctx, ui_state, &t);
+    }
+    let screen = ctx.content_rect();
+    if ui_state.officer_settings_open {
+        let close_detail = ui_state
+            .officer_settings_game
+            .as_ref()
+            .map(|game| {
+                officer_detail_modal_for_game(
+                    ctx,
+                    ui_state.officer_detail_id.as_deref(),
+                    &t,
+                    screen,
+                    game,
+                )
+            })
+            .unwrap_or_else(|| ui_state.officer_detail_id.is_some());
+        if close_detail {
+            ui_state.officer_detail_id = None;
+        }
+    } else {
+        ui_state.officer_detail_id = None;
     }
     action
 }
@@ -1258,6 +1282,7 @@ pub(super) fn officer_settings_modal(
                 ui.set_min_height(height);
                 if modal_title_bar(ui, t, &t.text("officer-settings-title")) {
                     ui_state.officer_settings_open = false;
+                    ui_state.officer_detail_id = None;
                 }
                 ui.separator();
                 if let Some(game) = &ui_state.officer_settings_game {
@@ -1287,6 +1312,9 @@ pub(super) fn officer_settings_modal(
                     );
                     if let Some(officer_id) = response.selected_officer_id {
                         ui_state.officer_settings_selected_id = Some(officer_id);
+                    }
+                    if let Some(officer_id) = response.view_officer_id {
+                        ui_state.officer_detail_id = Some(officer_id);
                     }
                     if let Some(officer_id) = response.edit_officer_id {
                         open_officer_profile_editor(ui_state, &officer_id);
