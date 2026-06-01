@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use super::asset_path;
 use super::i18n::{Translator, args};
 use super::map::MapBoundaryViewCache;
+use super::portraits::OfficerPortraitStore;
 use super::settings::{GameSettings, GameSettingsStore, LoadedGameSettings};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,6 +64,7 @@ pub(super) struct GameUiState {
     pub(super) officer_edit_open: bool,
     pub(super) officer_edit_draft: Option<OfficerEditDraft>,
     pub(super) officer_edit_error: Option<String>,
+    pub(super) officer_portraits: OfficerPortraitStore,
     pub(super) game: Option<GameState>,
     pub(super) selected_faction_id: FactionId,
     pub(super) selected_city_id: Option<CityId>,
@@ -199,6 +201,7 @@ impl GameUiState {
             officer_edit_open: false,
             officer_edit_draft: None,
             officer_edit_error: None,
+            officer_portraits: OfficerPortraitStore::default(),
             game: None,
             selected_faction_id,
             selected_city_id: None,

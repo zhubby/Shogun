@@ -18,13 +18,17 @@ use super::actions::{enter_game, refresh_saves, start_history_game};
 use super::hud::{OfficerBrowserTableOptions, officer_browser_filters, officer_browser_table};
 use super::i18n::{Translator, args};
 use super::labels::{confidence_label, officer_gender_label};
+use super::portraits::{
+    OfficerPortraitTaskState, OfficerPortraitTextureView, officer_portrait_path,
+};
 use super::settings::{refresh_audio_output_devices, settings_modal};
 use super::state::{
     GameUiState, MenuBannerLogo, MenuCloudPattern, MenuIllustration, OfficerEditDraft,
     refresh_history_factions, refresh_history_menu,
 };
 use super::style::{
-    modal_title_bar, war_gold, war_panel_frame, war_sub_panel_frame, war_text_muted, war_warning,
+    modal_title_bar, war_border, war_danger, war_gold, war_panel_frame, war_sub_panel_frame,
+    war_success, war_text_muted, war_warning,
 };
 
 #[cfg(test)]
@@ -57,6 +61,10 @@ const MAIN_MENU_BUTTON_HEIGHT: f32 = 36.0;
 const MAIN_MENU_BUTTON_SPACING: f32 = 7.0;
 const MAIN_MENU_BGM_BUTTON_SIZE: f32 = 36.0;
 const MAIN_MENU_BGM_BUTTON_MARGIN: f32 = 12.0;
+const OFFICER_PORTRAIT_PANEL_WIDTH: f32 = 236.0;
+const OFFICER_PORTRAIT_GAP: f32 = 14.0;
+const OFFICER_PORTRAIT_ASPECT_WIDTH: f32 = 3.0;
+const OFFICER_PORTRAIT_ASPECT_HEIGHT: f32 = 4.0;
 
 #[derive(AssetCollection, Resource)]
 pub(super) struct MainMenuAssets {
@@ -100,6 +108,7 @@ pub(super) enum MainMenuAction {
 }
 
 pub(super) fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) -> MainMenuAction {
+    ui_state.officer_portraits.poll_task_events();
     let t = Translator::new(ui_state.applied_settings.general.ui_language);
     let mut action = MainMenuAction::None;
     egui::CentralPanel::default()
@@ -1316,7 +1325,7 @@ fn open_officer_profile_editor(ui_state: &mut GameUiState, officer_id: &str) {
 
 fn officer_profile_edit_modal(ctx: &egui::Context, ui_state: &mut GameUiState, t: &Translator) {
     let screen = ctx.content_rect();
-    let width = (screen.width() * 0.72).clamp(620.0, 900.0);
+    let width = (screen.width() * 0.72).clamp(760.0, 900.0);
     let height = (screen.height() * 0.78).clamp(460.0, 720.0);
     egui::Area::new(egui::Id::new("officer_profile_edit_modal"))
         .order(egui::Order::Foreground)
@@ -1330,13 +1339,32 @@ fn officer_profile_edit_modal(ctx: &egui::Context, ui_state: &mut GameUiState, t
                 }
                 ui.separator();
                 if ui_state.officer_edit_draft.is_some() {
-                    egui::ScrollArea::vertical()
-                        .id_salt("officer_profile_edit_scroll")
-                        .max_height(height - 116.0)
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
-                            officer_profile_edit_form(ui, ui_state, t);
+                    let content_height = height - 116.0;
+                    ui.horizontal_top(|ui| {
+                        let form_width =
+                            (width - OFFICER_PORTRAIT_PANEL_WIDTH - OFFICER_PORTRAIT_GAP)
+                                .max(420.0);
+                        ui.vertical(|ui| {
+                            ui.set_width(form_width);
+                            egui::ScrollArea::vertical()
+                                .id_salt("officer_profile_edit_scroll")
+                                .max_height(content_height)
+                                .auto_shrink([false, false])
+                                .show(ui, |ui| {
+                                    ui.set_width(form_width);
+                                    officer_profile_edit_form(ui, ui_state, t);
+                                });
                         });
+                        ui.add_space(OFFICER_PORTRAIT_GAP);
+                        officer_profile_portrait_panel(
+                            ctx,
+                            ui,
+                            ui_state,
+                            t,
+                            OFFICER_PORTRAIT_PANEL_WIDTH,
+                            content_height,
+                        );
+                    });
                     ui.separator();
                     ui.horizontal(|ui| {
                         if ui
@@ -1455,6 +1483,181 @@ fn officer_profile_edit_form(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &
     if let Some(error) = &ui_state.officer_edit_error {
         ui.add_space(8.0);
         ui.colored_label(egui::Color32::from_rgb(220, 92, 72), error);
+    }
+}
+
+fn officer_profile_portrait_panel(
+    ctx: &egui::Context,
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    width: f32,
+    max_height: f32,
+) {
+    let Some(draft) = ui_state.officer_edit_draft.clone() else {
+        return;
+    };
+    let path = officer_portrait_path(&draft.id);
+    let has_portrait = path.as_ref().is_ok_and(|path| path.is_file());
+    let task_state = ui_state.officer_portraits.task_state(&draft.id);
+    let generating = matches!(task_state, OfficerPortraitTaskState::Generating);
+    let mut load_error = None;
+    let texture = match &path {
+        Ok(path) => match ui_state.officer_portraits.texture_for(ctx, &draft.id, path) {
+            Ok(texture) => texture,
+            Err(error) => {
+                load_error = Some(error);
+                None
+            }
+        },
+        Err(error) => {
+            load_error = Some(error.clone());
+            None
+        }
+    };
+
+    ui.allocate_ui_with_layout(
+        egui::vec2(width, max_height),
+        egui::Layout::top_down(egui::Align::Center),
+        |ui| {
+            ui.set_width(width);
+            war_sub_panel_frame().show(ui, |ui| {
+                ui.set_width((width - 20.0).max(0.0));
+                ui.label(
+                    egui::RichText::new(t.text("officer-portrait-title"))
+                        .strong()
+                        .color(war_gold()),
+                );
+                ui.add_space(4.0);
+
+                let preview_width = ui.available_width().min(width - 20.0).max(0.0);
+                let preview_height =
+                    preview_width * OFFICER_PORTRAIT_ASPECT_HEIGHT / OFFICER_PORTRAIT_ASPECT_WIDTH;
+                let preview_size = egui::vec2(preview_width, preview_height);
+                let (rect, _) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
+                paint_officer_portrait_preview(ui, rect, texture, generating, t);
+
+                ui.add_space(8.0);
+                officer_portrait_status_line(
+                    ui,
+                    t,
+                    &task_state,
+                    has_portrait,
+                    load_error.as_deref(),
+                );
+                ui.add_space(6.0);
+
+                let button_text = if generating {
+                    t.text("officer-portrait-generating")
+                } else if has_portrait {
+                    t.text("officer-portrait-regenerate")
+                } else {
+                    t.text("officer-portrait-generate")
+                };
+                let clicked = ui
+                    .add_enabled(
+                        !generating,
+                        egui::Button::new(button_text).min_size(egui::vec2(preview_width, 34.0)),
+                    )
+                    .clicked();
+                if clicked {
+                    ui_state.officer_edit_error = None;
+                    ui_state.officer_portraits.start_generation(
+                        draft,
+                        ui_state.applied_settings.ai.multimodal.api_key.clone(),
+                        ui_state.applied_settings.ai.multimodal.model_name.clone(),
+                        t.text("officer-portrait-api-key-required"),
+                    );
+                }
+            });
+        },
+    );
+}
+
+fn paint_officer_portrait_preview(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    texture: Option<OfficerPortraitTextureView>,
+    generating: bool,
+    t: &Translator,
+) {
+    let painter = ui.painter();
+    painter.rect_filled(
+        rect,
+        4.0,
+        egui::Color32::from_rgba_unmultiplied(13, 12, 10, 225),
+    );
+    painter.rect_stroke(
+        rect,
+        4.0,
+        egui::Stroke::new(1.0, war_border()),
+        egui::StrokeKind::Inside,
+    );
+
+    if let Some(texture) = texture {
+        let image_size =
+            fit_contained_size(texture.image_size, rect.size() - egui::vec2(12.0, 12.0));
+        let image_rect = egui::Align2::CENTER_CENTER.align_size_within_rect(image_size, rect);
+        painter.image(
+            texture.texture_id,
+            image_rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    } else {
+        let text = if generating {
+            t.text("officer-portrait-generating")
+        } else {
+            t.text("officer-portrait-empty")
+        };
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            text,
+            egui::FontId::proportional(15.0),
+            war_text_muted(),
+        );
+    }
+}
+
+fn officer_portrait_status_line(
+    ui: &mut egui::Ui,
+    t: &Translator,
+    task_state: &OfficerPortraitTaskState,
+    has_portrait: bool,
+    load_error: Option<&str>,
+) {
+    if let Some(error) = load_error {
+        ui.colored_label(
+            war_danger(),
+            t.text_args(
+                "officer-portrait-load-failed",
+                &args([("error", error.to_string())]),
+            ),
+        );
+        return;
+    }
+
+    match task_state {
+        OfficerPortraitTaskState::Idle => {
+            if has_portrait {
+                ui.colored_label(war_success(), t.text("officer-portrait-generated"));
+            } else {
+                ui.colored_label(war_text_muted(), t.text("officer-portrait-ready"));
+            }
+        }
+        OfficerPortraitTaskState::Generating => {
+            ui.colored_label(war_warning(), t.text("officer-portrait-generating"));
+        }
+        OfficerPortraitTaskState::Succeeded { .. } => {
+            ui.colored_label(war_success(), t.text("officer-portrait-generated"));
+        }
+        OfficerPortraitTaskState::Failed(error) => {
+            ui.colored_label(
+                war_danger(),
+                t.text_args("officer-portrait-failed", &args([("error", error.clone())])),
+            );
+        }
     }
 }
 

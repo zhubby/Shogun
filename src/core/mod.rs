@@ -8,6 +8,7 @@ mod i18n;
 mod labels;
 mod map;
 mod menu;
+mod portraits;
 mod settings;
 mod state;
 mod style;

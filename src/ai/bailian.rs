@@ -218,7 +218,7 @@ impl Default for BailianWaitOptions {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BailianImageGenerationRequest {
-    pub model: BailianImageModel,
+    pub model: String,
     pub input: BailianImageInput,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parameters: Option<BailianImageParameters>,
@@ -227,9 +227,9 @@ pub struct BailianImageGenerationRequest {
 }
 
 impl BailianImageGenerationRequest {
-    pub fn text_to_image(model: BailianImageModel, prompt: impl Into<String>) -> Self {
+    pub fn text_to_image(model: impl Into<String>, prompt: impl Into<String>) -> Self {
         Self {
-            model,
+            model: model.into(),
             input: BailianImageInput {
                 messages: vec![BailianImageMessage::user(vec![
                     BailianImageContentPart::text(prompt),
@@ -284,6 +284,21 @@ pub enum BailianImageModel {
     Wan27ImagePro,
     #[serde(rename = "wan2.7-image")]
     Wan27Image,
+}
+
+impl BailianImageModel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Wan27ImagePro => "wan2.7-image-pro",
+            Self::Wan27Image => "wan2.7-image",
+        }
+    }
+}
+
+impl From<BailianImageModel> for String {
+    fn from(model: BailianImageModel) -> Self {
+        model.as_str().to_string()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -595,7 +610,7 @@ mod tests {
     #[test]
     fn image_edit_request_supports_multiple_input_images() {
         let request = BailianImageGenerationRequest {
-            model: BailianImageModel::Wan27ImagePro,
+            model: BailianImageModel::Wan27ImagePro.into(),
             input: BailianImageInput {
                 messages: vec![BailianImageMessage::user(vec![
                     BailianImageContentPart::image("https://example.test/car.webp"),
@@ -636,7 +651,7 @@ mod tests {
     #[test]
     fn interactive_bbox_request_validates_against_image_count() {
         let mut request = BailianImageGenerationRequest {
-            model: BailianImageModel::Wan27ImagePro,
+            model: BailianImageModel::Wan27ImagePro.into(),
             input: BailianImageInput {
                 messages: vec![BailianImageMessage::user(vec![
                     BailianImageContentPart::image("https://example.test/a.png"),
@@ -665,7 +680,7 @@ mod tests {
     #[test]
     fn sequential_generation_allows_up_to_twelve_images() {
         let request = BailianImageGenerationRequest {
-            model: BailianImageModel::Wan27ImagePro,
+            model: BailianImageModel::Wan27ImagePro.into(),
             input: BailianImageInput {
                 messages: vec![BailianImageMessage::user(vec![
                     BailianImageContentPart::text("四季组图"),
