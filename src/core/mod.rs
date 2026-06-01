@@ -8,6 +8,7 @@ mod i18n;
 mod labels;
 mod map;
 mod menu;
+mod officer_portrait_ui;
 mod portraits;
 mod runtime;
 mod settings;
@@ -220,7 +221,7 @@ fn game_ui_system(
                 app_exit_writer.write(AppExit::Success);
             }
         },
-        Screen::InGame => in_game(ctx, &mut ui_state),
+        Screen::InGame => in_game(ctx, &mut ui_state, async_runtime.as_ref()),
     }
 
     if ui_state.settings_open && settings_modal(ctx, &mut ui_state) {

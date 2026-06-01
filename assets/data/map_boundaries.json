@@ -2210,7 +2210,6 @@
       "confidence": "Medium",
       "source": "CHGIS-inspired hand approximation",
       "city_ids": [
-        "xuchang",
         "yingchuan"
       ],
       "points": [
@@ -2218,6 +2217,33 @@
           -180,
           -205
         ],
+        [
+          -125,
+          -125
+        ],
+        [
+          -112,
+          -172
+        ],
+        [
+          -105,
+          -220
+        ]
+      ]
+    },
+    {
+      "id": "commandery_xuchang",
+      "name": "许昌",
+      "level": "commandery",
+      "parent_id": "province_yuzhou",
+      "valid_from_year": 184,
+      "valid_to_year": 280,
+      "confidence": "Medium",
+      "source": "CHGIS-inspired hand approximation",
+      "city_ids": [
+        "xuchang"
+      ],
+      "points": [
         [
           -125,
           -125
@@ -2233,6 +2259,10 @@
         [
           -105,
           -220
+        ],
+        [
+          -112,
+          -172
         ]
       ]
     },

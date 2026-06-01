@@ -65,7 +65,10 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
 
     runtime().block_on(async {
         let pool = open_pool(&path).await;
-        assert_eq!(applied_sqlx_migration_versions(&pool).await, [1, 2, 3, 4]);
+        assert_eq!(
+            applied_sqlx_migration_versions(&pool).await,
+            [1, 2, 3, 4, 5]
+        );
 
         let fk_rows = sqlx::query("PRAGMA foreign_key_check")
             .fetch_all(&pool)
@@ -260,7 +263,10 @@ fn open_or_create_creates_database_and_runs_initial_migration() {
     assert_eq!(catalog.scenarios().unwrap().len(), 4);
     runtime().block_on(async {
         let pool = open_pool(&path).await;
-        assert_eq!(applied_sqlx_migration_versions(&pool).await, [1, 2, 3, 4]);
+        assert_eq!(
+            applied_sqlx_migration_versions(&pool).await,
+            [1, 2, 3, 4, 5]
+        );
         pool.close().await;
     });
 }
@@ -272,9 +278,12 @@ fn historical_road_network_matches_map_revisions() {
 
     assert!(game.cities["pingyuan"].position.x > game.cities["shangdang"].position.x);
     assert!(game.are_adjacent("shangdang", "jinyang"));
+    assert!(game.are_adjacent("pingyuan", "shangdang"));
+    assert!(game.are_adjacent("pingyuan", "ye"));
     assert!(!game.are_adjacent("pingyuan", "ganling"));
     assert!(!game.are_adjacent("zhongshan", "ganling"));
     assert!(game.are_adjacent("zhongshan", "ye"));
+    assert!(game.are_adjacent("yingchuan", "luoyang"));
     assert!(game.are_adjacent("yuzhang", "danyang"));
     assert!(!game.are_adjacent("yuzhang", "jianye"));
     assert!(game.are_adjacent("lingling", "cangwu"));

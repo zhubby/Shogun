@@ -519,8 +519,8 @@ pub(super) fn selected_city_in_cell_id(
 }
 
 pub(super) fn city_matches_cell(cell: &TerritoryCell, city: &City) -> bool {
-    if cell.city_ids.iter().any(|city_id| city_id == &city.id) {
-        return true;
+    if !cell.city_ids.is_empty() {
+        return cell.city_ids.iter().any(|city_id| city_id == &city.id);
     }
 
     let Some(profile) = &city.profile else {
@@ -1054,5 +1054,75 @@ mod tests {
         assert_eq!(limits.max.x, 90.0);
         assert_eq!(limits.min.y, -80.0);
         assert_eq!(limits.max.y, 110.0);
+    }
+
+    #[test]
+    fn explicit_cell_city_ids_do_not_match_other_cities_in_same_commandery() {
+        let cell = test_cell("颍川郡", &["yingchuan"]);
+        let xuchang = test_city("xuchang", "颍川郡");
+
+        assert!(!city_matches_cell(&cell, &xuchang));
+    }
+
+    #[test]
+    fn cells_without_city_ids_fall_back_to_commandery_name() {
+        let cell = test_cell("颍川郡", &[]);
+        let xuchang = test_city("xuchang", "颍川郡");
+
+        assert!(city_matches_cell(&cell, &xuchang));
+    }
+
+    fn test_cell(name: &str, city_ids: &[&str]) -> TerritoryCell {
+        TerritoryCell {
+            boundary_id: format!("boundary_{name}"),
+            name: name.to_string(),
+            parent_id: Some("province_yuzhou".to_string()),
+            city_ids: city_ids.iter().map(|city_id| city_id.to_string()).collect(),
+            seed: MapPosition { x: 0.0, y: 0.0 },
+            points: vec![
+                MapPosition { x: 0.0, y: 0.0 },
+                MapPosition { x: 1.0, y: 0.0 },
+                MapPosition { x: 0.0, y: 1.0 },
+            ],
+        }
+    }
+
+    fn test_city(id: &str, commandery: &str) -> City {
+        City {
+            id: id.to_string(),
+            name: id.to_string(),
+            faction_id: "cao_cao".to_string(),
+            position: MapPosition { x: 0.0, y: 0.0 },
+            level: 1,
+            population: 1,
+            gold: 0,
+            food: 0,
+            materials: 0,
+            troops: TroopPool::default(),
+            wounded_troops: TroopPool::default(),
+            training: 0,
+            agriculture: 0,
+            commerce: 0,
+            defense: 0,
+            order: 0,
+            facilities: Vec::new(),
+            governor_id: None,
+            profile: Some(CityProfile {
+                id: id.to_string(),
+                name: id.to_string(),
+                province: "豫州".to_string(),
+                commandery: commandery.to_string(),
+                position: MapPosition { x: 0.0, y: 0.0 },
+                scale: CityScale::Commandery,
+                strategic_rank: 1,
+                agriculture_base: 1,
+                commerce_base: 1,
+                defense_base: 1,
+                population_min: 1,
+                population_max: 1,
+                confidence: SourceConfidence::Medium,
+                notes: String::new(),
+            }),
+        }
     }
 }

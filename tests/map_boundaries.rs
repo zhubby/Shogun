@@ -16,12 +16,33 @@ fn boundary_asset_loads_with_non_empty_provinces_and_commanderies() {
         .count();
 
     assert_eq!(province_count, 13);
-    assert_eq!(commandery_count, 66);
+    assert_eq!(commandery_count, 67);
     assert!(boundaries.iter().all(|boundary| boundary.points.len() >= 3));
 
     let cells = catalog.territory_cells_for_year(190);
     assert_eq!(cells.len(), commandery_count);
     assert!(cells.iter().all(|cell| cell.points.len() >= 3));
+}
+
+#[test]
+fn xuchang_and_yingchuan_use_separate_map_boundaries() {
+    let catalog = MapBoundaryCatalog::from_path(MAP_BOUNDARY_ASSET_PATH).unwrap();
+    let boundaries: Vec<_> = catalog
+        .boundaries_for_year(190)
+        .filter(|boundary| boundary.level == MapBoundaryLevel::Commandery)
+        .collect();
+
+    let xuchang = boundaries
+        .iter()
+        .find(|boundary| boundary.city_ids == ["xuchang"])
+        .expect("xuchang boundary");
+    let yingchuan = boundaries
+        .iter()
+        .find(|boundary| boundary.city_ids == ["yingchuan"])
+        .expect("yingchuan boundary");
+
+    assert_ne!(xuchang.id, yingchuan.id);
+    assert_eq!(xuchang.parent_id, yingchuan.parent_id);
 }
 
 #[test]

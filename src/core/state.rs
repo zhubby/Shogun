@@ -518,4 +518,111 @@ impl OfficerEditDraft {
             notes: profile.notes.clone(),
         }
     }
+
+    pub(super) fn from_officer(officer: &Officer) -> Self {
+        officer.profile.as_ref().map_or_else(
+            || Self {
+                id: officer.id.clone(),
+                name: officer.name.clone(),
+                courtesy_name: String::new(),
+                native_place: String::new(),
+                birth_year: (officer.birth_year != 0)
+                    .then(|| officer.birth_year.to_string())
+                    .unwrap_or_default(),
+                death_year: String::new(),
+                gender: officer.gender.clone(),
+                leadership: officer.stats.leadership,
+                strength: officer.stats.strength,
+                intelligence: officer.stats.intelligence,
+                politics: officer.stats.politics,
+                charm: officer.stats.charm,
+                tags: String::new(),
+                confidence: SourceConfidence::Medium,
+                biography: String::new(),
+                notes: String::new(),
+            },
+            Self::from_profile,
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_officer() -> Officer {
+        Officer {
+            id: "test_officer".to_string(),
+            name: "测试武将".to_string(),
+            faction_id: "test_faction".to_string(),
+            city_id: None,
+            office_id: None,
+            stats: OfficerStats {
+                leadership: 71,
+                strength: 82,
+                intelligence: 63,
+                politics: 54,
+                charm: 75,
+            },
+            loyalty: 80,
+            birth_year: 180,
+            gender: OfficerGender::Female,
+            status: OfficerStatus::Active,
+            profile: None,
+        }
+    }
+
+    #[test]
+    fn officer_edit_draft_can_be_built_from_current_officer_fields() {
+        let officer = test_officer();
+
+        let draft = OfficerEditDraft::from_officer(&officer);
+
+        assert_eq!(draft.id, "test_officer");
+        assert_eq!(draft.name, "测试武将");
+        assert_eq!(draft.birth_year, "180");
+        assert_eq!(draft.gender, OfficerGender::Female);
+        assert_eq!(draft.leadership, 71);
+        assert_eq!(draft.strength, 82);
+        assert_eq!(draft.confidence, SourceConfidence::Medium);
+        assert!(draft.biography.is_empty());
+    }
+
+    #[test]
+    fn officer_edit_draft_prefers_embedded_profile_for_portrait_context() {
+        let mut officer = test_officer();
+        officer.profile = Some(OfficerProfile {
+            id: "test_officer".to_string(),
+            name: "史料名".to_string(),
+            courtesy_name: Some("文远".to_string()),
+            native_place: Some("雁门".to_string()),
+            birth_year: Some(169),
+            death_year: Some(222),
+            gender: OfficerGender::Male,
+            stats: OfficerStats {
+                leadership: 90,
+                strength: 91,
+                intelligence: 78,
+                politics: 62,
+                charm: 76,
+            },
+            tags: vec!["famous_general".to_string()],
+            confidence: SourceConfidence::High,
+            biography: "以勇略闻名。".to_string(),
+            relationships: Vec::new(),
+            notes: "profile note".to_string(),
+        });
+
+        let draft = OfficerEditDraft::from_officer(&officer);
+
+        assert_eq!(draft.name, "史料名");
+        assert_eq!(draft.courtesy_name, "文远");
+        assert_eq!(draft.birth_year, "169");
+        assert_eq!(draft.death_year, "222");
+        assert_eq!(draft.gender, OfficerGender::Male);
+        assert_eq!(draft.leadership, 90);
+        assert_eq!(draft.tags, "famous_general");
+        assert_eq!(draft.confidence, SourceConfidence::High);
+        assert_eq!(draft.biography, "以勇略闻名。");
+    }
 }

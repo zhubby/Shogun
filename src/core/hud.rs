@@ -12,8 +12,15 @@ use super::labels::{
     confidence_label, officer_gender_label, officer_relationship_label, technology_branch_label,
 };
 use super::map::{draw_city_marker_icon, faction_color, map_panel, reset_map_view, zoom_map};
+use super::officer_portrait_ui::{officer_portrait_status_line, paint_officer_portrait_preview};
+use super::portraits::{
+    OFFICER_PORTRAIT_ASPECT_HEIGHT, OFFICER_PORTRAIT_ASPECT_WIDTH, OfficerPortraitStore,
+    OfficerPortraitTaskState, officer_portrait_path,
+};
+use super::runtime::CoreAsyncRuntime;
 use super::state::{
-    GameUiState, OfficerBrowserFilters, OfficerGenderFilter, OfficerStatusFilter, Screen, ShrineTab,
+    GameUiState, OfficerBrowserFilters, OfficerEditDraft, OfficerGenderFilter, OfficerStatusFilter,
+    Screen, ShrineTab,
 };
 use super::style::{
     modal_title_bar, war_bar_frame, war_border, war_danger, war_gold, war_panel_frame,
@@ -21,7 +28,14 @@ use super::style::{
 };
 use super::{HUD_MARGIN, HUD_TOP_HEIGHT, HUD_TOP_OFFSET, MAP_ZOOM_STEP};
 
-pub(super) fn in_game(ctx: &egui::Context, ui_state: &mut GameUiState) {
+const OFFICER_DETAIL_PORTRAIT_WIDTH: f32 = 224.0;
+
+pub(super) fn in_game(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    async_runtime: &CoreAsyncRuntime,
+) {
+    ui_state.officer_portraits.poll_task_events();
     let t = Translator::new(ui_state.applied_settings.general.ui_language);
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
@@ -29,10 +43,15 @@ pub(super) fn in_game(ctx: &egui::Context, ui_state: &mut GameUiState) {
             map_panel(ui, ui_state, &t);
         });
 
-    in_game_hud(ctx, ui_state, &t);
+    in_game_hud(ctx, ui_state, &t, async_runtime);
 }
 
-pub(super) fn in_game_hud(ctx: &egui::Context, ui_state: &mut GameUiState, t: &Translator) {
+pub(super) fn in_game_hud(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    async_runtime: &CoreAsyncRuntime,
+) {
     let screen = ctx.content_rect();
     top_status_hud(ctx, ui_state, t, screen);
     map_controls_hud(ctx, ui_state, t);
@@ -45,7 +64,7 @@ pub(super) fn in_game_hud(ctx: &egui::Context, ui_state: &mut GameUiState, t: &T
     officer_browser_hud(ctx, ui_state, t, screen);
     retainer_hud(ctx, ui_state, t, screen);
     shrine_hud(ctx, ui_state, t, screen);
-    officer_detail_modal(ctx, ui_state, t, screen);
+    officer_detail_modal(ctx, ui_state, t, screen, async_runtime);
     technology_hud(ctx, ui_state, t, screen);
     event_center_hud(ctx, ui_state, t, screen);
     event_popup_hud(ctx, ui_state, t, screen);
@@ -1561,11 +1580,24 @@ pub(super) fn officer_detail_modal(
     ui_state: &mut GameUiState,
     t: &Translator,
     screen: egui::Rect,
+    async_runtime: &CoreAsyncRuntime,
 ) {
-    let close_requested = if let Some(game) = ui_state.game.as_ref() {
-        officer_detail_modal_for_game(ctx, ui_state.officer_detail_id.as_deref(), t, screen, game)
-    } else {
-        ui_state.officer_detail_id.is_some()
+    let officer_detail_id = ui_state.officer_detail_id.clone();
+    let api_key = ui_state.applied_settings.ai.multimodal.api_key.clone();
+    let model_name = ui_state.applied_settings.ai.multimodal.model_name.clone();
+    let close_requested = match ui_state.game.as_ref() {
+        Some(game) => officer_detail_modal_for_game(
+            ctx,
+            officer_detail_id.as_deref(),
+            &mut ui_state.officer_portraits,
+            &api_key,
+            &model_name,
+            t,
+            screen,
+            game,
+            async_runtime,
+        ),
+        None => ui_state.officer_detail_id.is_some(),
     };
     if close_requested {
         ui_state.officer_detail_id = None;
@@ -1575,9 +1607,13 @@ pub(super) fn officer_detail_modal(
 pub(super) fn officer_detail_modal_for_game(
     ctx: &egui::Context,
     officer_detail_id: Option<&str>,
+    officer_portraits: &mut OfficerPortraitStore,
+    portrait_api_key: &str,
+    portrait_model_name: &str,
     t: &Translator,
     screen: egui::Rect,
     game: &GameState,
+    async_runtime: &CoreAsyncRuntime,
 ) -> bool {
     let Some(officer_id) = officer_detail_id else {
         return false;
@@ -1587,8 +1623,8 @@ pub(super) fn officer_detail_modal_for_game(
     if !game.officers.contains_key(officer_id) {
         return true;
     } else {
-        let width = (screen.width() * 0.72).clamp(680.0, 920.0);
-        let height = (screen.height() * 0.76).clamp(440.0, 680.0);
+        let width = (screen.width() * 0.78).clamp(740.0, 980.0);
+        let height = (screen.height() * 0.78).clamp(500.0, 720.0);
         egui::Area::new(egui::Id::new("officer_detail_modal"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
@@ -1617,7 +1653,18 @@ pub(super) fn officer_detail_modal_for_game(
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             ui.columns(2, |columns| {
-                                columns[0].set_width((width * 0.36).max(260.0));
+                                columns[0].set_width((width * 0.36).clamp(278.0, 340.0));
+                                officer_detail_portrait_section(
+                                    ctx,
+                                    &mut columns[0],
+                                    officer_portraits,
+                                    officer,
+                                    portrait_api_key,
+                                    portrait_model_name,
+                                    t,
+                                    async_runtime,
+                                );
+                                columns[0].add_space(8.0);
                                 officer_detail_status_section(&mut columns[0], game, officer, t);
                                 columns[0].add_space(8.0);
                                 officer_detail_stats_section(&mut columns[0], officer, t);
@@ -1678,6 +1725,80 @@ fn officer_detail_header(ui: &mut egui::Ui, game: &GameState, officer: &Officer,
             "officer-detail-header-posting",
             &args([("faction", faction), ("city", city)]),
         ));
+    });
+}
+
+fn officer_detail_portrait_section(
+    ctx: &egui::Context,
+    ui: &mut egui::Ui,
+    officer_portraits: &mut OfficerPortraitStore,
+    officer: &Officer,
+    portrait_api_key: &str,
+    portrait_model_name: &str,
+    t: &Translator,
+    async_runtime: &CoreAsyncRuntime,
+) {
+    let draft = OfficerEditDraft::from_officer(officer);
+    let path = officer_portrait_path(&draft.id);
+    let has_portrait = path.as_ref().is_ok_and(|path| path.is_file());
+    let task_state = officer_portraits.task_state(&draft.id);
+    let generating = matches!(task_state, OfficerPortraitTaskState::Generating);
+    let mut load_error = None;
+    let texture = match &path {
+        Ok(path) => match officer_portraits.texture_for(ctx, &draft.id, path) {
+            Ok(texture) => texture,
+            Err(error) => {
+                load_error = Some(error);
+                None
+            }
+        },
+        Err(error) => {
+            load_error = Some(error.clone());
+            None
+        }
+    };
+
+    war_sub_panel_frame().show(ui, |ui| {
+        officer_detail_section_title(ui, &t.text("officer-portrait-title"));
+        let preview_width = ui
+            .available_width()
+            .min(OFFICER_DETAIL_PORTRAIT_WIDTH)
+            .max(0.0);
+        let preview_height =
+            preview_width * OFFICER_PORTRAIT_ASPECT_HEIGHT / OFFICER_PORTRAIT_ASPECT_WIDTH;
+        let preview_size = egui::vec2(preview_width, preview_height);
+        ui.horizontal(|ui| {
+            ui.add_space(((ui.available_width() - preview_width) * 0.5).max(0.0));
+            let (rect, _) = ui.allocate_exact_size(preview_size, egui::Sense::hover());
+            paint_officer_portrait_preview(ui, rect, texture, generating, t);
+        });
+
+        ui.add_space(8.0);
+        officer_portrait_status_line(ui, t, &task_state, has_portrait, load_error.as_deref());
+        ui.add_space(6.0);
+
+        let button_text = if generating {
+            t.text("officer-portrait-generating")
+        } else if has_portrait {
+            t.text("officer-portrait-regenerate")
+        } else {
+            t.text("officer-portrait-generate")
+        };
+        let clicked = ui
+            .add_enabled(
+                !generating,
+                egui::Button::new(button_text).min_size(egui::vec2(preview_width, 34.0)),
+            )
+            .clicked();
+        if clicked {
+            officer_portraits.start_generation(
+                async_runtime,
+                draft,
+                portrait_api_key.to_string(),
+                portrait_model_name.to_string(),
+                t.text("officer-portrait-api-key-required"),
+            );
+        }
     });
 }
 

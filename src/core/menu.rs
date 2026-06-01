@@ -21,8 +21,10 @@ use super::hud::{
 };
 use super::i18n::{Translator, args};
 use super::labels::{confidence_label, officer_gender_label};
+use super::officer_portrait_ui::{officer_portrait_status_line, paint_officer_portrait_preview};
 use super::portraits::{
-    OfficerPortraitTaskState, OfficerPortraitTextureView, officer_portrait_path,
+    OFFICER_PORTRAIT_ASPECT_HEIGHT, OFFICER_PORTRAIT_ASPECT_WIDTH, OfficerPortraitTaskState,
+    officer_portrait_path,
 };
 use super::runtime::CoreAsyncRuntime;
 use super::settings::refresh_audio_output_devices;
@@ -31,8 +33,7 @@ use super::state::{
     refresh_history_factions, refresh_history_menu,
 };
 use super::style::{
-    modal_title_bar, war_border, war_danger, war_gold, war_panel_frame, war_sub_panel_frame,
-    war_success, war_text_muted, war_warning,
+    modal_title_bar, war_gold, war_panel_frame, war_sub_panel_frame, war_text_muted, war_warning,
 };
 
 #[cfg(test)]
@@ -67,8 +68,6 @@ const MAIN_MENU_BGM_BUTTON_SIZE: f32 = 36.0;
 const MAIN_MENU_BGM_BUTTON_MARGIN: f32 = 12.0;
 const OFFICER_PORTRAIT_PANEL_WIDTH: f32 = 236.0;
 const OFFICER_PORTRAIT_GAP: f32 = 14.0;
-const OFFICER_PORTRAIT_ASPECT_WIDTH: f32 = 3.0;
-const OFFICER_PORTRAIT_ASPECT_HEIGHT: f32 = 4.0;
 
 #[derive(AssetCollection, Resource)]
 pub(super) struct MainMenuAssets {
@@ -138,19 +137,23 @@ pub(super) fn main_menu(
     }
     let screen = ctx.content_rect();
     if ui_state.officer_settings_open {
-        let close_detail = ui_state
-            .officer_settings_game
-            .as_ref()
-            .map(|game| {
-                officer_detail_modal_for_game(
-                    ctx,
-                    ui_state.officer_detail_id.as_deref(),
-                    &t,
-                    screen,
-                    game,
-                )
-            })
-            .unwrap_or_else(|| ui_state.officer_detail_id.is_some());
+        let officer_detail_id = ui_state.officer_detail_id.clone();
+        let api_key = ui_state.applied_settings.ai.multimodal.api_key.clone();
+        let model_name = ui_state.applied_settings.ai.multimodal.model_name.clone();
+        let close_detail = match ui_state.officer_settings_game.as_ref() {
+            Some(game) => officer_detail_modal_for_game(
+                ctx,
+                officer_detail_id.as_deref(),
+                &mut ui_state.officer_portraits,
+                &api_key,
+                &model_name,
+                &t,
+                screen,
+                game,
+                async_runtime,
+            ),
+            None => ui_state.officer_detail_id.is_some(),
+        };
         if close_detail {
             ui_state.officer_detail_id = None;
         }
@@ -1607,93 +1610,6 @@ fn officer_profile_portrait_panel(
             });
         },
     );
-}
-
-fn paint_officer_portrait_preview(
-    ui: &mut egui::Ui,
-    rect: egui::Rect,
-    texture: Option<OfficerPortraitTextureView>,
-    generating: bool,
-    t: &Translator,
-) {
-    let painter = ui.painter();
-    painter.rect_filled(
-        rect,
-        4.0,
-        egui::Color32::from_rgba_unmultiplied(13, 12, 10, 225),
-    );
-    painter.rect_stroke(
-        rect,
-        4.0,
-        egui::Stroke::new(1.0, war_border()),
-        egui::StrokeKind::Inside,
-    );
-
-    if let Some(texture) = texture {
-        let image_size =
-            fit_contained_size(texture.image_size, rect.size() - egui::vec2(12.0, 12.0));
-        let image_rect = egui::Align2::CENTER_CENTER.align_size_within_rect(image_size, rect);
-        painter.image(
-            texture.texture_id,
-            image_rect,
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            egui::Color32::WHITE,
-        );
-    } else {
-        let text = if generating {
-            t.text("officer-portrait-generating")
-        } else {
-            t.text("officer-portrait-empty")
-        };
-        painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
-            text,
-            egui::FontId::proportional(15.0),
-            war_text_muted(),
-        );
-    }
-}
-
-fn officer_portrait_status_line(
-    ui: &mut egui::Ui,
-    t: &Translator,
-    task_state: &OfficerPortraitTaskState,
-    has_portrait: bool,
-    load_error: Option<&str>,
-) {
-    if let Some(error) = load_error {
-        ui.colored_label(
-            war_danger(),
-            t.text_args(
-                "officer-portrait-load-failed",
-                &args([("error", error.to_string())]),
-            ),
-        );
-        return;
-    }
-
-    match task_state {
-        OfficerPortraitTaskState::Idle => {
-            if has_portrait {
-                ui.colored_label(war_success(), t.text("officer-portrait-generated"));
-            } else {
-                ui.colored_label(war_text_muted(), t.text("officer-portrait-ready"));
-            }
-        }
-        OfficerPortraitTaskState::Generating => {
-            ui.colored_label(war_warning(), t.text("officer-portrait-generating"));
-        }
-        OfficerPortraitTaskState::Succeeded { .. } => {
-            ui.colored_label(war_success(), t.text("officer-portrait-generated"));
-        }
-        OfficerPortraitTaskState::Failed(error) => {
-            ui.colored_label(
-                war_danger(),
-                t.text_args("officer-portrait-failed", &args([("error", error.clone())])),
-            );
-        }
-    }
 }
 
 fn ability_drag(ui: &mut egui::Ui, label: &str, value: &mut u8) {

@@ -29,6 +29,8 @@ A portrait of [人名], [身份描述], in Three Kingdoms historical strategy ga
 semi-realistic anime aesthetic, dramatic cinematic lighting, rim light,
 dark atmospheric background, highly detailed digital painting, masterpiece";
 pub(super) const OFFICER_PORTRAIT_SIZE: &str = "768*1024";
+pub(super) const OFFICER_PORTRAIT_ASPECT_WIDTH: f32 = 3.0;
+pub(super) const OFFICER_PORTRAIT_ASPECT_HEIGHT: f32 = 4.0;
 
 const OFFICER_PORTRAIT_PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
 
