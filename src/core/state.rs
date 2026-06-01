@@ -94,8 +94,7 @@ pub(super) struct GameUiState {
 }
 
 pub(super) struct MenuBannerLogo {
-    pub(super) texture_id: egui::TextureId,
-    pub(super) crop_uv: egui::Rect,
+    pub(super) texture: egui::TextureHandle,
     pub(super) crop_size: egui::Vec2,
 }
 

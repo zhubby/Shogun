@@ -4,7 +4,7 @@ use bevy::{
     render::render_resource::TextureFormat,
 };
 use bevy_asset_loader::prelude::AssetCollection;
-use bevy_egui::{EguiTextureHandle, EguiUserTextures, egui};
+use bevy_egui::{EguiContexts, EguiTextureHandle, egui};
 
 use crate::build_info::menu_build_label;
 use crate::game::{
@@ -29,6 +29,7 @@ use super::style::{
 #[cfg(test)]
 const BANNER_LOGO_ASSET_PATH: &str = "icons/banner_logo.png";
 const BANNER_LOGO_ALPHA_THRESHOLD: u8 = 8;
+const BANNER_LOGO_BACKGROUND_ALPHA_THRESHOLD: u8 = 42;
 const BANNER_LOGO_CROP_PADDING: usize = 32;
 const BANNER_LOGO_MAX_WIDTH: f32 = 860.0;
 const BANNER_LOGO_MAX_HEIGHT: f32 = 340.0;
@@ -126,10 +127,10 @@ pub(super) fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) -> Main
 }
 
 pub(super) fn prepare_main_menu_assets_for_egui(
+    mut contexts: EguiContexts,
     mut ui_state: ResMut<GameUiState>,
     menu_assets: Option<Res<MainMenuAssets>>,
     images: Res<Assets<BevyImage>>,
-    mut egui_user_textures: ResMut<EguiUserTextures>,
 ) {
     let Some(menu_assets) = menu_assets else {
         return;
@@ -139,9 +140,14 @@ pub(super) fn prepare_main_menu_assets_for_egui(
         && ui_state.banner_logo_error.is_none()
         && let Some(image) = images.get(&menu_assets.banner_logo)
     {
-        match register_banner_logo(&mut egui_user_textures, &menu_assets.banner_logo, image) {
-            Ok(logo) => ui_state.banner_logo = Some(logo),
-            Err(error) => ui_state.banner_logo_error = Some(error),
+        match contexts.ctx_mut() {
+            Ok(ctx) => match register_banner_logo(ctx, image) {
+                Ok(logo) => ui_state.banner_logo = Some(logo),
+                Err(error) => ui_state.banner_logo_error = Some(error),
+            },
+            Err(error) => {
+                ui_state.banner_logo_error = Some(format!("egui context unavailable: {error}"));
+            }
         }
     }
 
@@ -161,7 +167,7 @@ pub(super) fn prepare_main_menu_assets_for_egui(
         let Some(image) = images.get(handle) else {
             continue;
         };
-        match register_main_menu_illustration(&mut egui_user_textures, handle, image, index) {
+        match register_main_menu_illustration(&mut contexts, handle, image, index) {
             Ok(illustration) => ui_state.main_menu_illustrations[index] = Some(illustration),
             Err(error) => ui_state.main_menu_illustration_errors[index] = Some(error),
         }
@@ -171,11 +177,7 @@ pub(super) fn prepare_main_menu_assets_for_egui(
         && ui_state.main_menu_cloud_pattern_error.is_none()
         && let Some(image) = images.get(&menu_assets.cloud_pattern)
     {
-        match register_main_menu_cloud_pattern(
-            &mut egui_user_textures,
-            &menu_assets.cloud_pattern,
-            image,
-        ) {
+        match register_main_menu_cloud_pattern(&mut contexts, &menu_assets.cloud_pattern, image) {
             Ok(pattern) => ui_state.main_menu_cloud_pattern = Some(pattern),
             Err(error) => ui_state.main_menu_cloud_pattern_error = Some(error),
         }
@@ -851,36 +853,31 @@ fn banner_logo(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
         .max(0.0);
     let size = logo.crop_size * scale;
 
-    ui.add(
-        egui::Image::from_texture((logo.texture_id, size))
-            .uv(logo.crop_uv)
-            .fit_to_exact_size(size),
-    );
+    ui.add(egui::Image::from_texture((logo.texture.id(), size)).fit_to_exact_size(size));
 }
 
-fn register_banner_logo(
-    egui_user_textures: &mut EguiUserTextures,
-    handle: &Handle<BevyImage>,
-    image: &BevyImage,
-) -> Result<MenuBannerLogo, String> {
+fn register_banner_logo(ctx: &egui::Context, image: &BevyImage) -> Result<MenuBannerLogo, String> {
     let decoded = decode_banner_logo(image)?;
-    let texture_id = egui_user_textures.add_image(EguiTextureHandle::Strong(handle.clone()));
+    let texture = ctx.load_texture(
+        "main_menu_banner_logo",
+        decoded.color_image,
+        egui::TextureOptions::LINEAR,
+    );
 
     Ok(MenuBannerLogo {
-        texture_id,
-        crop_uv: decoded.crop_uv,
         crop_size: decoded.crop_size,
+        texture,
     })
 }
 
 fn register_main_menu_illustration(
-    egui_user_textures: &mut EguiUserTextures,
+    contexts: &mut EguiContexts<'_, '_>,
     handle: &Handle<BevyImage>,
     image: &BevyImage,
     index: usize,
 ) -> Result<MenuIllustration, String> {
     let decoded = decode_main_menu_illustration(image, index)?;
-    let texture_id = egui_user_textures.add_image(EguiTextureHandle::Strong(handle.clone()));
+    let texture_id = contexts.add_image(EguiTextureHandle::Strong(handle.clone()));
 
     Ok(MenuIllustration {
         texture_id,
@@ -890,20 +887,20 @@ fn register_main_menu_illustration(
 }
 
 fn register_main_menu_cloud_pattern(
-    egui_user_textures: &mut EguiUserTextures,
+    contexts: &mut EguiContexts<'_, '_>,
     handle: &Handle<BevyImage>,
     image: &BevyImage,
 ) -> Result<MenuCloudPattern, String> {
     let decoded = decode_png_rgba(image, "main menu cloud pattern")?;
     let size = egui::vec2(decoded.width as f32, decoded.height as f32);
-    let texture_id = egui_user_textures.add_image(EguiTextureHandle::Strong(handle.clone()));
+    let texture_id = contexts.add_image(EguiTextureHandle::Strong(handle.clone()));
 
     Ok(MenuCloudPattern { texture_id, size })
 }
 
 struct DecodedBannerLogo {
-    crop_uv: egui::Rect,
     crop_size: egui::Vec2,
+    color_image: egui::ColorImage,
 }
 
 struct DecodedMenuIllustration {
@@ -918,17 +915,25 @@ struct DecodedPng {
 }
 
 fn decode_banner_logo(image: &BevyImage) -> Result<DecodedBannerLogo, String> {
-    let decoded = decode_png_rgba(image, "banner logo")?;
+    let mut decoded = decode_png_rgba(image, "banner logo")?;
+    remove_flat_logo_background(&mut decoded.rgba, decoded.width, decoded.height);
     let crop = alpha_crop_bounds(&decoded.rgba, decoded.width, decoded.height).unwrap_or((
         0,
         0,
         decoded.width - 1,
         decoded.height - 1,
     ));
-    let crop_uv = crop_uv(crop, decoded.width, decoded.height);
-    let crop_size = egui::vec2((crop.2 - crop.0 + 1) as f32, (crop.3 - crop.1 + 1) as f32);
+    let cropped_rgba = crop_rgba(&decoded.rgba, decoded.width, crop);
+    let crop_width = crop.2 - crop.0 + 1;
+    let crop_height = crop.3 - crop.1 + 1;
+    let crop_size = egui::vec2(crop_width as f32, crop_height as f32);
+    let color_image =
+        egui::ColorImage::from_rgba_unmultiplied([crop_width, crop_height], &cropped_rgba);
 
-    Ok(DecodedBannerLogo { crop_uv, crop_size })
+    Ok(DecodedBannerLogo {
+        crop_size,
+        color_image,
+    })
 }
 
 fn decode_main_menu_illustration(
@@ -1006,6 +1011,93 @@ fn rgba16_to_rgba8(bytes: &[u8]) -> Result<Vec<u8>, String> {
     Ok(rgba)
 }
 
+fn remove_flat_logo_background(rgba: &mut [u8], width: usize, height: usize) {
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let background = estimate_edge_background_color(rgba, width, height);
+    for pixel in rgba.chunks_exact_mut(4) {
+        let distance = color_distance([pixel[0], pixel[1], pixel[2]], background);
+        if distance >= BANNER_LOGO_BACKGROUND_ALPHA_THRESHOLD {
+            continue;
+        }
+        let alpha = ((distance as u16 * 255) / BANNER_LOGO_BACKGROUND_ALPHA_THRESHOLD as u16) as u8;
+        pixel[3] = pixel[3].min(alpha);
+    }
+}
+
+fn estimate_edge_background_color(rgba: &[u8], width: usize, height: usize) -> [u8; 3] {
+    let mut red = 0_u64;
+    let mut green = 0_u64;
+    let mut blue = 0_u64;
+    let mut count = 0_u64;
+
+    for x in 0..width {
+        add_rgb_sample(
+            rgba, width, x, 0, &mut red, &mut green, &mut blue, &mut count,
+        );
+        add_rgb_sample(
+            rgba,
+            width,
+            x,
+            height - 1,
+            &mut red,
+            &mut green,
+            &mut blue,
+            &mut count,
+        );
+    }
+    for y in 1..height.saturating_sub(1) {
+        add_rgb_sample(
+            rgba, width, 0, y, &mut red, &mut green, &mut blue, &mut count,
+        );
+        add_rgb_sample(
+            rgba,
+            width,
+            width - 1,
+            y,
+            &mut red,
+            &mut green,
+            &mut blue,
+            &mut count,
+        );
+    }
+
+    if count == 0 {
+        return [0, 0, 0];
+    }
+
+    [
+        (red / count) as u8,
+        (green / count) as u8,
+        (blue / count) as u8,
+    ]
+}
+
+fn add_rgb_sample(
+    rgba: &[u8],
+    width: usize,
+    x: usize,
+    y: usize,
+    red: &mut u64,
+    green: &mut u64,
+    blue: &mut u64,
+    count: &mut u64,
+) {
+    let offset = (y * width + x) * 4;
+    *red += rgba[offset] as u64;
+    *green += rgba[offset + 1] as u64;
+    *blue += rgba[offset + 2] as u64;
+    *count += 1;
+}
+
+fn color_distance(a: [u8; 3], b: [u8; 3]) -> u8 {
+    a[0].abs_diff(b[0])
+        .max(a[1].abs_diff(b[1]))
+        .max(a[2].abs_diff(b[2]))
+}
+
 fn alpha_crop_bounds(
     rgba: &[u8],
     width: usize,
@@ -1037,6 +1129,20 @@ fn alpha_crop_bounds(
         (max_x + BANNER_LOGO_CROP_PADDING).min(width - 1),
         (max_y + BANNER_LOGO_CROP_PADDING).min(height - 1),
     ))
+}
+
+fn crop_rgba(rgba: &[u8], width: usize, crop: (usize, usize, usize, usize)) -> Vec<u8> {
+    let crop_width = crop.2 - crop.0 + 1;
+    let crop_height = crop.3 - crop.1 + 1;
+    let mut cropped = Vec::with_capacity(crop_width * crop_height * 4);
+
+    for y in crop.1..=crop.3 {
+        let start = (y * width + crop.0) * 4;
+        let end = start + crop_width * 4;
+        cropped.extend_from_slice(&rgba[start..end]);
+    }
+
+    cropped
 }
 
 fn crop_uv(crop: (usize, usize, usize, usize), width: usize, height: usize) -> egui::Rect {
@@ -1460,6 +1566,24 @@ mod tests {
 
         assert!(display_size.x <= BANNER_LOGO_MAX_WIDTH + f32::EPSILON);
         assert!(display_size.y <= BANNER_LOGO_MAX_HEIGHT + f32::EPSILON);
+    }
+
+    #[test]
+    fn banner_logo_background_is_removed_from_rendered_texture() {
+        let image = decode_png_asset(BANNER_LOGO_ASSET_PATH, "banner logo").unwrap();
+        let decoded = decode_banner_logo(&image).unwrap();
+
+        let [width, height] = decoded.color_image.size;
+        let corners = [
+            (0, 0),
+            (width - 1, 0),
+            (0, height - 1),
+            (width - 1, height - 1),
+        ];
+
+        for (x, y) in corners {
+            assert_eq!(decoded.color_image[(x, y)].a(), 0);
+        }
     }
 
     #[test]
