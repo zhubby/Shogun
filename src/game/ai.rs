@@ -3,12 +3,14 @@ use super::city::{
 };
 use super::commands::{
     command_capacity_for_officer, expedition_monthly_supply_for_troops, resolve_command_batch,
-    resolve_command_batch_with_history, validate_command_for_state,
+    resolve_command_batch_with_generation, resolve_command_batch_with_history,
+    resolve_command_batch_with_history_and_generation, validate_command_for_state,
 };
 use super::history_db::HistoricalCatalog;
 use super::ids::{CityId, FactionId};
 use super::model::*;
 use super::officer::Officer;
+use super::personnel::OfficerGenerationProvider;
 use super::technology::ensure_faction_technology_states;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -215,6 +217,16 @@ pub fn finish_turn_with_ai<P: AiProvider>(state: &mut GameState, provider: &P) -
     resolve_command_batch(state, commands)
 }
 
+pub fn finish_turn_with_ai_with_generation<P: AiProvider>(
+    state: &mut GameState,
+    provider: &P,
+    generator: &dyn OfficerGenerationProvider,
+) -> TurnReport {
+    ensure_faction_technology_states(state);
+    let commands = pending_and_ai_commands(state, provider);
+    resolve_command_batch_with_generation(state, commands, generator)
+}
+
 pub fn finish_turn_with_ai_with_history<P: AiProvider, C: HistoricalCatalog>(
     state: &mut GameState,
     provider: &P,
@@ -223,6 +235,17 @@ pub fn finish_turn_with_ai_with_history<P: AiProvider, C: HistoricalCatalog>(
     ensure_faction_technology_states(state);
     let commands = pending_and_ai_commands(state, provider);
     resolve_command_batch_with_history(state, commands, catalog)
+}
+
+pub fn finish_turn_with_ai_with_history_and_generation<P: AiProvider, C: HistoricalCatalog>(
+    state: &mut GameState,
+    provider: &P,
+    catalog: &C,
+    generator: &dyn OfficerGenerationProvider,
+) -> TurnReport {
+    ensure_faction_technology_states(state);
+    let commands = pending_and_ai_commands(state, provider);
+    resolve_command_batch_with_history_and_generation(state, commands, catalog, generator)
 }
 
 fn pending_and_ai_commands<P: AiProvider>(state: &GameState, provider: &P) -> Vec<Command> {

@@ -10,7 +10,10 @@ use super::officer::{
     Officer, OfficerStats, OfficerStatus, OfficialPostEffect, OfficialRank, official_post_spec,
     official_rank_loyalty_bonus, official_rank_order, official_rank_salary_bonus,
 };
-use super::personnel::{apply_annual_lifecycle, normalize_personnel_state};
+use super::personnel::{
+    LifecycleConfig, OfficerGenerationProvider, RuleBasedChildGenerator,
+    apply_annual_lifecycle_with_config, normalize_personnel_state,
+};
 use super::technology::*;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -50,7 +53,15 @@ pub fn queue_player_command(state: &mut GameState, command: Command) -> Result<(
 }
 
 pub fn resolve_command_batch(state: &mut GameState, commands: Vec<Command>) -> TurnReport {
-    resolve_command_batch_inner(state, commands, None)
+    resolve_command_batch_inner(state, commands, None, &RuleBasedChildGenerator)
+}
+
+pub fn resolve_command_batch_with_generation(
+    state: &mut GameState,
+    commands: Vec<Command>,
+    generator: &dyn OfficerGenerationProvider,
+) -> TurnReport {
+    resolve_command_batch_inner(state, commands, None, generator)
 }
 
 pub fn resolve_command_batch_with_history<C: HistoricalCatalog>(
@@ -58,13 +69,33 @@ pub fn resolve_command_batch_with_history<C: HistoricalCatalog>(
     commands: Vec<Command>,
     catalog: &C,
 ) -> TurnReport {
-    resolve_command_batch_inner(state, commands, Some(catalog as &dyn HistoricalCatalog))
+    resolve_command_batch_inner(
+        state,
+        commands,
+        Some(catalog as &dyn HistoricalCatalog),
+        &RuleBasedChildGenerator,
+    )
+}
+
+pub fn resolve_command_batch_with_history_and_generation<C: HistoricalCatalog>(
+    state: &mut GameState,
+    commands: Vec<Command>,
+    catalog: &C,
+    generator: &dyn OfficerGenerationProvider,
+) -> TurnReport {
+    resolve_command_batch_inner(
+        state,
+        commands,
+        Some(catalog as &dyn HistoricalCatalog),
+        generator,
+    )
 }
 
 fn resolve_command_batch_inner(
     state: &mut GameState,
     commands: Vec<Command>,
     catalog: Option<&dyn HistoricalCatalog>,
+    generator: &dyn OfficerGenerationProvider,
 ) -> TurnReport {
     normalize_personnel_state(state);
     ensure_faction_technology_states(state);
@@ -110,7 +141,12 @@ fn resolve_command_batch_inner(
         }
         advance_officer_recruitments(state, &mut report);
         move_wild_officers(state, &mut report);
-        apply_annual_lifecycle(state, &mut report);
+        apply_annual_lifecycle_with_config(
+            state,
+            &mut report,
+            generator,
+            LifecycleConfig::default(),
+        );
         trigger_monthly_incidents(state);
     }
     append_turn_summary(state, &mut report);

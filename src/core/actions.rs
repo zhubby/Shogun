@@ -1,4 +1,9 @@
+use crate::agent::{
+    OpenAiResponsesAgentProvider, child_name::AgentChildNameGenerator, default_checkpoint_dir,
+};
+use crate::ai::{OpenAiApiType, OpenAiConfig};
 use crate::game::*;
+use std::time::Duration;
 
 use super::i18n::{Translator, args};
 use super::map::reset_map_view;
@@ -50,6 +55,7 @@ pub(super) fn enter_game(ui_state: &mut GameUiState, game: GameState, message: S
 
 pub(super) fn finish_current_turn(ui_state: &mut GameUiState) {
     let t = Translator::new(ui_state.applied_settings.general.ui_language);
+    let child_name_generator = ai_child_name_generator(ui_state);
     let Some(game) = &mut ui_state.game else {
         ui_state.message = t.text("message-game-not-started");
         return;
@@ -58,7 +64,10 @@ pub(super) fn finish_current_turn(ui_state: &mut GameUiState) {
         return;
     }
     let provider = RuleBasedAiProvider;
-    let report = finish_turn(game, &provider);
+    let report = match child_name_generator {
+        Some(generator) => finish_turn_with_child_generator(game, &provider, &generator),
+        None => finish_turn(game, &provider),
+    };
     ui_state.message = t.text_args(
         "message-turn-finished",
         &args([("count", report.entries.len().to_string())]),
@@ -87,6 +96,45 @@ pub(super) fn finish_turn(game: &mut GameState, provider: &RuleBasedAiProvider) 
         return finish_turn_with_ai_with_history(game, provider, &catalog);
     }
     finish_turn_with_ai(game, provider)
+}
+
+fn finish_turn_with_child_generator(
+    game: &mut GameState,
+    provider: &RuleBasedAiProvider,
+    generator: &dyn OfficerGenerationProvider,
+) -> TurnReport {
+    if let Ok(catalog) = SqliteHistoricalCatalog::open_default() {
+        return finish_turn_with_ai_with_history_and_generation(
+            game, provider, &catalog, generator,
+        );
+    }
+    finish_turn_with_ai_with_generation(game, provider, generator)
+}
+
+fn ai_child_name_generator(
+    ui_state: &GameUiState,
+) -> Option<AgentChildNameGenerator<OpenAiResponsesAgentProvider>> {
+    let settings = &ui_state.applied_settings.ai.reasoning;
+    if settings.api_type != OpenAiApiType::Responses
+        || settings.token.trim().is_empty()
+        || settings.model_name.trim().is_empty()
+    {
+        return None;
+    }
+    let config = OpenAiConfig::new(settings.token.clone())
+        .with_api_type(settings.api_type)
+        .with_api_url(settings.api_url.clone())
+        .with_timeout(Duration::from_secs(5));
+    let provider = OpenAiResponsesAgentProvider::new(config).ok()?;
+    let checkpoint_dir = default_checkpoint_dir(ui_state.save_manager.base_dir());
+    Some(
+        AgentChildNameGenerator::new(
+            provider,
+            settings.model_name.clone(),
+            Duration::from_secs(5),
+        )
+        .with_checkpoint_dir(checkpoint_dir),
+    )
 }
 
 pub(super) fn refresh_saves(ui_state: &mut GameUiState) {
