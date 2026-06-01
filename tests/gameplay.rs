@@ -1330,6 +1330,22 @@ fn save_load_preserves_event_state() {
 }
 
 #[test]
+fn monthly_incident_can_trigger_without_starvation() {
+    let mut game = sample_game();
+
+    for _ in 0..3 {
+        resolve_command_batch(&mut game, Vec::new());
+    }
+
+    assert!(
+        game.events
+            .iter()
+            .any(|event| event.kind == GameEventKind::Famine)
+    );
+    assert_eq!(pending_event_count(&game), 1);
+}
+
+#[test]
 fn save_load_preserves_technology_state() {
     let temp = tempfile::tempdir().unwrap();
     let manager = SaveManager::new(temp.path());

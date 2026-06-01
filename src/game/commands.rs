@@ -1762,7 +1762,10 @@ fn trigger_monthly_incidents(state: &mut GameState) {
         .values()
         .filter(|city| city.faction_id == state.player_faction_id)
         .filter(|city| !has_pending_famine_for_city(state, &city.id))
-        .find(|city| city.food < famine_food_threshold(city.population))
+        .find(|city| {
+            city.food < famine_food_threshold(city.population)
+                || deterministic_famine_roll(state, &city.id)
+        })
         .cloned()
     else {
         return;
@@ -1821,6 +1824,13 @@ fn trigger_monthly_incidents(state: &mut GameState) {
 
 fn famine_food_threshold(population: u32) -> i32 {
     (population / 200).min(i32::MAX as u32) as i32
+}
+
+fn deterministic_famine_roll(state: &GameState, city_id: &str) -> bool {
+    let city_seed = city_id
+        .bytes()
+        .fold(0_u32, |acc, byte| acc.wrapping_add(u32::from(byte)));
+    (state.turn + city_seed + 3).is_multiple_of(6)
 }
 
 fn famine_population_loss(population: u32) -> u32 {
