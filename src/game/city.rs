@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const CITY_MAX_LEVEL: u8 = 10;
 pub const FACILITY_MAX_LEVEL: u8 = 5;
-pub const ALL_FACILITY_KINDS: [FacilityKind; 12] = [
+pub const ALL_FACILITY_KINDS: [FacilityKind; 13] = [
     FacilityKind::Farmland,
     FacilityKind::Irrigation,
     FacilityKind::Market,
@@ -17,6 +17,7 @@ pub const ALL_FACILITY_KINDS: [FacilityKind; 12] = [
     FacilityKind::Administration,
     FacilityKind::Granary,
     FacilityKind::RelayStation,
+    FacilityKind::Medical,
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -104,6 +105,8 @@ pub struct City {
     pub food: i32,
     pub materials: i32,
     pub troops: TroopPool,
+    #[serde(default)]
+    pub wounded_troops: TroopPool,
     pub training: u8,
     pub agriculture: u16,
     pub commerce: u16,
@@ -161,6 +164,7 @@ pub enum FacilityKind {
     Administration,
     Granary,
     RelayStation,
+    Medical,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -196,6 +200,7 @@ pub struct CityEconomyEffects {
     pub materials_percent: i32,
     pub population_growth: i32,
     pub troop_recovery: i32,
+    pub wounded_recovery: i32,
     pub order: i32,
     pub training: i32,
     pub defense: i32,
@@ -217,6 +222,7 @@ impl CityEconomyEffects {
             materials_percent: self.materials_percent * factor,
             population_growth: self.population_growth * factor,
             troop_recovery: self.troop_recovery * factor,
+            wounded_recovery: self.wounded_recovery * factor,
             order: self.order * factor,
             training: self.training * factor,
             defense: self.defense * factor,
@@ -237,6 +243,7 @@ impl CityEconomyEffects {
         self.materials_percent += other.materials_percent;
         self.population_growth += other.population_growth;
         self.troop_recovery += other.troop_recovery;
+        self.wounded_recovery += other.wounded_recovery;
         self.order += other.order;
         self.training += other.training;
         self.defense += other.defense;
@@ -270,6 +277,7 @@ pub struct CityMonthlyProjection {
     pub net_materials: i32,
     pub population_delta: i32,
     pub troop_delta: i32,
+    pub wounded_recovery: i32,
     pub order_delta: i32,
     pub training_delta: i32,
     pub defense_delta: i32,
@@ -484,6 +492,20 @@ pub fn facility_spec(kind: FacilityKind) -> FacilitySpec {
                 ..CityEconomyEffects::default()
             },
         },
+        FacilityKind::Medical => FacilitySpec {
+            kind,
+            base_cost: ResourceCost {
+                gold: 140,
+                food: 45,
+                materials: 95,
+            },
+            monthly_per_level: CityEconomyEffects {
+                wounded_recovery: 150,
+                gold_maintenance: 5,
+                food_maintenance: 2,
+                ..CityEconomyEffects::default()
+            },
+        },
     }
 }
 
@@ -560,6 +582,11 @@ pub fn project_city_monthly_change_with_effects(
     } else {
         0
     };
+    let wounded_recovery = if !city.wounded_troops.is_empty() && food_after_income > 0 {
+        (30 + (city.population / 100_000) as i32 + effects.wounded_recovery).max(0)
+    } else {
+        0
+    };
     let order_delta =
         (1 + effects.order - i32::from(net_food < 0) - i32::from(net_gold < 0)).clamp(-6, 6);
 
@@ -577,6 +604,7 @@ pub fn project_city_monthly_change_with_effects(
         net_materials,
         population_delta,
         troop_delta,
+        wounded_recovery,
         order_delta,
         training_delta: effects.training,
         defense_delta: effects.defense,

@@ -11,6 +11,21 @@ fn runtime() -> tokio::runtime::Runtime {
         .unwrap()
 }
 
+#[test]
+fn all_facility_kinds_have_valid_specs() {
+    assert!(ALL_FACILITY_KINDS.contains(&FacilityKind::Medical));
+    for kind in ALL_FACILITY_KINDS {
+        let cost = facility_upgrade_cost(kind, 1);
+        assert!(cost.gold > 0);
+        assert!(cost.food >= 0);
+        assert!(cost.materials > 0);
+        let facility = CityFacility { kind, level: 1 };
+        let json = serde_json::to_string(&facility).unwrap();
+        let loaded: CityFacility = serde_json::from_str(&json).unwrap();
+        assert_eq!(loaded, facility);
+    }
+}
+
 async fn open_pool(path: &Path) -> sqlx::SqlitePool {
     let options = SqliteConnectOptions::new()
         .filename(path)

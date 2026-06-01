@@ -84,6 +84,7 @@ impl ScenarioData {
                 troops: seed
                     .troop_pool
                     .unwrap_or_else(|| TroopPool::from_total(seed.troops)),
+                wounded_troops: TroopPool::default(),
                 training: seed.training,
                 agriculture: seed.agriculture,
                 commerce: seed.commerce,

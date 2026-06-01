@@ -59,6 +59,11 @@ pub(super) fn city_summary_intel(
                 city.troops.total(),
             ),
             MetricTile::new(
+                egui_phosphor::regular::SWORD,
+                t.text("resource-wounded"),
+                city.wounded_troops.total(),
+            ),
+            MetricTile::new(
                 egui_phosphor::regular::COINS,
                 t.text("resource-gold"),
                 city.gold,
@@ -119,6 +124,11 @@ pub(super) fn city_resource_intel(ui: &mut egui::Ui, city: &City, t: &Translator
                     egui_phosphor::regular::SWORD,
                     t.text("resource-troops"),
                     city.troops.total(),
+                ),
+                MetricTile::new(
+                    egui_phosphor::regular::SWORD,
+                    t.text("resource-wounded"),
+                    city.wounded_troops.total(),
                 ),
             ],
             2,
@@ -213,6 +223,11 @@ pub(super) fn city_monthly_trend_intel(
                     egui_phosphor::regular::SWORD,
                     t.text("resource-troops"),
                     projection.troop_delta,
+                ),
+                TrendMetric::new(
+                    egui_phosphor::regular::SWORD,
+                    t.text("resource-wounded-recovery"),
+                    projection.wounded_recovery,
                 ),
             ],
         );

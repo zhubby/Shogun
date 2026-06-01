@@ -6,7 +6,7 @@ use super::technology::FactionTechnologyState;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const SAVE_VERSION: u32 = 5;
+pub const SAVE_VERSION: u32 = 6;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GameState {
@@ -177,7 +177,13 @@ pub struct ArmyMovement {
     pub officer_ids: Vec<OfficerId>,
     pub troops: TroopPool,
     #[serde(default)]
+    pub food_supply: u32,
+    #[serde(default)]
+    pub wounded_troops: TroopPool,
+    #[serde(default)]
     pub assignments: Vec<ExpeditionAssignment>,
+    #[serde(default)]
+    pub siege_started_turn: Option<u32>,
     pub training: u8,
     pub distance_li: u32,
     pub departure_turn: u32,
@@ -452,11 +458,12 @@ impl Command {
             CommandKind::Expedition {
                 target_city_id,
                 assignments,
+                food_supply,
             } => {
                 let troops: u32 = assignments.iter().map(|assignment| assignment.troops).sum();
                 format!(
-                    "出征 {target_city_id}: {troops}, 武将 {}",
-                    assignments.len()
+                    "出征 {target_city_id}: {troops}, 粮草 {food_supply}, 武将 {}",
+                    assignments.len(),
                 )
             }
             CommandKind::Diplomacy {
@@ -511,6 +518,8 @@ pub enum CommandKind {
     Expedition {
         target_city_id: CityId,
         assignments: Vec<ExpeditionAssignment>,
+        #[serde(default)]
+        food_supply: u32,
     },
     Diplomacy {
         target_faction_id: FactionId,

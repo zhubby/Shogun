@@ -553,6 +553,7 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
                 food: row.get::<i64, _>("food") as i32,
                 materials: derive_city_materials(&profile),
                 troops: TroopPool::from_total(row.get::<i64, _>("troops") as u32),
+                wounded_troops: TroopPool::default(),
                 training: row.get::<i64, _>("training") as u8,
                 agriculture: row.get::<i64, _>("agriculture") as u16,
                 commerce: row.get::<i64, _>("commerce") as u16,

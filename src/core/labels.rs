@@ -33,6 +33,7 @@ pub(super) fn facility_kind_label(t: &Translator, kind: FacilityKind) -> String 
         FacilityKind::Administration => t.text("facility-administration"),
         FacilityKind::Granary => t.text("facility-granary"),
         FacilityKind::RelayStation => t.text("facility-relay-station"),
+        FacilityKind::Medical => t.text("facility-medical"),
     }
 }
 

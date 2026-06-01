@@ -19,6 +19,14 @@ struct CommandReservations {
     officer_ids: BTreeSet<OfficerId>,
 }
 
+const WOUNDED_PERCENT: u32 = 60;
+const DEFENDER_MONTHLY_LOSS_PERCENT: u32 = 22;
+const ATTACKER_MONTHLY_LOSS_PERCENT: u32 = 18;
+
+pub fn expedition_monthly_supply_for_troops(troops: TroopPool) -> u32 {
+    troops.total().div_ceil(500).max(1)
+}
+
 pub fn queue_player_command(state: &mut GameState, command: Command) -> Result<(), CommandError> {
     ensure_faction_technology_states(state);
     if state.status != GameStatus::Running {
@@ -371,8 +379,15 @@ fn validate_command(
         CommandKind::Expedition {
             target_city_id,
             assignments,
+            food_supply,
         } => {
             validate_expedition_assignments(state, command, city, assignments, &mut used_officers)?;
+            if *food_supply == 0 {
+                return Err(CommandError::Invalid("出征必须携带粮草".to_string()));
+            }
+            if city.food < i32::try_from(*food_supply).unwrap_or(i32::MAX) {
+                return Err(CommandError::Invalid("出征粮草超过城池存粮".to_string()));
+            }
             let target = state.cities.get(target_city_id).ok_or_else(|| {
                 CommandError::Invalid(format!("目标城池 {target_city_id} 不存在"))
             })?;
@@ -587,7 +602,15 @@ fn apply_command(state: &mut GameState, command: &Command, report: &mut TurnRepo
         CommandKind::Expedition {
             target_city_id,
             assignments,
-        } => apply_expedition(state, command, target_city_id, assignments, report),
+            food_supply,
+        } => apply_expedition(
+            state,
+            command,
+            target_city_id,
+            assignments,
+            *food_supply,
+            report,
+        ),
         CommandKind::Diplomacy {
             target_faction_id,
             proposal,
@@ -822,7 +845,10 @@ fn apply_transfer(
         commander_id: command.officer_id.clone().unwrap(),
         officer_ids: moving_officers,
         troops,
+        food_supply: 0,
+        wounded_troops: TroopPool::default(),
         assignments: Vec::new(),
+        siege_started_turn: None,
         training: source_training,
         distance_li,
         departure_turn: state.turn,
@@ -844,6 +870,7 @@ fn apply_expedition(
     command: &Command,
     target_city_id: &str,
     assignments: &[ExpeditionAssignment],
+    food_supply: u32,
     report: &mut TurnReport,
 ) {
     let troops = troop_pool_for_assignments(assignments);
@@ -861,6 +888,9 @@ fn apply_expedition(
     {
         let source = state.cities.get_mut(&command.city_id).unwrap();
         source.troops.saturating_sub_pool(troops);
+        source.food = source
+            .food
+            .saturating_sub(i32::try_from(food_supply).unwrap_or(i32::MAX));
     }
     for assignment in assignments {
         if let Some(officer) = state.officers.get_mut(&assignment.officer_id) {
@@ -879,18 +909,22 @@ fn apply_expedition(
         commander_id: command.officer_id.clone().unwrap(),
         officer_ids,
         troops,
+        food_supply,
+        wounded_troops: TroopPool::default(),
         assignments: assignments.to_vec(),
+        siege_started_turn: None,
         training: source_city.training,
         distance_li,
         departure_turn: state.turn,
         arrival_turn: state.turn + travel_months,
     });
     report.info(format!(
-        "{} 率兵从 {} 出征 {}：{} 兵，距离 {} 里，预计行军 {} 月",
+        "{} 率兵从 {} 出征 {}：{} 兵，携粮 {}，距离 {} 里，预计行军 {} 月",
         attacker_name,
         source_city.name,
         target_city.name,
         troops.total(),
+        food_supply,
         distance_li,
         travel_months
     ));
@@ -910,24 +944,58 @@ fn resolve_due_army_movements(state: &mut GameState, report: &mut TurnReport) {
     let movements = std::mem::take(&mut state.army_movements);
     let mut pending = Vec::new();
     for movement in movements {
-        if movement.arrival_turn <= state.turn {
-            resolve_army_movement_arrival(state, movement, report);
-        } else {
-            pending.push(movement);
+        match movement.kind {
+            ArmyMovementKind::Transfer => {
+                if movement.arrival_turn <= state.turn {
+                    resolve_transfer_arrival(state, movement, report);
+                } else {
+                    pending.push(movement);
+                }
+            }
+            ArmyMovementKind::Expedition => {
+                if let Some(movement) = resolve_expedition_month(state, movement, report) {
+                    pending.push(movement);
+                }
+            }
         }
     }
     state.army_movements = pending;
 }
 
-fn resolve_army_movement_arrival(
+fn resolve_expedition_month(
     state: &mut GameState,
-    movement: ArmyMovement,
+    mut movement: ArmyMovement,
     report: &mut TurnReport,
-) {
-    match movement.kind {
-        ArmyMovementKind::Transfer => resolve_transfer_arrival(state, movement, report),
-        ArmyMovementKind::Expedition => resolve_expedition_arrival(state, movement, report),
+) -> Option<ArmyMovement> {
+    if movement.departure_turn >= state.turn {
+        return Some(movement);
     }
+    if movement.troops.is_empty() {
+        return_expedition_to_friendly_city(
+            state,
+            &movement,
+            "出征队已无可战兵".to_string(),
+            report,
+        );
+        return None;
+    }
+
+    let monthly_supply = expedition_monthly_supply_for_troops(movement.troops);
+    if movement.food_supply < monthly_supply {
+        return_expedition_to_friendly_city(state, &movement, "粮草耗尽".to_string(), report);
+        return None;
+    }
+    movement.food_supply -= monthly_supply;
+
+    if movement.arrival_turn > state.turn {
+        report.info(format!(
+            "出征队行军消耗粮草 {monthly_supply}，剩余 {}",
+            movement.food_supply
+        ));
+        return Some(movement);
+    }
+
+    resolve_expedition_arrival(state, movement, report)
 }
 
 fn resolve_transfer_arrival(
@@ -962,74 +1030,80 @@ fn resolve_transfer_arrival(
 
 fn resolve_expedition_arrival(
     state: &mut GameState,
-    movement: ArmyMovement,
+    mut movement: ArmyMovement,
     report: &mut TurnReport,
-) {
+) -> Option<ArmyMovement> {
     let Some(target_city) = state.cities.get(&movement.target_city_id).cloned() else {
-        return_movement_to_friendly_city(
+        return_expedition_to_friendly_city(
             state,
             &movement,
-            movement.troops,
             format!("出征目标 {} 不存在", movement.target_city_id),
             report,
         );
-        return;
+        return None;
     };
 
     if target_city.faction_id == movement.issuer_faction_id {
         place_movement_at_city(state, &movement, &movement.target_city_id, movement.troops);
+        place_wounded_at_city(state, &movement.target_city_id, movement.wounded_troops);
         report.info(format!(
-            "出征队抵达 {}，目标已属己方，{} 兵入城",
+            "出征队抵达 {}，目标已属己方，{} 兵、{} 伤兵入城",
             target_city.name,
-            movement.troops.total()
+            movement.troops.total(),
+            movement.wounded_troops.total()
         ));
-        return;
+        return None;
     }
 
     if state
         .relation(&movement.issuer_faction_id, &target_city.faction_id)
         .is_some_and(|relation| relation.has_active_truce(state.turn))
     {
-        return_movement_to_friendly_city(
+        return_expedition_to_friendly_city(
             state,
             &movement,
-            movement.troops,
             format!("{} 已处于停战期，出征队撤回", target_city.name),
             report,
         );
-        return;
+        return None;
     }
 
     let Some(attacker) = state.officers.get(&movement.commander_id) else {
-        return_movement_to_friendly_city(
+        return_expedition_to_friendly_city(
             state,
             &movement,
-            movement.troops,
             format!("主将 {} 不存在，出征队撤回", movement.commander_id),
             report,
         );
-        return;
+        return None;
     };
     if !attacker.is_active() {
-        return_movement_to_friendly_city(
+        return_expedition_to_friendly_city(
             state,
             &movement,
-            movement.troops,
             format!("主将 {} 当前不可行动，出征队撤回", attacker.name),
             report,
         );
-        return;
+        return None;
     }
 
-    resolve_expedition_battle(state, &movement, &target_city, report);
+    if movement.siege_started_turn.is_none() {
+        movement.siege_started_turn = Some(state.turn);
+        report.info(format!(
+            "{} 抵达 {}，开始围攻，剩余粮草 {}",
+            attacker.name, target_city.name, movement.food_supply
+        ));
+    }
+
+    resolve_expedition_siege_round(state, movement, &target_city, report)
 }
 
-fn resolve_expedition_battle(
+fn resolve_expedition_siege_round(
     state: &mut GameState,
-    movement: &ArmyMovement,
+    mut movement: ArmyMovement,
     target_city: &City,
     report: &mut TurnReport,
-) {
+) -> Option<ArmyMovement> {
     let attacker = state.officers[&movement.commander_id].clone();
     let defender_governor = target_city
         .governor_id
@@ -1038,136 +1112,97 @@ fn resolve_expedition_battle(
     let attacker_bonuses = faction_technology_bonuses(state, &movement.issuer_faction_id);
     let defender_bonuses = faction_technology_bonuses(state, &target_city.faction_id);
 
-    let base_attack_score = expedition_attack_score(state, movement, target_city);
+    let base_attack_score = expedition_attack_score(state, &movement, target_city);
     let attack_percent = attacker_bonuses.attack_percent + attacker_bonuses.siege_attack_percent;
     let attack_score = apply_percent_bonus(base_attack_score, attack_percent);
     let base_defense_score = city_defense_score(target_city, defender_governor, movement.troops);
     let defense_score = apply_percent_bonus(base_defense_score, defender_bonuses.defense_percent);
-    let noise = battle_noise(
-        state.turn,
-        &movement.source_city_id,
-        &movement.target_city_id,
-    );
-    let attacker_wins = attack_score as i32 + noise > defense_score as i32;
+    let total_score = attack_score.saturating_add(defense_score);
 
-    if attacker_wins {
-        let attacker_loss = percent_loss(
+    if target_city.troops.is_empty() {
+        capture_city_after_siege(state, &movement, target_city, report);
+        return None;
+    }
+    if total_score == 0 {
+        return_expedition_to_friendly_city(state, &movement, "攻守皆无战力".to_string(), report);
+        return None;
+    }
+
+    let defender_loss = monthly_loss(
+        target_city.troops.total(),
+        DEFENDER_MONTHLY_LOSS_PERCENT,
+        attack_score,
+        total_score,
+    );
+    let attacker_loss = apply_loss_reduction(
+        monthly_loss(
             movement.troops.total(),
-            35,
-            attacker_bonuses.battle_loss_reduction_percent,
-        );
-        let surviving_troops = ensure_min_troops(
-            movement.troops.surviving_after_loss(attacker_loss),
-            movement.troops.total().min(100),
-        );
-        let old_faction = target_city.faction_id.clone();
-        let old_faction_name = faction_name(state, &old_faction);
-        let attacker_faction_name = faction_name(state, &movement.issuer_faction_id);
-        {
-            let target = state.cities.get_mut(&movement.target_city_id).unwrap();
-            target.faction_id = movement.issuer_faction_id.clone();
-            target.troops = surviving_troops;
-            target.training = movement.training.saturating_div(2).max(20);
-            target.governor_id = Some(movement.commander_id.clone());
-            target.order = target.order.saturating_sub(12);
-            target.clamp_fields();
-        }
-        place_movement_officers_at_city(state, movement, &movement.target_city_id);
-        retreat_defenders(state, &movement.target_city_id, &old_faction);
-        report.info(format!(
-            "{} 攻下 {}，剩余兵力 {}",
-            attacker.name,
-            target_city.name,
-            surviving_troops.total()
-        ));
-        record_battle_event(
-            state,
-            BattleEventDraft {
-                severity: GameEventSeverity::Important,
-                attacker_faction_id: movement.issuer_faction_id.clone(),
-                defender_faction_id: old_faction.clone(),
-                target_city_id: movement.target_city_id.clone(),
-                title: "攻城胜利".to_string(),
-                summary: format!(
-                    "{} 攻下 {}，剩余兵力 {}",
-                    attacker.name,
-                    target_city.name,
-                    surviving_troops.total()
-                ),
-                detail: format!(
-                    "{attacker_faction_name} 自 {} 出征，击败 {old_faction_name}，夺取 {}。",
-                    city_name(state, &movement.source_city_id),
-                    target_city.name
-                ),
-            },
-        );
-        record_game_event(
-            state,
-            GameEventDraft {
-                kind: GameEventKind::CityCaptured,
-                severity: GameEventSeverity::Critical,
-                scope: GameEventScope::World,
-                title: "城池易主".to_string(),
-                summary: format!(
-                    "{} 由 {old_faction_name} 转归 {attacker_faction_name}",
-                    target_city.name
-                ),
-                detail: format!(
-                    "{} 被 {} 攻下，原属 {old_faction_name}，现属 {attacker_faction_name}，守城秩序下降。",
-                    target_city.name, attacker.name
-                ),
-                city_id: Some(movement.target_city_id.clone()),
-                faction_id: Some(movement.issuer_faction_id.clone()),
-                officer_id: Some(movement.commander_id.clone()),
-                resolution: EventResolution::NoneRequired,
-            },
-        );
+            ATTACKER_MONTHLY_LOSS_PERCENT,
+            defense_score,
+            total_score,
+        ),
+        attacker_bonuses.battle_loss_reduction_percent,
+    );
+
+    let attacker_loss_pool = movement.troops.loss_pool(attacker_loss);
+    let attacker_wounded = wounded_pool_from_loss(attacker_loss_pool);
+    movement.troops.saturating_sub_pool(attacker_loss_pool);
+    movement.wounded_troops.add_pool(attacker_wounded);
+    reduce_assignments_by_loss(&mut movement.assignments, attacker_loss_pool);
+
+    let defender_loss_pool = target_city.troops.loss_pool(defender_loss);
+    let defender_wounded = wounded_pool_from_loss(defender_loss_pool);
+    {
+        let target = state.cities.get_mut(&movement.target_city_id).unwrap();
+        target.troops.saturating_sub_pool(defender_loss_pool);
+        target.wounded_troops.add_pool(defender_wounded);
+        target.training = target.training.saturating_sub(1);
+    }
+
+    let defender_remaining = state.cities[&movement.target_city_id].troops.total();
+    report.info(format!(
+        "{} 围攻 {}：攻方损失 {}（伤兵 {}），守方损失 {}（伤兵 {}），守军剩余 {}，粮草 {}",
+        attacker.name,
+        target_city.name,
+        attacker_loss_pool.total(),
+        attacker_wounded.total(),
+        defender_loss_pool.total(),
+        defender_wounded.total(),
+        defender_remaining,
+        movement.food_supply
+    ));
+    record_battle_event(
+        state,
+        BattleEventDraft {
+            severity: GameEventSeverity::Warning,
+            attacker_faction_id: movement.issuer_faction_id.clone(),
+            defender_faction_id: target_city.faction_id.clone(),
+            target_city_id: movement.target_city_id.clone(),
+            title: "围攻战报".to_string(),
+            summary: format!(
+                "{} 围攻 {}，守军剩余 {}",
+                attacker.name, target_city.name, defender_remaining
+            ),
+            detail: format!(
+                "本月攻方损失 {}、伤兵 {}；守方损失 {}、伤兵 {}；攻方粮草剩余 {}。",
+                attacker_loss_pool.total(),
+                attacker_wounded.total(),
+                defender_loss_pool.total(),
+                defender_wounded.total(),
+                movement.food_supply
+            ),
+        },
+    );
+
+    if movement.troops.is_empty() {
+        return_expedition_to_friendly_city(state, &movement, "攻方已无可战兵".to_string(), report);
+        None
+    } else if defender_remaining == 0 {
+        let target = state.cities[&movement.target_city_id].clone();
+        capture_city_after_siege(state, &movement, &target, report);
+        None
     } else {
-        let attacker_loss = percent_loss(
-            movement.troops.total(),
-            60,
-            attacker_bonuses.battle_loss_reduction_percent,
-        );
-        let defender_loss = movement.troops.total().saturating_mul(30) / 100;
-        {
-            let target = state.cities.get_mut(&movement.target_city_id).unwrap();
-            target.troops = target.troops.surviving_after_loss(defender_loss);
-            target.training = target.training.saturating_sub(4);
-        }
-        report.info(format!(
-            "{} 进攻 {} 失败，损失 {}",
-            attacker.name, target_city.name, attacker_loss
-        ));
-        record_battle_event(
-            state,
-            BattleEventDraft {
-                severity: GameEventSeverity::Warning,
-                attacker_faction_id: movement.issuer_faction_id.clone(),
-                defender_faction_id: target_city.faction_id.clone(),
-                target_city_id: movement.target_city_id.clone(),
-                title: "攻城失败".to_string(),
-                summary: format!(
-                    "{} 进攻 {} 失败，损失 {}",
-                    attacker.name, target_city.name, attacker_loss
-                ),
-                detail: format!(
-                    "{} 守住 {}，攻方败军撤回。",
-                    faction_name(state, &target_city.faction_id),
-                    target_city.name
-                ),
-            },
-        );
-        let mut retreat_troops = movement.troops.surviving_after_loss(attacker_loss);
-        retreat_troops.add_total_preserving_ratio(
-            movement.troops.total() * attacker_bonuses.retreat_survival_percent as u32 / 100,
-        );
-        return_movement_to_friendly_city(
-            state,
-            movement,
-            retreat_troops,
-            "败军撤回".to_string(),
-            report,
-        );
+        Some(movement)
     }
 }
 
@@ -1184,6 +1219,9 @@ fn expedition_attack_score(state: &GameState, movement: &ArmyMovement, target_ci
     };
 
     for assignment in assignments {
+        if assignment.troops == 0 {
+            continue;
+        }
         let Some(officer) = state.officers.get(&assignment.officer_id) else {
             continue;
         };
@@ -1235,11 +1273,76 @@ fn troop_matchup_percent(kind: TroopKind, opponent: TroopPool) -> u32 {
     (100 + advantaged).saturating_sub(countered).clamp(75, 125)
 }
 
-fn ensure_min_troops(mut troops: TroopPool, minimum: u32) -> TroopPool {
-    if troops.total() < minimum {
-        troops.add_total_preserving_ratio(minimum - troops.total());
+fn monthly_loss(units: u32, loss_percent: u32, pressure_score: u32, total_score: u32) -> u32 {
+    if units == 0 || pressure_score == 0 || total_score == 0 {
+        return 0;
     }
-    troops
+    let loss = u64::from(units)
+        .saturating_mul(u64::from(loss_percent))
+        .saturating_mul(u64::from(pressure_score))
+        / u64::from(total_score)
+        / 100;
+    (loss as u32).clamp(1, units)
+}
+
+fn apply_loss_reduction(loss: u32, reduction_percent: i32) -> u32 {
+    if loss == 0 {
+        return 0;
+    }
+    let reduction = reduction_percent.clamp(0, 95) as u32;
+    loss.saturating_mul(100 - reduction).div_ceil(100).max(1)
+}
+
+fn wounded_pool_from_loss(loss_pool: TroopPool) -> TroopPool {
+    let wounded_total = loss_pool
+        .total()
+        .saturating_mul(WOUNDED_PERCENT)
+        .saturating_add(50)
+        / 100;
+    loss_pool.loss_pool(wounded_total)
+}
+
+fn reduce_assignments_by_loss(assignments: &mut [ExpeditionAssignment], loss_pool: TroopPool) {
+    for kind in TroopKind::ALL {
+        let kind_loss = loss_pool.get(kind);
+        if kind_loss == 0 {
+            continue;
+        }
+        let total_for_kind: u32 = assignments
+            .iter()
+            .filter(|assignment| assignment.troop_kind == kind)
+            .map(|assignment| assignment.troops)
+            .sum();
+        if total_for_kind == 0 {
+            continue;
+        }
+
+        let mut remaining = kind_loss;
+        for assignment in assignments
+            .iter_mut()
+            .filter(|assignment| assignment.troop_kind == kind)
+        {
+            if remaining == 0 {
+                break;
+            }
+            let share = u64::from(kind_loss).saturating_mul(u64::from(assignment.troops))
+                / u64::from(total_for_kind);
+            let removed = (share as u32).min(assignment.troops).min(remaining);
+            assignment.troops -= removed;
+            remaining -= removed;
+        }
+
+        while remaining > 0 {
+            let Some(assignment) = assignments
+                .iter_mut()
+                .find(|assignment| assignment.troop_kind == kind && assignment.troops > 0)
+            else {
+                break;
+            };
+            assignment.troops -= 1;
+            remaining -= 1;
+        }
+    }
 }
 
 fn place_movement_at_city(
@@ -1254,17 +1357,18 @@ fn place_movement_at_city(
     place_movement_officers_at_city(state, movement, city_id);
 }
 
+fn place_wounded_at_city(state: &mut GameState, city_id: &str, wounded_troops: TroopPool) {
+    if let Some(city) = state.cities.get_mut(city_id) {
+        city.wounded_troops.add_pool(wounded_troops);
+    }
+}
+
 fn apply_percent_bonus(value: u32, percent: i32) -> u32 {
     if percent >= 0 {
         value.saturating_add(value.saturating_mul(percent as u32) / 100)
     } else {
         value.saturating_sub(value.saturating_mul(percent.unsigned_abs()) / 100)
     }
-}
-
-fn percent_loss(value: u32, loss_percent: u32, reduction_percent: i32) -> u32 {
-    let effective_percent = loss_percent.saturating_sub(reduction_percent.max(0) as u32);
-    value.saturating_mul(effective_percent) / 100
 }
 
 fn place_movement_officers_at_city(state: &mut GameState, movement: &ArmyMovement, city_id: &str) {
@@ -1284,6 +1388,40 @@ fn return_movement_to_friendly_city(
     reason: String,
     report: &mut TurnReport,
 ) {
+    return_movement_to_friendly_city_with_wounded(
+        state,
+        movement,
+        troops,
+        TroopPool::default(),
+        reason,
+        report,
+    );
+}
+
+fn return_expedition_to_friendly_city(
+    state: &mut GameState,
+    movement: &ArmyMovement,
+    reason: String,
+    report: &mut TurnReport,
+) {
+    return_movement_to_friendly_city_with_wounded(
+        state,
+        movement,
+        movement.troops,
+        movement.wounded_troops,
+        reason,
+        report,
+    );
+}
+
+fn return_movement_to_friendly_city_with_wounded(
+    state: &mut GameState,
+    movement: &ArmyMovement,
+    troops: TroopPool,
+    wounded_troops: TroopPool,
+    reason: String,
+    report: &mut TurnReport,
+) {
     let fallback_city_id = state
         .cities
         .get(&movement.source_city_id)
@@ -1300,9 +1438,11 @@ fn return_movement_to_friendly_city(
     if let Some(city_id) = fallback_city_id {
         let city_name = city_name(state, &city_id);
         place_movement_at_city(state, movement, &city_id, troops);
+        place_wounded_at_city(state, &city_id, wounded_troops);
         report.warning(format!(
-            "{reason}，队伍退回 {city_name}，保全 {} 兵",
-            troops.total()
+            "{reason}，队伍退回 {city_name}，保全 {} 兵、{} 伤兵",
+            troops.total(),
+            wounded_troops.total()
         ));
     } else {
         for officer_id in &movement.officer_ids {
@@ -1316,10 +1456,91 @@ fn return_movement_to_friendly_city(
             }
         }
         report.warning(format!(
-            "{reason}，无己方城池可退，{} 兵溃散",
-            troops.total()
+            "{reason}，无己方城池可退，{} 兵、{} 伤兵溃散",
+            troops.total(),
+            wounded_troops.total()
         ));
     }
+}
+
+fn capture_city_after_siege(
+    state: &mut GameState,
+    movement: &ArmyMovement,
+    target_city: &City,
+    report: &mut TurnReport,
+) {
+    let attacker = state.officers[&movement.commander_id].clone();
+    let old_faction = target_city.faction_id.clone();
+    let old_faction_name = faction_name(state, &old_faction);
+    let attacker_faction_name = faction_name(state, &movement.issuer_faction_id);
+    let defender_wounded = target_city.wounded_troops;
+    {
+        let target = state.cities.get_mut(&movement.target_city_id).unwrap();
+        target.faction_id = movement.issuer_faction_id.clone();
+        target.troops = movement.troops;
+        target.wounded_troops = movement.wounded_troops;
+        target.training = movement.training.saturating_div(2).max(20);
+        target.governor_id = Some(movement.commander_id.clone());
+        target.order = target.order.saturating_sub(12);
+        target.clamp_fields();
+    }
+    place_movement_officers_at_city(state, movement, &movement.target_city_id);
+    retreat_defenders(
+        state,
+        &movement.target_city_id,
+        &old_faction,
+        defender_wounded,
+    );
+    report.info(format!(
+        "{} 攻下 {}，剩余兵力 {}，伤兵 {}",
+        attacker.name,
+        target_city.name,
+        movement.troops.total(),
+        movement.wounded_troops.total()
+    ));
+    record_battle_event(
+        state,
+        BattleEventDraft {
+            severity: GameEventSeverity::Important,
+            attacker_faction_id: movement.issuer_faction_id.clone(),
+            defender_faction_id: old_faction.clone(),
+            target_city_id: movement.target_city_id.clone(),
+            title: "攻城胜利".to_string(),
+            summary: format!(
+                "{} 攻下 {}，剩余兵力 {}",
+                attacker.name,
+                target_city.name,
+                movement.troops.total()
+            ),
+            detail: format!(
+                "{attacker_faction_name} 自 {} 出征，击败 {old_faction_name}，夺取 {}；{} 伤兵入城。",
+                city_name(state, &movement.source_city_id),
+                target_city.name,
+                movement.wounded_troops.total()
+            ),
+        },
+    );
+    record_game_event(
+        state,
+        GameEventDraft {
+            kind: GameEventKind::CityCaptured,
+            severity: GameEventSeverity::Critical,
+            scope: GameEventScope::World,
+            title: "城池易主".to_string(),
+            summary: format!(
+                "{} 由 {old_faction_name} 转归 {attacker_faction_name}",
+                target_city.name
+            ),
+            detail: format!(
+                "{} 被 {} 攻下，原属 {old_faction_name}，现属 {attacker_faction_name}，守城秩序下降。",
+                target_city.name, attacker.name
+            ),
+            city_id: Some(movement.target_city_id.clone()),
+            faction_id: Some(movement.issuer_faction_id.clone()),
+            officer_id: Some(movement.commander_id.clone()),
+            resolution: EventResolution::NoneRequired,
+        },
+    );
 }
 
 struct BattleEventDraft {
@@ -1415,12 +1636,22 @@ fn apply_diplomacy(
     }
 }
 
-fn retreat_defenders(state: &mut GameState, captured_city_id: &str, old_faction_id: &str) {
+fn retreat_defenders(
+    state: &mut GameState,
+    captured_city_id: &str,
+    old_faction_id: &str,
+    wounded_troops: TroopPool,
+) {
     let fallback_city = state
         .cities
         .values()
         .find(|city| city.faction_id == old_faction_id && city.id != captured_city_id)
         .map(|city| city.id.clone());
+    if let Some(city_id) = &fallback_city
+        && let Some(city) = state.cities.get_mut(city_id)
+    {
+        city.wounded_troops.add_pool(wounded_troops);
+    }
     for officer in state.officers.values_mut() {
         if officer.faction_id == old_faction_id
             && officer.city_id.as_deref() == Some(captured_city_id)
@@ -1493,6 +1724,14 @@ fn official_effect_to_city_effect(effect: OfficialPostEffect) -> CityEconomyEffe
 
 fn apply_monthly_income(state: &mut GameState, report: &mut TurnReport) {
     let player_faction_id = state.player_faction_id.clone();
+    let besieged_city_ids: BTreeSet<CityId> = state
+        .army_movements
+        .iter()
+        .filter(|movement| {
+            movement.kind == ArmyMovementKind::Expedition && movement.arrival_turn <= state.turn
+        })
+        .map(|movement| movement.target_city_id.clone())
+        .collect();
     let salaries = city_salary_totals(state);
     let official_effects = city_official_effect_totals(state);
     let technology_effects = city_technology_effect_totals(state);
@@ -1501,12 +1740,14 @@ fn apply_monthly_income(state: &mut GameState, report: &mut TurnReport) {
     let mut total_materials_delta = 0;
     let mut total_population_delta = 0;
     let mut total_troop_delta = 0;
+    let mut total_wounded_recovered = 0;
     let mut total_salary = 0;
     let mut player_gold_delta = 0;
     let mut player_food_delta = 0;
     let mut player_materials_delta = 0;
     let mut player_population_delta = 0;
     let mut player_troop_delta = 0;
+    let mut player_wounded_recovered = 0;
     let mut player_salary = 0;
     let mut player_city_count = 0;
 
@@ -1520,11 +1761,18 @@ fn apply_monthly_income(state: &mut GameState, report: &mut TurnReport) {
                 .unwrap_or_default(),
         );
         let projection = project_city_monthly_change_with_effects(city, salary, extra_effects);
+        let besieged = besieged_city_ids.contains(&city.id);
+        let troop_delta = if besieged { 0 } else { projection.troop_delta };
         city.gold += projection.net_gold;
         city.food += projection.net_food;
         city.materials += projection.net_materials;
         city.population = apply_i32_to_u32(city.population, projection.population_delta);
-        apply_i32_to_troop_pool(&mut city.troops, projection.troop_delta);
+        apply_i32_to_troop_pool(&mut city.troops, troop_delta);
+        let wounded_recovered = if besieged {
+            0
+        } else {
+            recover_wounded_troops(city, projection.wounded_recovery as u32)
+        };
         city.order = apply_i32_to_u8(city.order, projection.order_delta, 0, 100);
         city.training = apply_i32_to_u8(city.training, projection.training_delta, 0, 100);
         city.defense = apply_i32_to_u16(city.defense, projection.defense_delta, 0, 999);
@@ -1534,7 +1782,8 @@ fn apply_monthly_income(state: &mut GameState, report: &mut TurnReport) {
         total_food_delta += projection.net_food;
         total_materials_delta += projection.net_materials;
         total_population_delta += projection.population_delta;
-        total_troop_delta += projection.troop_delta;
+        total_troop_delta += troop_delta + wounded_recovered as i32;
+        total_wounded_recovered += wounded_recovered;
         total_salary += salary;
         if city.faction_id == player_faction_id {
             player_city_count += 1;
@@ -1542,12 +1791,13 @@ fn apply_monthly_income(state: &mut GameState, report: &mut TurnReport) {
             player_food_delta += projection.net_food;
             player_materials_delta += projection.net_materials;
             player_population_delta += projection.population_delta;
-            player_troop_delta += projection.troop_delta;
+            player_troop_delta += troop_delta + wounded_recovered as i32;
+            player_wounded_recovered += wounded_recovered;
             player_salary += salary;
         }
     }
     report.info(format!(
-        "各城完成月度经济结算：全图金 {total_gold_delta:+}、粮 {total_food_delta:+}、建材 {total_materials_delta:+}、人口 {total_population_delta:+}、兵 {total_troop_delta:+}、俸禄 -{total_salary}；玩家 {player_city_count} 城金 {player_gold_delta:+}、粮 {player_food_delta:+}、建材 {player_materials_delta:+}、人口 {player_population_delta:+}、兵 {player_troop_delta:+}、俸禄 -{player_salary}"
+        "各城完成月度经济结算：全图金 {total_gold_delta:+}、粮 {total_food_delta:+}、建材 {total_materials_delta:+}、人口 {total_population_delta:+}、兵 {total_troop_delta:+}、伤兵恢复 {total_wounded_recovered}、俸禄 -{total_salary}；玩家 {player_city_count} 城金 {player_gold_delta:+}、粮 {player_food_delta:+}、建材 {player_materials_delta:+}、人口 {player_population_delta:+}、兵 {player_troop_delta:+}、伤兵恢复 {player_wounded_recovered}、俸禄 -{player_salary}"
     ));
 }
 
@@ -1628,6 +1878,18 @@ fn apply_i32_to_troop_pool(troops: &mut TroopPool, delta: i32) {
     }
 }
 
+fn recover_wounded_troops(city: &mut City, amount: u32) -> u32 {
+    if amount == 0 || city.wounded_troops.is_empty() {
+        return 0;
+    }
+    let recovered = city
+        .wounded_troops
+        .loss_pool(amount.min(city.wounded_troops.total()));
+    city.wounded_troops.saturating_sub_pool(recovered);
+    city.troops.add_pool(recovered);
+    recovered.total()
+}
+
 fn apply_i32_to_u8(value: u8, delta: i32, min: u8, max: u8) -> u8 {
     (i32::from(value) + delta).clamp(i32::from(min), i32::from(max)) as u8
 }
@@ -1639,6 +1901,7 @@ fn apply_i32_to_u16(value: u16, delta: i32, min: u16, max: u16) -> u16 {
 fn append_turn_summary(state: &GameState, report: &mut TurnReport) {
     let mut player_city_count = 0;
     let mut player_troops = 0;
+    let mut player_wounded = 0;
     let mut player_gold = 0;
     let mut player_food = 0;
     let mut player_materials = 0;
@@ -1650,6 +1913,7 @@ fn append_turn_summary(state: &GameState, report: &mut TurnReport) {
     {
         player_city_count += 1;
         player_troops += city.troops.total();
+        player_wounded += city.wounded_troops.total();
         player_gold += city.gold;
         player_food += city.food;
         player_materials += city.materials;
@@ -1662,12 +1926,13 @@ fn append_turn_summary(state: &GameState, report: &mut TurnReport) {
         .count();
 
     report.info(format!(
-        "进入 {}年{}月，存续势力 {} 个；玩家控制 {} 城，兵力 {}，金 {}，粮 {}，建材 {}",
+        "进入 {}年{}月，存续势力 {} 个；玩家控制 {} 城，兵力 {}，伤兵 {}，金 {}，粮 {}，建材 {}",
         state.year,
         state.month,
         alive_factions,
         player_city_count,
         player_troops,
+        player_wounded,
         player_gold,
         player_food,
         player_materials
@@ -2060,6 +2325,7 @@ fn facility_kind_name(kind: FacilityKind) -> &'static str {
         FacilityKind::Administration => "官署",
         FacilityKind::Granary => "粮仓",
         FacilityKind::RelayStation => "驿站",
+        FacilityKind::Medical => "医馆",
     }
 }
 
@@ -2086,12 +2352,6 @@ pub fn travel_months_for_faction(state: &GameState, faction_id: &str, distance_l
     travel_months_for_distance(distance_li)
         .saturating_sub(reduction)
         .max(1)
-}
-
-fn battle_noise(turn: u32, source: &str, target: &str) -> i32 {
-    let source_sum: u32 = source.bytes().map(u32::from).sum();
-    let target_sum: u32 = target.bytes().map(u32::from).sum();
-    ((turn + source_sum * 3 + target_sum * 7) % 21) as i32 - 10
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

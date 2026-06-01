@@ -2,8 +2,8 @@ use super::city::{
     CITY_MAX_LEVEL, City, FacilityKind, city_core_upgrade_cost, facility_upgrade_cost,
 };
 use super::commands::{
-    command_capacity_for_officer, resolve_command_batch, resolve_command_batch_with_history,
-    validate_command_for_state,
+    command_capacity_for_officer, expedition_monthly_supply_for_troops, resolve_command_batch,
+    resolve_command_batch_with_history, validate_command_for_state,
 };
 use super::history_db::HistoricalCatalog;
 use super::ids::{CityId, FactionId};
@@ -114,6 +114,21 @@ impl AiProvider for RuleBasedAiProvider {
             if let Some(target_id) = best_attack_target(&request, city) {
                 let officer = best_leader(&officers);
                 let troop_kind = dominant_troop_kind(city.troops);
+                let assigned_troops = (city.troops.total() * 45 / 100)
+                    .max(300)
+                    .min(command_capacity_for_officer(officer))
+                    .min(city.troops.get(troop_kind));
+                let food_supply = ai_expedition_food_supply(
+                    &request,
+                    city,
+                    &target_id,
+                    troop_kind,
+                    assigned_troops,
+                );
+                let Some(food_supply) = food_supply else {
+                    diagnostics.push(format!("{} 存粮不足，暂缓出征", city.name));
+                    continue;
+                };
                 used_officers.insert(officer.id.clone());
                 commands.push(Command {
                     issuer_faction_id: request.faction_id.clone(),
@@ -124,11 +139,9 @@ impl AiProvider for RuleBasedAiProvider {
                         assignments: vec![ExpeditionAssignment::commander(
                             officer.id.clone(),
                             troop_kind,
-                            (city.troops.total() * 45 / 100)
-                                .max(300)
-                                .min(command_capacity_for_officer(officer))
-                                .min(city.troops.get(troop_kind)),
+                            assigned_troops,
                         )],
+                        food_supply,
                     },
                 });
                 continue;
@@ -274,6 +287,37 @@ fn best_attack_target(request: &AiDecisionRequest, city: &City) -> Option<CityId
         .map(|target| target.id.clone())
 }
 
+fn ai_expedition_food_supply(
+    request: &AiDecisionRequest,
+    city: &City,
+    target_id: &str,
+    troop_kind: TroopKind,
+    assigned_troops: u32,
+) -> Option<u32> {
+    if assigned_troops == 0 {
+        return None;
+    }
+    let target = request
+        .cities
+        .iter()
+        .find(|candidate| candidate.id == target_id)?;
+    let distance_li = request.roads.iter().find_map(|road| {
+        if road.from == city.id && road.to == target.id
+            || road.from == target.id && road.to == city.id
+        {
+            Some(map_distance_li(city.position, target.position))
+        } else {
+            None
+        }
+    })?;
+    let mut troops = TroopPool::default();
+    troops.add(troop_kind, assigned_troops);
+    let monthly_supply = expedition_monthly_supply_for_troops(troops);
+    let travel_months = travel_months_for_distance(distance_li);
+    let supply = monthly_supply.saturating_mul(travel_months.saturating_add(4));
+    (city.food >= i32::try_from(supply).unwrap_or(i32::MAX)).then_some(supply)
+}
+
 fn dominant_troop_kind(troops: TroopPool) -> TroopKind {
     TroopKind::ALL
         .into_iter()
@@ -315,6 +359,7 @@ fn best_construction_command(city: &City) -> Option<CommandKind> {
         FacilityKind::Walls,
         FacilityKind::Administration,
         FacilityKind::Granary,
+        FacilityKind::Medical,
         FacilityKind::RelayStation,
     ] {
         let Some(facility) = city.facility(kind) else {
@@ -353,6 +398,9 @@ fn preferred_new_facilities(city: &City) -> Vec<FacilityKind> {
     if city.troops.total() >= 3_000 {
         kinds.push(FacilityKind::Barracks);
         kinds.push(FacilityKind::DrillGround);
+    }
+    if city.wounded_troops.total() >= 500 || city.troops.total() >= 5_000 {
+        kinds.push(FacilityKind::Medical);
     }
     if city.defense < 180 {
         kinds.push(FacilityKind::Walls);

@@ -954,6 +954,39 @@ fn expedition_parameter_controls(
     } else {
         ui_state.expedition_deputy_two_troops = 0;
     }
+
+    let assignments = expedition_assignments_from_ui(ui_state, main_id);
+    let departing_troops = expedition_assignment_pool(&assignments);
+    let monthly_supply = expedition_monthly_supply_for_troops(departing_troops);
+    let max_supply = city.food.max(0) as u32;
+    if max_supply == 0 {
+        ui_state.expedition_food_supply = 0;
+        ui.colored_label(war_text_muted(), t.text("command-expedition-no-food"));
+        return;
+    }
+    let travel_months = game
+        .road_distance_li(&city.id, &selected_target_id)
+        .map(|distance| travel_months_for_faction(game, &city.faction_id, distance))
+        .unwrap_or(1);
+    let recommended_supply = monthly_supply
+        .saturating_mul(travel_months.saturating_add(3))
+        .clamp(1, max_supply);
+    if ui_state.expedition_food_supply == 0 || ui_state.expedition_food_supply > max_supply {
+        ui_state.expedition_food_supply = recommended_supply;
+    }
+    ui.add(
+        egui::Slider::new(&mut ui_state.expedition_food_supply, 1..=max_supply)
+            .text(t.text("command-expedition-food-supply")),
+    );
+    let supported_months = ui_state.expedition_food_supply / monthly_supply.max(1);
+    ui.label(t.text_args(
+        "command-expedition-supply-estimate",
+        &args([
+            ("monthly", monthly_supply.to_string()),
+            ("months", supported_months.to_string()),
+            ("recommended", recommended_supply.to_string()),
+        ]),
+    ));
 }
 
 fn expedition_assignment_controls(
@@ -1229,6 +1262,7 @@ fn build_candidate_command(
         CommandAction::Expedition => CommandKind::Expedition {
             target_city_id: ui_state.selected_expedition_target.clone()?,
             assignments: expedition_assignments_from_ui(ui_state, &officer_id),
+            food_supply: ui_state.expedition_food_supply,
         },
         CommandAction::Diplomacy => CommandKind::Diplomacy {
             target_faction_id: ui_state.selected_diplomacy_target.clone()?,
@@ -1427,6 +1461,7 @@ fn command_preview_lines(
         CommandKind::Expedition {
             target_city_id,
             assignments,
+            food_supply,
         } => {
             let target = game.cities.get(target_city_id);
             lines.push(t.text_args(
@@ -1451,6 +1486,16 @@ fn command_preview_lines(
                     "troops",
                     troop_pool_summary(expedition_assignment_pool(assignments), t),
                 )]),
+            ));
+            let monthly_supply =
+                expedition_monthly_supply_for_troops(expedition_assignment_pool(assignments));
+            lines.push(t.text_args(
+                "preview-expedition-supply",
+                &args([
+                    ("supply", food_supply.to_string()),
+                    ("monthly", monthly_supply.to_string()),
+                    ("months", (food_supply / monthly_supply.max(1)).to_string()),
+                ]),
             ));
             for assignment in assignments {
                 lines.push(t.text_args(
