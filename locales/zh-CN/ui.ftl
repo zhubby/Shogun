@@ -115,6 +115,7 @@ officer-portrait-generated = 已生成
 officer-portrait-failed = 生成失败: {$error}
 officer-portrait-load-failed = 肖像读取失败: {$error}
 officer-portrait-api-key-required = 请先在 AI 设置中填写百炼 API Key。
+officer-portrait-debug-log = 调试日志
 officer-edit-name-required = 姓名不能为空
 officer-edit-year-invalid = 年份必须为空或整数
 message-officer-saved = 已保存 {$name}

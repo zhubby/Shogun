@@ -517,6 +517,10 @@ pub struct BailianImageOutput {
     #[serde(default)]
     pub task_status: Option<String>,
     #[serde(default)]
+    pub code: Option<String>,
+    #[serde(default)]
+    pub message: Option<String>,
+    #[serde(default)]
     pub submit_time: Option<String>,
     #[serde(default)]
     pub scheduled_time: Option<String>,

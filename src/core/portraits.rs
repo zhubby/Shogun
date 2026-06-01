@@ -4,7 +4,11 @@ use crate::ai::{
     BailianRegion, BailianWaitOptions,
 };
 use crate::game::{OfficerGender, OfficerId};
-use bevy::{image::Image as BevyImage, render::render_resource::TextureFormat};
+use bevy::{
+    image::Image as BevyImage,
+    log::{debug, error, info, warn},
+    render::render_resource::TextureFormat,
+};
 use bevy_egui::egui;
 use directories::ProjectDirs;
 use std::{
@@ -16,8 +20,9 @@ use std::{
         mpsc::{self, Receiver, Sender},
     },
     thread,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
+use tokio::time::sleep;
 
 use super::state::OfficerEditDraft;
 
@@ -28,6 +33,7 @@ dark atmospheric background, highly detailed digital painting, masterpiece";
 pub(super) const OFFICER_PORTRAIT_SIZE: &str = "576*768";
 
 const OFFICER_PORTRAIT_PNG_MAGIC: &[u8] = b"\x89PNG\r\n\x1a\n";
+const OFFICER_PORTRAIT_DEBUG_LOG_LIMIT: usize = 80;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum OfficerPortraitTaskState {
@@ -39,6 +45,7 @@ pub(super) enum OfficerPortraitTaskState {
 
 pub(super) struct OfficerPortraitStore {
     task_states: BTreeMap<OfficerId, OfficerPortraitTaskState>,
+    debug_logs: BTreeMap<OfficerId, Vec<String>>,
     textures: BTreeMap<OfficerId, OfficerPortraitTexture>,
     sender: Sender<OfficerPortraitTaskEvent>,
     receiver: Mutex<Receiver<OfficerPortraitTaskEvent>>,
@@ -49,6 +56,7 @@ impl Default for OfficerPortraitStore {
         let (sender, receiver) = mpsc::channel();
         Self {
             task_states: BTreeMap::new(),
+            debug_logs: BTreeMap::new(),
             textures: BTreeMap::new(),
             sender,
             receiver: Mutex::new(receiver),
@@ -66,12 +74,23 @@ impl OfficerPortraitStore {
 
         for event in events {
             match event {
+                OfficerPortraitTaskEvent::Log {
+                    officer_id,
+                    message,
+                } => {
+                    self.push_debug_log(officer_id, message);
+                }
                 OfficerPortraitTaskEvent::Succeeded { officer_id, path } => {
+                    self.push_debug_log(
+                        officer_id.clone(),
+                        format!("完成: 已保存 {}", path.display()),
+                    );
                     self.textures.remove(&officer_id);
                     self.task_states
                         .insert(officer_id, OfficerPortraitTaskState::Succeeded { path });
                 }
                 OfficerPortraitTaskEvent::Failed { officer_id, error } => {
+                    self.push_debug_log(officer_id.clone(), format!("失败: {error}"));
                     self.task_states
                         .insert(officer_id, OfficerPortraitTaskState::Failed(error));
                 }
@@ -84,6 +103,10 @@ impl OfficerPortraitStore {
             .get(officer_id)
             .cloned()
             .unwrap_or(OfficerPortraitTaskState::Idle)
+    }
+
+    pub(super) fn debug_log(&self, officer_id: &str) -> Vec<String> {
+        self.debug_logs.get(officer_id).cloned().unwrap_or_default()
     }
 
     pub(super) fn start_generation(
@@ -118,15 +141,30 @@ impl OfficerPortraitStore {
             }
         };
 
+        self.debug_logs.insert(officer_id.clone(), Vec::new());
+        self.push_debug_log(
+            officer_id.clone(),
+            format!(
+                "启动: officer_id={}, model={}, path={}",
+                officer_id,
+                normalized_model_name(&model_name),
+                path.display()
+            ),
+        );
         self.task_states
             .insert(officer_id.clone(), OfficerPortraitTaskState::Generating);
 
         let sender = self.sender.clone();
         thread::spawn(move || {
-            let result = run_officer_portrait_generation(api_key, model_name, draft, path.clone());
+            let logger = OfficerPortraitDebugLogger::new(officer_id.clone(), sender.clone());
+            let result =
+                run_officer_portrait_generation(api_key, model_name, draft, path.clone(), &logger);
             let event = match result {
                 Ok(()) => OfficerPortraitTaskEvent::Succeeded { officer_id, path },
-                Err(error) => OfficerPortraitTaskEvent::Failed { officer_id, error },
+                Err(error) => {
+                    logger.error(format!("生成失败: {error}"));
+                    OfficerPortraitTaskEvent::Failed { officer_id, error }
+                }
             };
             let _ = sender.send(event);
         });
@@ -157,6 +195,15 @@ impl OfficerPortraitStore {
         self.textures.insert(officer_id.to_string(), texture);
         Ok(Some(view))
     }
+
+    fn push_debug_log(&mut self, officer_id: OfficerId, message: String) {
+        let logs = self.debug_logs.entry(officer_id).or_default();
+        logs.push(message);
+        if logs.len() > OFFICER_PORTRAIT_DEBUG_LOG_LIMIT {
+            let overflow = logs.len() - OFFICER_PORTRAIT_DEBUG_LOG_LIMIT;
+            logs.drain(0..overflow);
+        }
+    }
 }
 
 struct OfficerPortraitTexture {
@@ -181,6 +228,10 @@ pub(super) struct OfficerPortraitTextureView {
 }
 
 enum OfficerPortraitTaskEvent {
+    Log {
+        officer_id: OfficerId,
+        message: String,
+    },
     Succeeded {
         officer_id: OfficerId,
         path: PathBuf,
@@ -189,6 +240,48 @@ enum OfficerPortraitTaskEvent {
         officer_id: OfficerId,
         error: String,
     },
+}
+
+struct OfficerPortraitDebugLogger {
+    officer_id: OfficerId,
+    sender: Sender<OfficerPortraitTaskEvent>,
+}
+
+impl OfficerPortraitDebugLogger {
+    fn new(officer_id: OfficerId, sender: Sender<OfficerPortraitTaskEvent>) -> Self {
+        Self { officer_id, sender }
+    }
+
+    fn info(&self, message: impl Into<String>) {
+        let message = message.into();
+        info!(target: "shogun::portrait", "{message}");
+        self.send(message);
+    }
+
+    fn warn(&self, message: impl Into<String>) {
+        let message = message.into();
+        warn!(target: "shogun::portrait", "{message}");
+        self.send(message);
+    }
+
+    fn error(&self, message: impl Into<String>) {
+        let message = message.into();
+        error!(target: "shogun::portrait", "{message}");
+        self.send(message);
+    }
+
+    fn debug(&self, message: impl Into<String>) {
+        let message = message.into();
+        debug!(target: "shogun::portrait", "{message}");
+        self.send(message);
+    }
+
+    fn send(&self, message: String) {
+        let _ = self.sender.send(OfficerPortraitTaskEvent::Log {
+            officer_id: self.officer_id.clone(),
+            message,
+        });
+    }
 }
 
 pub(super) fn officer_portrait_path(officer_id: &str) -> Result<PathBuf, String> {
@@ -242,12 +335,15 @@ fn run_officer_portrait_generation(
     model_name: String,
     draft: OfficerEditDraft,
     path: PathBuf,
+    logger: &OfficerPortraitDebugLogger,
 ) -> Result<(), String> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .map_err(|error| format!("初始化图像生成运行时失败: {error}"))?;
-    runtime.block_on(generate_officer_portrait(api_key, model_name, draft, path))
+    runtime.block_on(generate_officer_portrait(
+        api_key, model_name, draft, path, logger,
+    ))
 }
 
 async fn generate_officer_portrait(
@@ -255,16 +351,24 @@ async fn generate_officer_portrait(
     model_name: String,
     draft: OfficerEditDraft,
     path: PathBuf,
+    logger: &OfficerPortraitDebugLogger,
 ) -> Result<(), String> {
     let model_name = normalized_model_name(&model_name);
+    let prompt = build_officer_portrait_prompt(&draft);
+    logger.info(format!(
+        "请求: officer_id={}, name={}, model={}, size={}, n=1, watermark=false, prompt_chars={}",
+        draft.id,
+        draft.name.trim(),
+        model_name,
+        OFFICER_PORTRAIT_SIZE,
+        prompt.chars().count()
+    ));
+    logger.debug(format!("Prompt: {}", truncate_debug_text(&prompt, 360)));
     let client = BailianClient::new(
         BailianConfig::new(api_key, BailianRegion::Beijing).with_timeout(Duration::from_secs(180)),
     )
     .map_err(localize_ai_error)?;
-    let mut request = BailianImageGenerationRequest::text_to_image(
-        model_name,
-        build_officer_portrait_prompt(&draft),
-    );
+    let mut request = BailianImageGenerationRequest::text_to_image(model_name, prompt);
     request.parameters = Some(BailianImageParameters {
         size: Some(OFFICER_PORTRAIT_SIZE.to_string()),
         n: Some(1),
@@ -272,11 +376,21 @@ async fn generate_officer_portrait(
         ..Default::default()
     });
 
+    logger.info("提交百炼异步图像任务");
     let created = client
         .create_image_task(&request)
         .await
         .map_err(localize_ai_error)?;
+    logger.info(format!(
+        "创建响应: {}",
+        bailian_response_debug_summary(&created)
+    ));
+    logger.debug(format!(
+        "创建响应 JSON: {}",
+        compact_json_string(&created).unwrap_or_else(|| "<serialize failed>".to_string())
+    ));
     let completed = if created.is_finished() {
+        logger.info("创建响应已是终态");
         created
     } else {
         let task_id = created
@@ -284,17 +398,55 @@ async fn generate_officer_portrait(
             .as_ref()
             .and_then(|output| output.task_id.as_deref())
             .ok_or_else(|| image_task_error(&created, "百炼未返回图像任务 ID"))?;
-        client
-            .wait_image_task(task_id, BailianWaitOptions::default())
-            .await
-            .map_err(localize_ai_error)?
+        logger.info(format!("开始轮询百炼任务: task_id={task_id}"));
+        wait_image_task_with_debug(&client, task_id, logger).await?
     };
     let image_url = first_output_image_url(&completed)
         .ok_or_else(|| image_task_error(&completed, "百炼任务完成但未返回图片"))?;
-    download_png_to_path(&image_url, &path).await
+    logger.info(format!("获得图片 URL: {}", redact_url_query(&image_url)));
+    download_png_to_path(&image_url, &path, logger).await
 }
 
-async fn download_png_to_path(image_url: &str, path: &Path) -> Result<(), String> {
+async fn wait_image_task_with_debug(
+    client: &BailianClient,
+    task_id: &str,
+    logger: &OfficerPortraitDebugLogger,
+) -> Result<BailianImageGenerationResponse, String> {
+    let options = BailianWaitOptions::default();
+    let deadline = Instant::now() + options.timeout;
+    loop {
+        let response = client
+            .get_image_task(task_id)
+            .await
+            .map_err(localize_ai_error)?;
+        logger.info(format!(
+            "轮询响应: {}",
+            bailian_response_debug_summary(&response)
+        ));
+        logger.debug(format!(
+            "轮询响应 JSON: {}",
+            compact_json_string(&response).unwrap_or_else(|| "<serialize failed>".to_string())
+        ));
+        if response.is_finished() {
+            return Ok(response);
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "百炼图像任务 {task_id} 在 {:?} 内未完成，最后状态: {}",
+                options.timeout,
+                bailian_response_debug_summary(&response)
+            ));
+        }
+        sleep(options.poll_interval).await;
+    }
+}
+
+async fn download_png_to_path(
+    image_url: &str,
+    path: &Path,
+    logger: &OfficerPortraitDebugLogger,
+) -> Result<(), String> {
+    logger.info(format!("下载图片: {}", redact_url_query(image_url)));
     let response = reqwest::Client::builder()
         .timeout(Duration::from_secs(180))
         .build()
@@ -305,13 +457,16 @@ async fn download_png_to_path(image_url: &str, path: &Path) -> Result<(), String
         .map_err(|error| format!("下载肖像图片失败: {error}"))?;
     let status = response.status();
     if !status.is_success() {
+        logger.warn(format!("图片下载 HTTP 状态异常: {status}"));
         return Err(format!("下载肖像图片失败: HTTP {status}"));
     }
     let bytes = response
         .bytes()
         .await
         .map_err(|error| format!("读取肖像图片失败: {error}"))?;
+    logger.info(format!("图片下载完成: {} bytes", bytes.len()));
     if !bytes.starts_with(OFFICER_PORTRAIT_PNG_MAGIC) {
+        logger.error("百炼返回内容不是 PNG");
         return Err("百炼返回的肖像不是 PNG，已拒绝覆盖本地 PNG 文件。".to_string());
     }
 
@@ -322,6 +477,7 @@ async fn download_png_to_path(image_url: &str, path: &Path) -> Result<(), String
     let tmp_path = path.with_extension("png.tmp");
     fs::write(&tmp_path, &bytes).map_err(|error| format!("写入临时肖像文件失败: {error}"))?;
     fs::rename(&tmp_path, path).map_err(|error| format!("保存肖像文件失败: {error}"))?;
+    logger.info(format!("写入肖像文件: {}", path.display()));
     Ok(())
 }
 
@@ -336,21 +492,143 @@ fn first_output_image_url(response: &BailianImageGenerationResponse) -> Option<S
 }
 
 fn image_task_error(response: &BailianImageGenerationResponse, fallback: &str) -> String {
-    response
-        .message
-        .clone()
-        .or_else(|| response.code.clone())
-        .or_else(|| {
-            response
-                .output
-                .as_ref()
-                .and_then(|output| output.task_status.clone())
-        })
-        .unwrap_or_else(|| fallback.to_string())
+    let summary = bailian_response_debug_summary(response);
+    if summary.is_empty() {
+        fallback.to_string()
+    } else {
+        format!("{fallback}: {summary}")
+    }
 }
 
 fn localize_ai_error(error: AiApiError) -> String {
     error.to_string()
+}
+
+fn bailian_response_debug_summary(response: &BailianImageGenerationResponse) -> String {
+    let mut parts = Vec::new();
+    push_optional_debug_part(&mut parts, "request_id", response.request_id.as_deref());
+    push_optional_debug_part(
+        &mut parts,
+        "status_code",
+        response.status_code.map(|v| v.to_string()),
+    );
+    push_optional_debug_part(&mut parts, "code", response.code.as_deref());
+    push_optional_debug_part(&mut parts, "message", response.message.as_deref());
+
+    if let Some(output) = &response.output {
+        push_optional_debug_part(&mut parts, "task_id", output.task_id.as_deref());
+        push_optional_debug_part(&mut parts, "task_status", output.task_status.as_deref());
+        push_optional_debug_part(
+            &mut parts,
+            "finished",
+            output.finished.map(|v| v.to_string()),
+        );
+        push_optional_debug_part(&mut parts, "output_code", output.code.as_deref());
+        push_optional_debug_part(&mut parts, "output_message", output.message.as_deref());
+        push_optional_debug_part(&mut parts, "submit_time", output.submit_time.as_deref());
+        push_optional_debug_part(
+            &mut parts,
+            "scheduled_time",
+            output.scheduled_time.as_deref(),
+        );
+        push_optional_debug_part(&mut parts, "end_time", output.end_time.as_deref());
+        if !output.choices.is_empty() {
+            parts.push(format!("choices={}", output.choices.len()));
+        }
+        let finish_reasons = output
+            .choices
+            .iter()
+            .filter_map(|choice| non_empty_trimmed(choice.finish_reason.as_deref()))
+            .collect::<Vec<_>>();
+        if !finish_reasons.is_empty() {
+            parts.push(format!("finish_reason={}", finish_reasons.join("|")));
+        }
+        let content_text = output
+            .choices
+            .iter()
+            .flat_map(|choice| choice.message.content.iter())
+            .filter_map(|content| non_empty_trimmed(content.text.as_deref()))
+            .map(|text| truncate_debug_text(text, 160))
+            .collect::<Vec<_>>();
+        if !content_text.is_empty() {
+            parts.push(format!("content_text={}", content_text.join(" | ")));
+        }
+        if !output.extra.is_empty() {
+            parts.push(format!(
+                "output_extra={}",
+                truncate_debug_text(&json_value_string(&output.extra), 240)
+            ));
+        }
+    }
+    if let Some(usage) = &response.usage {
+        let mut usage_parts = Vec::new();
+        push_optional_debug_part(
+            &mut usage_parts,
+            "image_count",
+            usage.image_count.map(|v| v.to_string()),
+        );
+        push_optional_debug_part(&mut usage_parts, "size", usage.size.as_deref());
+        push_optional_debug_part(
+            &mut usage_parts,
+            "total_tokens",
+            usage.total_tokens.map(|v| v.to_string()),
+        );
+        if !usage_parts.is_empty() {
+            parts.push(format!("usage=[{}]", usage_parts.join(", ")));
+        }
+    }
+    if !response.extra.is_empty() {
+        parts.push(format!(
+            "extra={}",
+            truncate_debug_text(&json_value_string(&response.extra), 240)
+        ));
+    }
+    if parts.is_empty() {
+        "empty response".to_string()
+    } else {
+        parts.join(", ")
+    }
+}
+
+fn push_optional_debug_part<T>(parts: &mut Vec<String>, label: &str, value: Option<T>)
+where
+    T: ToString,
+{
+    if let Some(value) = value {
+        let value = value.to_string();
+        if let Some(value) = non_empty_trimmed(Some(value.as_str())) {
+            parts.push(format!("{label}={value}"));
+        }
+    }
+}
+
+fn non_empty_trimmed(value: Option<&str>) -> Option<&str> {
+    let value = value?.trim();
+    (!value.is_empty()).then_some(value)
+}
+
+fn truncate_debug_text(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let truncated: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{truncated}...")
+    } else {
+        truncated
+    }
+}
+
+fn json_value_string<T: serde::Serialize>(value: &T) -> String {
+    compact_json_string(value).unwrap_or_else(|| "<serialize failed>".to_string())
+}
+
+fn compact_json_string<T: serde::Serialize>(value: &T) -> Option<String> {
+    serde_json::to_string(value).ok()
+}
+
+fn redact_url_query(url: &str) -> String {
+    url.split_once('?')
+        .map(|(base, _)| format!("{base}?<redacted>"))
+        .unwrap_or_else(|| url.to_string())
 }
 
 fn load_portrait_texture(
@@ -490,6 +768,7 @@ fn truncate_prompt_text(value: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
     use crate::game::SourceConfidence;
+    use serde_json::json;
 
     fn test_draft() -> OfficerEditDraft {
         OfficerEditDraft {
@@ -567,5 +846,27 @@ mod tests {
         assert_eq!(value["parameters"]["size"], "576*768");
         assert_eq!(value["parameters"]["n"], 1);
         assert_eq!(value["parameters"]["watermark"], false);
+    }
+
+    #[test]
+    fn portrait_task_error_includes_bailian_debug_details() {
+        let response: BailianImageGenerationResponse = serde_json::from_value(json!({
+            "request_id": "req_failed",
+            "output": {
+                "task_id": "task_failed",
+                "task_status": "FAILED",
+                "code": "InvalidParameter",
+                "message": "size is not supported"
+            }
+        }))
+        .unwrap();
+
+        let error = image_task_error(&response, "百炼任务失败");
+
+        assert!(error.contains("request_id=req_failed"));
+        assert!(error.contains("task_id=task_failed"));
+        assert!(error.contains("task_status=FAILED"));
+        assert!(error.contains("output_code=InvalidParameter"));
+        assert!(error.contains("output_message=size is not supported"));
     }
 }

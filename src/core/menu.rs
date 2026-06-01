@@ -1500,6 +1500,7 @@ fn officer_profile_portrait_panel(
     let path = officer_portrait_path(&draft.id);
     let has_portrait = path.as_ref().is_ok_and(|path| path.is_file());
     let task_state = ui_state.officer_portraits.task_state(&draft.id);
+    let debug_log = ui_state.officer_portraits.debug_log(&draft.id);
     let generating = matches!(task_state, OfficerPortraitTaskState::Generating);
     let mut load_error = None;
     let texture = match &path {
@@ -1545,6 +1546,7 @@ fn officer_profile_portrait_panel(
                     has_portrait,
                     load_error.as_deref(),
                 );
+                officer_portrait_debug_log(ui, t, &debug_log);
                 ui.add_space(6.0);
 
                 let button_text = if generating {
@@ -1659,6 +1661,41 @@ fn officer_portrait_status_line(
             );
         }
     }
+}
+
+fn officer_portrait_debug_log(ui: &mut egui::Ui, t: &Translator, log: &[String]) {
+    if log.is_empty() {
+        return;
+    }
+
+    ui.add_space(4.0);
+    ui.label(
+        egui::RichText::new(t.text("officer-portrait-debug-log"))
+            .size(11.0)
+            .color(war_text_muted()),
+    );
+    egui::ScrollArea::vertical()
+        .id_salt("officer_portrait_debug_log")
+        .max_height(76.0)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            for line in log
+                .iter()
+                .rev()
+                .take(8)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+            {
+                ui.label(
+                    egui::RichText::new(line)
+                        .monospace()
+                        .size(10.0)
+                        .color(war_text_muted()),
+                );
+            }
+        });
 }
 
 fn ability_drag(ui: &mut egui::Ui, label: &str, value: &mut u8) {
