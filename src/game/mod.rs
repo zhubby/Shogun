@@ -9,7 +9,6 @@ pub mod model;
 pub mod officer;
 pub mod personnel;
 pub mod save;
-pub mod scenario;
 pub mod technology;
 
 pub use ai::*;
@@ -23,5 +22,4 @@ pub use model::*;
 pub use officer::*;
 pub use personnel::*;
 pub use save::*;
-pub use scenario::*;
 pub use technology::*;

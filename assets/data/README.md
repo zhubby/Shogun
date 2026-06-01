@@ -26,7 +26,7 @@ rtk cargo run --bin build_history_db
 rtk cargo run --bin build_history_db -- /tmp/database.sqlite
 ```
 
-游戏启动和新开局默认读取本机 `database.sqlite`。若文件缺失，会从仓库根目录 `./migrations` 执行 SQLx migrations。迁移记录只使用 SQLx 的 `_sqlx_migrations` 表。
+游戏启动和新开局只读取本机 `database.sqlite`。若文件缺失，会从仓库根目录 `./migrations` 执行 SQLx migrations。迁移记录只使用 SQLx 的 `_sqlx_migrations` 表；仓库不再维护 JSON 后备剧本。
 
 新增或修正历史资料时，新增 `./migrations/*.sql`，不要改写已经发布的迁移文件。旧本机资料库、旧 seed 和旧 schema snapshot 不再作为兼容来源。
 

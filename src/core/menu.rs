@@ -14,7 +14,7 @@ use crate::game::{
 };
 
 use super::HUD_MARGIN;
-use super::actions::{enter_game, refresh_saves, start_history_game, start_json_game};
+use super::actions::{enter_game, refresh_saves, start_history_game};
 use super::hud::{OfficerBrowserTableOptions, officer_browser_filters, officer_browser_table};
 use super::i18n::{Translator, args};
 use super::labels::{confidence_label, officer_gender_label};
@@ -24,7 +24,7 @@ use super::state::{
     refresh_history_factions, refresh_history_menu,
 };
 use super::style::{
-    modal_title_bar, war_gold, war_panel_frame, war_sub_panel_frame, war_text_muted,
+    modal_title_bar, war_gold, war_panel_frame, war_sub_panel_frame, war_text_muted, war_warning,
 };
 
 #[cfg(test)]
@@ -408,97 +408,72 @@ pub(super) fn new_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &T
         ui.set_width(ui.available_width());
         ui.heading(egui::RichText::new(t.text("new-game-title")).color(war_gold()));
         ui.add_space(8.0);
-        if !ui_state.history_scenarios.is_empty() {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(t.text("new-game-scenario")).color(war_text_muted()));
-                if ui.button(t.text("new-game-refresh-catalog")).clicked() {
-                    refresh_history_menu(ui_state);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(t.text("new-game-scenario")).color(war_text_muted()));
+            if ui.button(t.text("new-game-refresh-catalog")).clicked() {
+                refresh_history_menu(ui_state);
+            }
+        });
+        if ui_state.history_scenarios.is_empty() {
+            ui.label(egui::RichText::new(t.text("new-game-history-required")).color(war_warning()));
+            return;
+        }
+
+        let mut scenario_changed = false;
+        egui::ScrollArea::vertical()
+            .id_salt("main_menu_scenarios")
+            .max_height(190.0)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                for scenario in ui_state.history_scenarios.clone() {
+                    let label = t.text_args(
+                        "new-game-scenario-line",
+                        &args([
+                            ("name", scenario.name),
+                            ("year", scenario.year.to_string()),
+                            ("month", scenario.month.to_string()),
+                        ]),
+                    );
+                    if ui
+                        .radio_value(&mut ui_state.selected_scenario_id, scenario.id, label)
+                        .changed()
+                    {
+                        scenario_changed = true;
+                    }
                 }
             });
-            let mut scenario_changed = false;
-            egui::ScrollArea::vertical()
-                .id_salt("main_menu_scenarios")
-                .max_height(190.0)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    for scenario in ui_state.history_scenarios.clone() {
-                        let label = t.text_args(
-                            "new-game-scenario-line",
-                            &args([
-                                ("name", scenario.name),
-                                ("year", scenario.year.to_string()),
-                                ("month", scenario.month.to_string()),
-                            ]),
-                        );
-                        if ui
-                            .radio_value(&mut ui_state.selected_scenario_id, scenario.id, label)
-                            .changed()
-                        {
-                            scenario_changed = true;
-                        }
-                    }
-                });
-            if scenario_changed {
-                refresh_history_factions(ui_state);
-            }
+        if scenario_changed {
+            refresh_history_factions(ui_state);
+        }
 
-            ui.add_space(10.0);
-            ui.label(egui::RichText::new(t.text("new-game-faction")).color(war_text_muted()));
-            egui::ScrollArea::vertical()
-                .id_salt("main_menu_factions")
-                .max_height(160.0)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    for faction in ui_state
-                        .history_factions
-                        .iter()
-                        .filter(|faction| faction.selectable)
-                        .cloned()
-                        .collect::<Vec<_>>()
-                    {
-                        ui.radio_value(&mut ui_state.selected_faction_id, faction.id, faction.name);
-                    }
-                });
-            ui.add_space(12.0);
-            if ui
-                .add_sized(
-                    [ui.available_width(), 34.0],
-                    egui::Button::new(t.text("new-game-start")),
-                )
-                .clicked()
-            {
-                start_history_game(ui_state);
-            }
-        } else {
-            ui.label(
-                egui::RichText::new(t.text("new-game-select-faction")).color(war_text_muted()),
-            );
-            for faction_id in &ui_state.json_scenario.player_selectable_factions {
-                let faction_name = ui_state
-                    .json_scenario
-                    .factions
+        ui.add_space(10.0);
+        ui.label(egui::RichText::new(t.text("new-game-faction")).color(war_text_muted()));
+        egui::ScrollArea::vertical()
+            .id_salt("main_menu_factions")
+            .max_height(160.0)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                for faction in ui_state
+                    .history_factions
                     .iter()
-                    .find(|faction| &faction.id == faction_id)
-                    .map(|faction| faction.name.as_str())
-                    .unwrap_or(faction_id);
-                ui.radio_value(
-                    &mut ui_state.selected_faction_id,
-                    faction_id.clone(),
-                    faction_name,
-                );
-            }
-            ui.add_space(12.0);
-            if ui
-                .add_sized(
-                    [ui.available_width(), 34.0],
-                    egui::Button::new(t.text("new-game-start-json")),
-                )
-                .clicked()
-            {
-                start_json_game(ui_state);
-            }
+                    .filter(|faction| faction.selectable)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                {
+                    ui.radio_value(&mut ui_state.selected_faction_id, faction.id, faction.name);
+                }
+            });
+        ui.add_space(12.0);
+        if ui
+            .add_sized(
+                [ui.available_width(), 34.0],
+                egui::Button::new(t.text("new-game-start")),
+            )
+            .clicked()
+        {
+            start_history_game(ui_state);
         }
     });
 }
@@ -825,64 +800,55 @@ pub(super) fn open_officer_settings(ui_state: &mut GameUiState) {
 }
 
 fn load_officer_settings_game(ui_state: &mut GameUiState) -> Option<GameState> {
-    if let Ok(catalog) = SqliteHistoricalCatalog::open_default() {
-        let scenario_id = if ui_state.selected_scenario_id.is_empty() {
-            catalog
-                .scenarios()
-                .ok()
-                .and_then(|scenarios| scenarios.first().map(|scenario| scenario.id.clone()))
-        } else {
-            Some(ui_state.selected_scenario_id.clone())
-        };
-        if let Some(scenario_id) = scenario_id {
-            let faction_id = catalog
-                .selectable_factions(&scenario_id)
-                .ok()
-                .and_then(|factions| {
-                    factions
-                        .iter()
-                        .find(|faction| faction.selectable)
-                        .or_else(|| factions.first())
-                        .map(|faction| faction.id.clone())
-                })
-                .unwrap_or_else(|| ui_state.selected_faction_id.clone());
-            match catalog.build_game(&scenario_id, &faction_id) {
-                Ok(mut game) => {
-                    match catalog.officer_profiles() {
-                        Ok(profiles) => {
-                            extend_game_with_catalog_officers(&mut game, profiles);
-                            ui_state.officer_settings_editable = true;
-                        }
-                        Err(error) => {
-                            let t = Translator::new(ui_state.applied_settings.general.ui_language);
-                            ui_state.message = t.text_args(
-                                "message-officer-catalog-load-failed",
-                                &args([("error", error.to_string())]),
-                            );
-                        }
-                    }
-                    return Some(game);
+    let t = Translator::new(ui_state.applied_settings.general.ui_language);
+    let catalog = match SqliteHistoricalCatalog::open_default() {
+        Ok(catalog) => catalog,
+        Err(error) => {
+            ui_state.message = t.text_args(
+                "message-history-catalog-unavailable",
+                &args([("error", error.to_string())]),
+            );
+            return None;
+        }
+    };
+    let scenario_id = if ui_state.selected_scenario_id.is_empty() {
+        catalog
+            .scenarios()
+            .ok()
+            .and_then(|scenarios| scenarios.first().map(|scenario| scenario.id.clone()))
+    } else {
+        Some(ui_state.selected_scenario_id.clone())
+    }?;
+    let faction_id = catalog
+        .selectable_factions(&scenario_id)
+        .ok()
+        .and_then(|factions| {
+            factions
+                .iter()
+                .find(|faction| faction.selectable)
+                .or_else(|| factions.first())
+                .map(|faction| faction.id.clone())
+        })
+        .unwrap_or_else(|| ui_state.selected_faction_id.clone());
+    match catalog.build_game(&scenario_id, &faction_id) {
+        Ok(mut game) => {
+            match catalog.officer_profiles() {
+                Ok(profiles) => {
+                    extend_game_with_catalog_officers(&mut game, profiles);
+                    ui_state.officer_settings_editable = true;
                 }
                 Err(error) => {
-                    let t = Translator::new(ui_state.applied_settings.general.ui_language);
                     ui_state.message = t.text_args(
-                        "message-officer-data-load-failed",
+                        "message-officer-catalog-load-failed",
                         &args([("error", error.to_string())]),
                     );
                 }
             }
+            Some(game)
         }
-    }
-
-    match ui_state
-        .json_scenario
-        .build_game(&ui_state.selected_faction_id)
-    {
-        Ok(game) => Some(game),
         Err(error) => {
-            let t = Translator::new(ui_state.applied_settings.general.ui_language);
             ui_state.message = t.text_args(
-                "message-json-officer-data-load-failed",
+                "message-officer-data-load-failed",
                 &args([("error", error.to_string())]),
             );
             None
@@ -1614,7 +1580,6 @@ fn close_officer_profile_editor(ui_state: &mut GameUiState) {
 mod tests {
     use super::*;
     use crate::core::display_settings::{GameSettings, GameSettingsStore, LoadedGameSettings};
-    use crate::game::ScenarioData;
 
     fn test_profile(name: &str) -> OfficerProfile {
         OfficerProfile {
@@ -1648,9 +1613,9 @@ mod tests {
                 message: None,
             },
         );
-        let mut game = ScenarioData::default_scenario()
+        let mut game = SqliteHistoricalCatalog::in_memory_from_seed()
             .unwrap()
-            .build_game("liu_bei")
+            .build_game("ad200", "liu_bei")
             .unwrap();
         let profile = test_profile("刘备");
         let officer = game.officers.get_mut("liu_bei").unwrap();

@@ -2255,39 +2255,8 @@ pub(super) fn filtered_officer_rows(
     t: &Translator,
 ) -> Vec<OfficerBrowserRow> {
     let search = filters.search.trim().to_lowercase();
-    let mut officers: Vec<_> = game.officers.values().collect();
-    officers.sort_by(|a, b| {
-        let a_faction = game
-            .factions
-            .get(&a.faction_id)
-            .map(|faction| faction.name.as_str())
-            .unwrap_or("");
-        let b_faction = game
-            .factions
-            .get(&b.faction_id)
-            .map(|faction| faction.name.as_str())
-            .unwrap_or("");
-        let a_city = a
-            .city_id
-            .as_deref()
-            .and_then(|city_id| game.cities.get(city_id))
-            .map(|city| city.name.as_str())
-            .unwrap_or("");
-        let b_city = b
-            .city_id
-            .as_deref()
-            .and_then(|city_id| game.cities.get(city_id))
-            .map(|city| city.name.as_str())
-            .unwrap_or("");
-        (a_faction, a_city, a.name.as_str(), a.id.as_str()).cmp(&(
-            b_faction,
-            b_city,
-            b.name.as_str(),
-            b.id.as_str(),
-        ))
-    });
-
-    officers
+    let officers: Vec<_> = game.officers.values().collect();
+    let mut rows: Vec<_> = officers
         .into_iter()
         .filter(|officer| officer_matches_filters(officer, game, filters, &search))
         .map(|officer| {
@@ -2327,7 +2296,16 @@ pub(super) fn filtered_officer_rows(
                 charm: officer.stats.charm,
             }
         })
-        .collect()
+        .collect();
+    rows.sort_by(|a, b| {
+        (&a.faction_name, &a.city_name, &a.name, &a.id).cmp(&(
+            &b.faction_name,
+            &b.city_name,
+            &b.name,
+            &b.id,
+        ))
+    });
+    rows
 }
 
 pub(super) fn retainer_officer_rows(
@@ -2565,7 +2543,7 @@ mod tests {
     use crate::core::display_settings::{GameSettings, LoadedGameSettings};
     use crate::core::i18n::{Translator, UiLanguage};
     use crate::core::state::{GameUiState, OfficerGenderFilter, OfficerStatusFilter};
-    use crate::game::{OfficerGender, OfficerStatus, ScenarioData};
+    use crate::game::{OfficerGender, OfficerStatus, SqliteHistoricalCatalog};
 
     fn ui_state_with_game() -> GameUiState {
         let mut state = GameUiState::new(
@@ -2576,9 +2554,9 @@ mod tests {
             },
         );
         state.game = Some(
-            ScenarioData::default_scenario()
+            SqliteHistoricalCatalog::in_memory_from_seed()
                 .unwrap()
-                .build_game("liu_bei")
+                .build_game("ad200", "liu_bei")
                 .unwrap(),
         );
         state
@@ -2650,8 +2628,17 @@ mod tests {
 
         let rows = filtered_officer_rows(&state.officer_browser_filters, game, &zh());
         let sorted_names = rows.windows(2).all(|pair| {
-            (&pair[0].faction_name, &pair[0].city_name, &pair[0].name)
-                <= (&pair[1].faction_name, &pair[1].city_name, &pair[1].name)
+            (
+                &pair[0].faction_name,
+                &pair[0].city_name,
+                &pair[0].name,
+                &pair[0].id,
+            ) <= (
+                &pair[1].faction_name,
+                &pair[1].city_name,
+                &pair[1].name,
+                &pair[1].id,
+            )
         });
 
         assert_eq!(rows.len(), game.officers.len());

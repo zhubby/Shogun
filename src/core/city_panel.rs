@@ -2099,9 +2099,9 @@ mod tests {
     use super::*;
 
     fn test_game() -> GameState {
-        ScenarioData::default_scenario()
+        SqliteHistoricalCatalog::in_memory_from_seed()
             .unwrap()
-            .build_game("liu_bei")
+            .build_game("ad200", "liu_bei")
             .unwrap()
     }
 

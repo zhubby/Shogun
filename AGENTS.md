@@ -36,11 +36,9 @@ This repository is a single-crate Rust 2021 Bevy strategy game prototype.
 - `src/game/commands.rs`: command validation, monthly resolution, combat, diplomacy, and life-event application.
 - `src/game/ai.rs`: AI decision request/response types and rule-based AI provider.
 - `src/game/history_db.rs`: SQLite-backed historical catalog and database builder.
-- `src/game/scenario.rs`: JSON scenario loading and fallback scenario construction.
 - `src/game/save.rs`: save-slot persistence and metadata.
 - `src/bin/build_history_db.rs`: helper binary that rebuilds a local `database.sqlite`.
 - `migrations/`: SQLx migrations that define historical database schema and data. `assets/data/`: map boundary assets and data notes.
-- `assets/scenarios/`: JSON fallback scenarios loaded by `ScenarioData`.
 - `assets/fonts/`: bundled fonts used by the UI.
 - `tests/`: integration tests for gameplay and historical database integrity.
 
@@ -100,7 +98,7 @@ When changing historical database migrations, rebuild a test database and run `r
 - Keep SQLite foreign keys valid and maintain indexes needed by `tests/history_db.rs`.
 - Use stable ASCII identifiers for `id` fields; display names may use Chinese text.
 - Prefer adding historically uncertain information with explicit confidence/notes fields rather than pretending precision.
-- Keep `assets/scenarios/early_three_kingdoms.json` compatible with `ScenarioData`; it is the fallback when the historical catalog is unavailable.
+- New games are built only from the SQLite historical catalog; do not add JSON fallback scenarios.
 - Update `assets/data/README.md` or `assets/fonts/README.md` when the data or bundled font story changes.
 
 ## Save and Serialization Safety

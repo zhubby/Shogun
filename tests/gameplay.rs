@@ -3,10 +3,81 @@ use std::collections::BTreeMap;
 use std::fs;
 
 fn sample_game() -> GameState {
-    ScenarioData::default_scenario()
+    let mut game = SqliteHistoricalCatalog::in_memory_from_seed()
         .unwrap()
-        .build_game("liu_bei")
-        .unwrap()
+        .build_game("ad200", "liu_bei")
+        .unwrap();
+
+    // Gameplay tests exercise command rules against a compact, deterministic
+    // Liu Bei fixture. The fixture is now derived from the SQLite catalog, then
+    // pinned to the city/officer layout expected by these rule-level tests.
+    for city_id in ["pingyuan", "xiapi"] {
+        let city = game.cities.get_mut(city_id).unwrap();
+        city.faction_id = "liu_bei".to_string();
+        city.gold = city.gold.max(1_200);
+        city.food = city.food.max(1_800);
+        city.materials = city.materials.max(1_200);
+    }
+    game.cities.get_mut("xuchang").unwrap().faction_id = "cao_cao".to_string();
+    game.cities.get_mut("jianye").unwrap().faction_id = "sun_quan".to_string();
+    game.cities.get_mut("jiangxia").unwrap().faction_id = "liu_biao".to_string();
+    game.cities.get_mut("jianye").unwrap().position.x += 420.0;
+    let xiapi_position = game.cities["xiapi"].position;
+    game.cities.get_mut("xuchang").unwrap().position = MapPosition {
+        x: xiapi_position.x + 40.0,
+        y: xiapi_position.y,
+    };
+
+    let fixture_officers = [
+        "liu_bei",
+        "guan_yu",
+        "zhao_yun",
+        "jian_yong",
+        "sun_qian",
+        "zhang_fei",
+        "chen_dao",
+    ];
+    for officer in game.officers.values_mut() {
+        if officer.faction_id == "liu_bei" && !fixture_officers.contains(&officer.id.as_str()) {
+            officer.faction_id = WILD_FACTION_ID.to_string();
+            officer.city_id = Some("pingyuan".to_string());
+            officer.status = OfficerStatus::Wild;
+            officer.office_id = None;
+        }
+    }
+
+    place_test_officer(&mut game, "liu_bei", "pingyuan", 90);
+    place_test_officer(&mut game, "guan_yu", "pingyuan", 88);
+    place_test_officer(&mut game, "zhao_yun", "pingyuan", 84);
+    place_test_officer(&mut game, "jian_yong", "pingyuan", 76);
+    place_test_officer(&mut game, "sun_qian", "pingyuan", 76);
+    place_test_officer(&mut game, "zhang_fei", "xiapi", 86);
+    place_test_officer(&mut game, "chen_dao", "xiapi", 80);
+    game.cities.get_mut("pingyuan").unwrap().governor_id = Some("guan_yu".to_string());
+    game.cities.get_mut("xiapi").unwrap().governor_id = Some("zhang_fei".to_string());
+
+    add_test_road(&mut game, "pingyuan", "xiapi");
+    add_test_road(&mut game, "xiapi", "xuchang");
+    add_test_road(&mut game, "jiangxia", "jianye");
+    game
+}
+
+fn place_test_officer(game: &mut GameState, officer_id: &str, city_id: &str, loyalty: u8) {
+    let officer = game.officers.get_mut(officer_id).unwrap();
+    officer.faction_id = "liu_bei".to_string();
+    officer.city_id = Some(city_id.to_string());
+    officer.status = OfficerStatus::Active;
+    officer.loyalty = loyalty;
+    officer.office_id = None;
+}
+
+fn add_test_road(game: &mut GameState, from: &str, to: &str) {
+    if !game.are_adjacent(from, to) {
+        game.roads.push(Road {
+            from: from.to_string(),
+            to: to.to_string(),
+        });
+    }
 }
 
 fn event_by_kind(game: &GameState, kind: GameEventKind) -> &GameEvent {
@@ -435,6 +506,7 @@ fn medical_facility_increases_wounded_recovery_and_food_shortage_blocks_it() {
         city.food = 0;
         city.population = 0;
         city.agriculture = 0;
+        city.level = 1;
         city.facilities.clear();
         city.facilities.push(CityFacility {
             kind: FacilityKind::Medical,

@@ -7,7 +7,7 @@ Manage factions, officers, cities, and diplomacy across a historical map of anci
 ## Features
 
 - **Turn-based strategy** — monthly command system with one action per city and one action per officer
-- **Historical data** — SQLite-backed catalog of factions, officers, and cities with seed data; JSON fallback scenarios
+- **Historical data** — SQLite-backed catalog of factions, officers, cities, scenarios, and life events
 - **AI opponents** — rule-based AI that plays by the same command rules as the player
 - **Save/Load** — versioned save slots with backward-compatible serialization
 - **Internationalization** — UI in English (en-US) and Chinese (zh-CN) via [i18n-embed](https://crates.io/crates/i18n-embed) (Fluent)
@@ -53,11 +53,10 @@ src/
   main.rs          # Binary entrypoint
   lib.rs           # Library surface
   core/            # Bevy app, egui UI, audio, i18n, settings, input
-  game/            # Domain model, rules, AI, commands, saves, scenarios
+  game/            # Domain model, rules, AI, commands, saves, historical data
   bin/             # Helper binaries (build_history_db, import_three_kingdoms)
 assets/
   data/            # SQLite schema, seeds, migrations
-  scenarios/       # JSON fallback scenarios
   fonts/           # Bundled fonts (CJK support)
   audio/           # Sound assets
   icons/           # App icons

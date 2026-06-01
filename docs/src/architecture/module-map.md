@@ -11,8 +11,7 @@
 | **technology** | `technology.rs` | `TechnologyId`（27 项科技）、军事/内政双分支、研究进度、科技加成 |
 | **ai** | `ai.rs` | `AiProvider` trait、`AiDecisionRequest/Response`、`RuleBasedAiProvider`、`MockAiProvider` |
 | **save** | `save.rs` | `SaveManager`、存档槽位、版本化序列化、`ProjectDirs` 路径 |
-| **scenario** | `scenario.rs` | `ScenarioData` JSON 加载、内嵌后备剧本、`build_game()` 构建初始局面 |
-| **history_db** | `history_db.rs` | `HistoricalCatalog` trait、`SqliteHistoricalCatalog`、`LifeEvent`、迁移管理 |
+| **history_db** | `history_db.rs` | `HistoricalCatalog` trait、`SqliteHistoricalCatalog`、`LifeEvent`、迁移管理、剧本构建 |
 | **ids** | `ids.rs` | 类型别名：`CityId`、`FactionId`、`OfficerId` 等 |
 | **map_boundary** | `map_boundary.rs` | `MapBoundaryCatalog` JSON 资产、州郡轮廓、`TerritoryCell` |
 

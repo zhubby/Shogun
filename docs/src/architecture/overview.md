@@ -14,14 +14,14 @@ Shogun 采用**两层架构**：纯净的领域逻辑层（`game`）和引擎/UI
 │               公开 API 调用                  │
 │         game::queue_player_command()         │
 │         game::resolve_command_batch()        │
-│         game::ScenarioData::build_game()     │
+│         game::SqliteHistoricalCatalog        │
 │         game::SaveManager::save_slot()       │
 │         ...                                  │
 ├─────────────────────────────────────────────┤
 │                   game                      │
 │  model · commands · city · officer · ai     │
 │  technology · diplomacy · combat · save     │
-│  history_db · scenario · map_boundary       │
+│  history_db · map_boundary                  │
 │                                             │
 │  零 Bevy 依赖 · 零 egui 依赖 · 纯 Rust      │
 └─────────────────────────────────────────────┘

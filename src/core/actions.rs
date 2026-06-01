@@ -21,17 +21,6 @@ pub(super) fn start_history_game(ui_state: &mut GameUiState) {
     }
 }
 
-pub(super) fn start_json_game(ui_state: &mut GameUiState) {
-    let t = Translator::new(ui_state.applied_settings.general.ui_language);
-    match ui_state
-        .json_scenario
-        .build_game(&ui_state.selected_faction_id)
-    {
-        Ok(game) => enter_game(ui_state, game, t.text("message-json-game-started")),
-        Err(error) => ui_state.message = error.to_string(),
-    }
-}
-
 pub(super) fn enter_game(ui_state: &mut GameUiState, game: GameState, message: String) {
     ui_state.selected_city_id = first_player_city(&game);
     ui_state.selected_officers.clear();
@@ -94,16 +83,10 @@ pub(super) fn open_city(ui_state: &mut GameUiState, city_id: CityId) {
 }
 
 pub(super) fn finish_turn(game: &mut GameState, provider: &RuleBasedAiProvider) -> TurnReport {
-    if is_history_scenario(&game.scenario_id)
-        && let Ok(catalog) = SqliteHistoricalCatalog::open_default()
-    {
+    if let Ok(catalog) = SqliteHistoricalCatalog::open_default() {
         return finish_turn_with_ai_with_history(game, provider, &catalog);
     }
     finish_turn_with_ai(game, provider)
-}
-
-pub(super) fn is_history_scenario(scenario_id: &str) -> bool {
-    matches!(scenario_id, "ad190" | "ad200" | "ad208" | "ad220")
 }
 
 pub(super) fn refresh_saves(ui_state: &mut GameUiState) {

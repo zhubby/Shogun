@@ -17,7 +17,6 @@ pub(super) enum SettingsTab {
 
 #[derive(Resource)]
 pub(super) struct GameUiState {
-    pub(super) json_scenario: ScenarioData,
     pub(super) history_scenarios: Vec<HistoricalScenario>,
     pub(super) selected_scenario_id: ScenarioId,
     pub(super) history_factions: Vec<Faction>,
@@ -126,17 +125,12 @@ impl GameUiState {
         settings_store: GameSettingsStore,
         loaded_settings: LoadedGameSettings,
     ) -> Self {
-        let json_scenario =
-            ScenarioData::from_path(asset_path("scenarios/early_three_kingdoms.json"))
-                .or_else(|_| ScenarioData::default_scenario())
-                .expect("默认剧本必须可加载");
         let history_menu = load_history_menu(None);
         let selected_faction_id = history_menu
             .factions
             .iter()
             .find(|faction| faction.selectable)
             .map(|faction| faction.id.clone())
-            .or_else(|| json_scenario.player_selectable_factions.first().cloned())
             .unwrap_or_default();
         let save_manager = SaveManager::with_default_dir();
         let save_slots = save_manager.list_slots().unwrap_or_default();
@@ -159,7 +153,6 @@ impl GameUiState {
             message.push_str(boundary_message);
         }
         Self {
-            json_scenario,
             history_scenarios: history_menu.scenarios,
             selected_scenario_id: history_menu.selected_scenario_id,
             history_factions: history_menu.factions,
@@ -384,15 +377,8 @@ pub(super) fn ensure_selected_faction(ui_state: &mut GameUiState) {
             .find(|faction| faction.selectable)
         {
             ui_state.selected_faction_id = faction.id.clone();
-            return;
-        }
-        if let Some(faction_id) = ui_state
-            .json_scenario
-            .player_selectable_factions
-            .first()
-            .cloned()
-        {
-            ui_state.selected_faction_id = faction_id;
+        } else {
+            ui_state.selected_faction_id.clear();
         }
     }
 }

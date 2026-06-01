@@ -7,7 +7,7 @@
 ## 核心功能
 
 - **回合制策略** — 月度命令系统，每城一令、每武将一行动
-- **历史数据** — SQLite 驱动的势力、武将、城池种子数据，JSON 后备剧本
+- **历史数据** — SQLite 驱动的势力、武将、城池、剧本快照和履历事件
 - **AI 对手** — 规则 AI，遵守与玩家相同的命令规则
 - **存档/读档** — 版本化存档槽位，序列化向后兼容
 - **国际化** — 支持英文（en-US）和中文（zh-CN），基于 [i18n-embed](https://crates.io/crates/i18n-embed)（Fluent）
@@ -21,7 +21,7 @@
 | 游戏引擎 | Bevy 0.18 | ECS 架构、资产加载、窗口管理 |
 | UI | bevy_egui + egui | 即时模式 GUI，适合策略游戏密集面板 |
 | 数据库 | SQLite (sqlx) | 历史资料库，静态武将/城池/剧本数据 |
-| 序列化 | serde + serde_json | 存档、剧本 JSON、AI 请求/响应 |
+| 序列化 | serde + serde_json | 存档、AI 请求/响应 |
 | 国际化 | i18n-embed (Fluent) | en-US / zh-CN 双语 |
 | 音频 | rodio | MP3 播放，设备枚举 |
 | 打包 | Makefile | macOS / Linux / Windows 三平台 |
