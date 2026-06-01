@@ -16,6 +16,7 @@ use crate::game::{
 use super::HUD_MARGIN;
 use super::actions::{enter_game, refresh_saves, start_history_game, start_json_game};
 use super::hud::{OfficerBrowserTableOptions, officer_browser_filters, officer_browser_table};
+use super::i18n::{Translator, args};
 use super::labels::{confidence_label, officer_gender_label};
 use super::settings::{refresh_audio_output_devices, settings_modal};
 use super::state::{
@@ -99,18 +100,19 @@ pub(super) enum MainMenuAction {
 }
 
 pub(super) fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) -> MainMenuAction {
+    let t = Translator::new(ui_state.applied_settings.general.ui_language);
     let mut action = MainMenuAction::None;
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(ctx, |ui| {
-            action = main_menu_columns(ui, ui_state);
+            action = main_menu_columns(ui, ui_state, &t);
         });
 
     if ui_state.main_menu_new_game_open {
-        new_game_modal(ctx, ui_state);
+        new_game_modal(ctx, ui_state, &t);
     }
     if ui_state.main_menu_load_game_open {
-        load_game_modal(ctx, ui_state);
+        load_game_modal(ctx, ui_state, &t);
     }
     if ui_state.settings_open {
         if settings_modal(ctx, ui_state) {
@@ -118,10 +120,10 @@ pub(super) fn main_menu(ctx: &egui::Context, ui_state: &mut GameUiState) -> Main
         }
     }
     if ui_state.officer_settings_open {
-        officer_settings_modal(ctx, ui_state);
+        officer_settings_modal(ctx, ui_state, &t);
     }
     if ui_state.officer_edit_open {
-        officer_profile_edit_modal(ctx, ui_state);
+        officer_profile_edit_modal(ctx, ui_state, &t);
     }
     action
 }
@@ -184,7 +186,11 @@ pub(super) fn prepare_main_menu_assets_for_egui(
     }
 }
 
-fn main_menu_columns(ui: &mut egui::Ui, ui_state: &mut GameUiState) -> MainMenuAction {
+fn main_menu_columns(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+) -> MainMenuAction {
     let content_rect = ui.max_rect().shrink(HUD_MARGIN);
     if content_rect.width() <= 0.0 || content_rect.height() <= 0.0 {
         return MainMenuAction::None;
@@ -207,8 +213,8 @@ fn main_menu_columns(ui: &mut egui::Ui, ui_state: &mut GameUiState) -> MainMenuA
     );
 
     draw_main_menu_illustration(ui, ui_state, content_rect, art_rect);
-    let action = draw_main_menu_left_panel(ui, ui_state, left_rect);
-    draw_main_menu_bgm_button(ui, ui_state, content_rect);
+    let action = draw_main_menu_left_panel(ui, ui_state, t, left_rect);
+    draw_main_menu_bgm_button(ui, ui_state, t, content_rect);
     action
 }
 
@@ -226,6 +232,7 @@ fn main_menu_control_width(total_width: f32) -> f32 {
 fn draw_main_menu_left_panel(
     ui: &mut egui::Ui,
     ui_state: &mut GameUiState,
+    t: &Translator,
     rect: egui::Rect,
 ) -> MainMenuAction {
     let inner = rect.shrink2(egui::vec2(6.0, 16.0));
@@ -237,7 +244,7 @@ fn draw_main_menu_left_panel(
         |ui| {
             ui.set_width(inner.width());
             ui.add_space(4.0);
-            banner_logo(ui, ui_state);
+            banner_logo(ui, ui_state, t);
             ui.add(
                 egui::Label::new(
                     egui::RichText::new(menu_build_label())
@@ -248,7 +255,7 @@ fn draw_main_menu_left_panel(
             );
             ui.add_space((inner.height() * 0.04).clamp(12.0, 24.0));
 
-            action = draw_main_menu_buttons(ui, ui_state);
+            action = draw_main_menu_buttons(ui, ui_state, t);
 
             if !ui_state.message.is_empty() {
                 let reserved_height = 50.0;
@@ -268,12 +275,16 @@ fn draw_main_menu_left_panel(
     action
 }
 
-fn draw_main_menu_buttons(ui: &mut egui::Ui, ui_state: &mut GameUiState) -> MainMenuAction {
+fn draw_main_menu_buttons(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+) -> MainMenuAction {
     let button_width = ui.available_width().min(MAIN_MENU_BUTTON_WIDTH);
     let mut action = MainMenuAction::None;
     let mut hovered_illustration_index = None;
 
-    let new_game_response = main_menu_button(ui, button_width, "新的开始");
+    let new_game_response = main_menu_button(ui, button_width, &t.text("main-menu-new-game"));
     if new_game_response.hovered() {
         hovered_illustration_index = Some(1);
     }
@@ -282,7 +293,7 @@ fn draw_main_menu_buttons(ui: &mut egui::Ui, ui_state: &mut GameUiState) -> Main
         ui_state.main_menu_new_game_open = true;
     }
     ui.add_space(MAIN_MENU_BUTTON_SPACING);
-    let load_game_response = main_menu_button(ui, button_width, "继续征途");
+    let load_game_response = main_menu_button(ui, button_width, &t.text("main-menu-load-game"));
     if load_game_response.hovered() {
         hovered_illustration_index = Some(2);
     }
@@ -292,7 +303,7 @@ fn draw_main_menu_buttons(ui: &mut egui::Ui, ui_state: &mut GameUiState) -> Main
         ui_state.main_menu_load_game_open = true;
     }
     ui.add_space(MAIN_MENU_BUTTON_SPACING);
-    let officer_response = main_menu_button(ui, button_width, "武将设置");
+    let officer_response = main_menu_button(ui, button_width, &t.text("main-menu-officers"));
     if officer_response.hovered() {
         hovered_illustration_index = Some(3);
     }
@@ -301,7 +312,7 @@ fn draw_main_menu_buttons(ui: &mut egui::Ui, ui_state: &mut GameUiState) -> Main
         open_officer_settings(ui_state);
     }
     ui.add_space(MAIN_MENU_BUTTON_SPACING);
-    let settings_response = main_menu_button(ui, button_width, "游戏设置");
+    let settings_response = main_menu_button(ui, button_width, &t.text("main-menu-settings"));
     if settings_response.hovered() {
         hovered_illustration_index = Some(4);
     }
@@ -311,7 +322,7 @@ fn draw_main_menu_buttons(ui: &mut egui::Ui, ui_state: &mut GameUiState) -> Main
         ui_state.settings_open = true;
     }
     ui.add_space(MAIN_MENU_BUTTON_SPACING);
-    let exit_response = main_menu_button(ui, button_width, "退出游戏");
+    let exit_response = main_menu_button(ui, button_width, &t.text("main-menu-exit"));
     if exit_response.hovered() {
         hovered_illustration_index = Some(5);
     }
@@ -351,6 +362,7 @@ fn main_menu_button(ui: &mut egui::Ui, width: f32, label: &str) -> egui::Respons
 fn draw_main_menu_bgm_button(
     ui: &mut egui::Ui,
     ui_state: &mut GameUiState,
+    t: &Translator,
     content_rect: egui::Rect,
 ) {
     let button_rect = egui::Rect::from_min_size(
@@ -361,9 +373,15 @@ fn draw_main_menu_bgm_button(
         egui::vec2(MAIN_MENU_BGM_BUTTON_SIZE, MAIN_MENU_BGM_BUTTON_SIZE),
     );
     let (icon, tooltip) = if ui_state.main_menu_bgm_enabled {
-        (egui_phosphor::regular::SPEAKER_HIGH, "关闭背景音乐")
+        (
+            egui_phosphor::regular::SPEAKER_HIGH,
+            t.text("main-menu-bgm-disable"),
+        )
     } else {
-        (egui_phosphor::regular::SPEAKER_X, "打开背景音乐")
+        (
+            egui_phosphor::regular::SPEAKER_X,
+            t.text("main-menu-bgm-enable"),
+        )
     };
 
     let response = ui
@@ -385,15 +403,15 @@ fn close_main_menu_popups(ui_state: &mut GameUiState) {
     ui_state.officer_settings_open = false;
 }
 
-pub(super) fn new_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
+pub(super) fn new_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
         ui.set_width(ui.available_width());
-        ui.heading(egui::RichText::new("新开局").color(war_gold()));
+        ui.heading(egui::RichText::new(t.text("new-game-title")).color(war_gold()));
         ui.add_space(8.0);
         if !ui_state.history_scenarios.is_empty() {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("剧本").color(war_text_muted()));
-                if ui.button("刷新资料库").clicked() {
+                ui.label(egui::RichText::new(t.text("new-game-scenario")).color(war_text_muted()));
+                if ui.button(t.text("new-game-refresh-catalog")).clicked() {
                     refresh_history_menu(ui_state);
                 }
             });
@@ -405,9 +423,13 @@ pub(super) fn new_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
                 .show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     for scenario in ui_state.history_scenarios.clone() {
-                        let label = format!(
-                            "{} ({}年{}月)",
-                            scenario.name, scenario.year, scenario.month
+                        let label = t.text_args(
+                            "new-game-scenario-line",
+                            &args([
+                                ("name", scenario.name),
+                                ("year", scenario.year.to_string()),
+                                ("month", scenario.month.to_string()),
+                            ]),
                         );
                         if ui
                             .radio_value(&mut ui_state.selected_scenario_id, scenario.id, label)
@@ -422,7 +444,7 @@ pub(super) fn new_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
             }
 
             ui.add_space(10.0);
-            ui.label(egui::RichText::new("势力").color(war_text_muted()));
+            ui.label(egui::RichText::new(t.text("new-game-faction")).color(war_text_muted()));
             egui::ScrollArea::vertical()
                 .id_salt("main_menu_factions")
                 .max_height(160.0)
@@ -441,13 +463,18 @@ pub(super) fn new_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
                 });
             ui.add_space(12.0);
             if ui
-                .add_sized([ui.available_width(), 34.0], egui::Button::new("开始游戏"))
+                .add_sized(
+                    [ui.available_width(), 34.0],
+                    egui::Button::new(t.text("new-game-start")),
+                )
                 .clicked()
             {
                 start_history_game(ui_state);
             }
         } else {
-            ui.label(egui::RichText::new("选择势力").color(war_text_muted()));
+            ui.label(
+                egui::RichText::new(t.text("new-game-select-faction")).color(war_text_muted()),
+            );
             for faction_id in &ui_state.json_scenario.player_selectable_factions {
                 let faction_name = ui_state
                     .json_scenario
@@ -466,7 +493,7 @@ pub(super) fn new_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
             if ui
                 .add_sized(
                     [ui.available_width(), 34.0],
-                    egui::Button::new("开始兼容小剧本"),
+                    egui::Button::new(t.text("new-game-start-json")),
                 )
                 .clicked()
             {
@@ -476,24 +503,27 @@ pub(super) fn new_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
     });
 }
 
-pub(super) fn load_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
+pub(super) fn load_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
         ui.set_width(ui.available_width());
-        ui.heading(egui::RichText::new("读取存档").color(war_gold()));
+        ui.heading(egui::RichText::new(t.text("load-game-title")).color(war_gold()));
         ui.label(
-            egui::RichText::new(format!(
-                "目录: {}",
-                ui_state.save_manager.base_dir().display()
+            egui::RichText::new(t.text_args(
+                "load-game-directory",
+                &args([(
+                    "path",
+                    ui_state.save_manager.base_dir().display().to_string(),
+                )]),
             ))
             .color(war_text_muted()),
         );
-        if ui.button("刷新存档列表").clicked() {
+        if ui.button(t.text("load-game-refresh")).clicked() {
             refresh_saves(ui_state);
         }
         ui.add_space(8.0);
         let slots = ui_state.save_slots.clone();
         if slots.is_empty() {
-            ui.label("暂无存档");
+            ui.label(t.text("load-game-empty"));
         }
         egui::ScrollArea::vertical()
             .id_salt("main_menu_saves")
@@ -504,31 +534,44 @@ pub(super) fn load_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
                 for slot in slots {
                     war_sub_panel_frame().show(ui, |ui| {
                         ui.set_width(ui.available_width());
-                        ui.label(format!(
-                            "{} - {}年{}月 第{}回合",
-                            slot.display_name, slot.year, slot.month, slot.turn
+                        ui.label(t.text_args(
+                            "load-game-slot-line",
+                            &args([
+                                ("name", slot.display_name.clone()),
+                                ("year", slot.year.to_string()),
+                                ("month", slot.month.to_string()),
+                                ("turn", slot.turn.to_string()),
+                            ]),
                         ));
                         ui.horizontal(|ui| {
-                            if ui.button("读取").clicked() {
+                            if ui.button(t.text("load-game-load")).clicked() {
                                 match ui_state.save_manager.load_slot(&slot.slot_id) {
                                     Ok(game) => enter_game(
                                         ui_state,
                                         game,
-                                        format!("读取存档 {}", slot.display_name),
+                                        t.text_args(
+                                            "message-save-loaded",
+                                            &args([("name", slot.display_name.clone())]),
+                                        ),
                                     ),
                                     Err(error) => {
                                         let _ = ui_state.save_manager.delete_slot(&slot.slot_id);
                                         refresh_saves(ui_state);
-                                        ui_state.message = format!("存档已失效，已丢弃: {error}");
+                                        ui_state.message = t.text_args(
+                                            "message-save-invalid-discarded",
+                                            &args([("error", error.to_string())]),
+                                        );
                                     }
                                 }
                             }
-                            if ui.button("删除").clicked() {
+                            if ui.button(t.text("load-game-delete")).clicked() {
                                 match ui_state.save_manager.delete_slot(&slot.slot_id) {
                                     Ok(()) => {
                                         refresh_saves(ui_state);
-                                        ui_state.message =
-                                            format!("删除存档 {}", slot.display_name);
+                                        ui_state.message = t.text_args(
+                                            "message-save-deleted",
+                                            &args([("name", slot.display_name.clone())]),
+                                        );
                                     }
                                     Err(error) => ui_state.message = error.to_string(),
                                 }
@@ -541,7 +584,7 @@ pub(super) fn load_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
     });
 }
 
-fn new_game_modal(ctx: &egui::Context, ui_state: &mut GameUiState) {
+fn new_game_modal(ctx: &egui::Context, ui_state: &mut GameUiState, t: &Translator) {
     main_menu_scrim(ctx, ui_state);
 
     let screen = ctx.content_rect();
@@ -554,16 +597,16 @@ fn new_game_modal(ctx: &egui::Context, ui_state: &mut GameUiState) {
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(width);
                 ui.set_min_height(height);
-                if modal_title_bar(ui, "新的开始") {
+                if modal_title_bar(ui, t, &t.text("main-menu-new-game")) {
                     ui_state.main_menu_new_game_open = false;
                 }
                 ui.separator();
-                new_game_menu(ui, ui_state);
+                new_game_menu(ui, ui_state, t);
             });
         });
 }
 
-fn load_game_modal(ctx: &egui::Context, ui_state: &mut GameUiState) {
+fn load_game_modal(ctx: &egui::Context, ui_state: &mut GameUiState, t: &Translator) {
     main_menu_scrim(ctx, ui_state);
 
     let screen = ctx.content_rect();
@@ -576,11 +619,11 @@ fn load_game_modal(ctx: &egui::Context, ui_state: &mut GameUiState) {
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(width);
                 ui.set_min_height(height);
-                if modal_title_bar(ui, "继续征途") {
+                if modal_title_bar(ui, t, &t.text("main-menu-load-game")) {
                     ui_state.main_menu_load_game_open = false;
                 }
                 ui.separator();
-                load_game_menu(ui, ui_state);
+                load_game_menu(ui, ui_state, t);
             });
         });
 }
@@ -810,11 +853,23 @@ fn load_officer_settings_game(ui_state: &mut GameUiState) -> Option<GameState> {
                             extend_game_with_catalog_officers(&mut game, profiles);
                             ui_state.officer_settings_editable = true;
                         }
-                        Err(error) => ui_state.message = format!("读取全量武将资料失败: {error}"),
+                        Err(error) => {
+                            let t = Translator::new(ui_state.applied_settings.general.ui_language);
+                            ui_state.message = t.text_args(
+                                "message-officer-catalog-load-failed",
+                                &args([("error", error.to_string())]),
+                            );
+                        }
                     }
                     return Some(game);
                 }
-                Err(error) => ui_state.message = format!("读取武将资料失败: {error}"),
+                Err(error) => {
+                    let t = Translator::new(ui_state.applied_settings.general.ui_language);
+                    ui_state.message = t.text_args(
+                        "message-officer-data-load-failed",
+                        &args([("error", error.to_string())]),
+                    );
+                }
             }
         }
     }
@@ -825,16 +880,20 @@ fn load_officer_settings_game(ui_state: &mut GameUiState) -> Option<GameState> {
     {
         Ok(game) => Some(game),
         Err(error) => {
-            ui_state.message = format!("读取兼容武将资料失败: {error}");
+            let t = Translator::new(ui_state.applied_settings.general.ui_language);
+            ui_state.message = t.text_args(
+                "message-json-officer-data-load-failed",
+                &args([("error", error.to_string())]),
+            );
             None
         }
     }
 }
 
-fn banner_logo(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
+fn banner_logo(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
     let Some(logo) = &ui_state.banner_logo else {
         ui.label(
-            egui::RichText::new("三国争霸")
+            egui::RichText::new(t.text("app-title"))
                 .size(42.0)
                 .color(war_gold())
                 .strong(),
@@ -1190,7 +1249,11 @@ fn officer_from_profile(profile: OfficerProfile, faction_id: &str) -> Officer {
     }
 }
 
-pub(super) fn officer_settings_modal(ctx: &egui::Context, ui_state: &mut GameUiState) {
+pub(super) fn officer_settings_modal(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+) {
     let screen = ctx.content_rect();
     egui::Area::new(egui::Id::new("officer_settings_modal_scrim"))
         .order(egui::Order::Middle)
@@ -1216,7 +1279,7 @@ pub(super) fn officer_settings_modal(ctx: &egui::Context, ui_state: &mut GameUiS
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(width);
                 ui.set_min_height(height);
-                if modal_title_bar(ui, "武将设置") {
+                if modal_title_bar(ui, t, &t.text("officer-settings-title")) {
                     ui_state.officer_settings_open = false;
                 }
                 ui.separator();
@@ -1226,9 +1289,10 @@ pub(super) fn officer_settings_modal(ctx: &egui::Context, ui_state: &mut GameUiS
                         game,
                         &mut ui_state.officer_settings_filters,
                         "main_menu_officer_settings_filters",
+                        t,
                     );
                     if !ui_state.officer_settings_editable {
-                        ui.colored_label(war_text_muted(), "当前资料来源只读，无法编辑武将资料");
+                        ui.colored_label(war_text_muted(), t.text("officer-settings-readonly"));
                     }
                     ui.separator();
                     let response = officer_browser_table(
@@ -1242,6 +1306,7 @@ pub(super) fn officer_settings_modal(ctx: &egui::Context, ui_state: &mut GameUiS
                             editable: ui_state.officer_settings_editable,
                             retainer_faction_id: None,
                         },
+                        t,
                     );
                     if let Some(officer_id) = response.selected_officer_id {
                         ui_state.officer_settings_selected_id = Some(officer_id);
@@ -1250,7 +1315,7 @@ pub(super) fn officer_settings_modal(ctx: &egui::Context, ui_state: &mut GameUiS
                         open_officer_profile_editor(ui_state, &officer_id);
                     }
                 } else {
-                    ui.label("暂无武将资料");
+                    ui.label(t.text("officer-settings-empty"));
                 }
             });
         });
@@ -1258,7 +1323,8 @@ pub(super) fn officer_settings_modal(ctx: &egui::Context, ui_state: &mut GameUiS
 
 fn open_officer_profile_editor(ui_state: &mut GameUiState, officer_id: &str) {
     if !ui_state.officer_settings_editable {
-        ui_state.message = "当前资料来源只读，无法编辑武将资料".to_string();
+        let t = Translator::new(ui_state.applied_settings.general.ui_language);
+        ui_state.message = t.text("officer-settings-readonly");
         return;
     }
     let profile = ui_state
@@ -1267,7 +1333,11 @@ fn open_officer_profile_editor(ui_state: &mut GameUiState, officer_id: &str) {
         .and_then(|game| game.officers.get(officer_id))
         .and_then(|officer| officer.profile.as_ref());
     let Some(profile) = profile else {
-        ui_state.officer_edit_error = Some(format!("武将 {officer_id} 缺少资料档案"));
+        let t = Translator::new(ui_state.applied_settings.general.ui_language);
+        ui_state.officer_edit_error = Some(t.text_args(
+            "message-officer-profile-missing",
+            &args([("id", officer_id.to_string())]),
+        ));
         return;
     };
     ui_state.officer_settings_selected_id = Some(officer_id.to_string());
@@ -1276,7 +1346,7 @@ fn open_officer_profile_editor(ui_state: &mut GameUiState, officer_id: &str) {
     ui_state.officer_edit_open = true;
 }
 
-fn officer_profile_edit_modal(ctx: &egui::Context, ui_state: &mut GameUiState) {
+fn officer_profile_edit_modal(ctx: &egui::Context, ui_state: &mut GameUiState, t: &Translator) {
     let screen = ctx.content_rect();
     let width = (screen.width() * 0.72).clamp(620.0, 900.0);
     let height = (screen.height() * 0.78).clamp(460.0, 720.0);
@@ -1287,7 +1357,7 @@ fn officer_profile_edit_modal(ctx: &egui::Context, ui_state: &mut GameUiState) {
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(width);
                 ui.set_min_height(height);
-                if modal_title_bar(ui, "编辑武将") {
+                if modal_title_bar(ui, t, &t.text("officer-edit-title")) {
                     close_officer_profile_editor(ui_state);
                 }
                 ui.separator();
@@ -1297,28 +1367,28 @@ fn officer_profile_edit_modal(ctx: &egui::Context, ui_state: &mut GameUiState) {
                         .max_height(height - 116.0)
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            officer_profile_edit_form(ui, ui_state);
+                            officer_profile_edit_form(ui, ui_state, t);
                         });
                     ui.separator();
                     ui.horizontal(|ui| {
                         if ui
-                            .add_sized([108.0, 34.0], egui::Button::new("保存"))
+                            .add_sized([108.0, 34.0], egui::Button::new(t.text("common-save")))
                             .clicked()
                         {
                             save_officer_profile_edit(ui_state);
                         }
-                        if ui.button("取消").clicked() {
+                        if ui.button(t.text("common-cancel")).clicked() {
                             close_officer_profile_editor(ui_state);
                         }
                     });
                 } else {
-                    ui.label("未选择武将");
+                    ui.label(t.text("officer-edit-none-selected"));
                 }
             });
         });
 }
 
-fn officer_profile_edit_form(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
+fn officer_profile_edit_form(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
     let Some(draft) = ui_state.officer_edit_draft.as_mut() else {
         return;
     };
@@ -1328,67 +1398,87 @@ fn officer_profile_edit_form(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
         .num_columns(2)
         .spacing(egui::vec2(18.0, 8.0))
         .show(ui, |ui| {
-            ui.label("姓名");
+            ui.label(t.text("officer-field-name"));
             ui.text_edit_singleline(&mut draft.name);
             ui.end_row();
 
-            ui.label("字");
+            ui.label(t.text("officer-field-courtesy-name"));
             ui.text_edit_singleline(&mut draft.courtesy_name);
             ui.end_row();
 
-            ui.label("籍贯");
+            ui.label(t.text("officer-field-native-place"));
             ui.text_edit_singleline(&mut draft.native_place);
             ui.end_row();
 
-            ui.label("生年");
+            ui.label(t.text("officer-field-birth-year"));
             ui.text_edit_singleline(&mut draft.birth_year);
             ui.end_row();
 
-            ui.label("卒年");
+            ui.label(t.text("officer-field-death-year"));
             ui.text_edit_singleline(&mut draft.death_year);
             ui.end_row();
 
-            ui.label("性别");
+            ui.label(t.text("officer-field-gender"));
             egui::ComboBox::from_id_salt("officer_edit_gender")
-                .selected_text(officer_gender_label(&draft.gender))
+                .selected_text(officer_gender_label(t, &draft.gender))
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut draft.gender, OfficerGender::Male, "男");
-                    ui.selectable_value(&mut draft.gender, OfficerGender::Female, "女");
+                    ui.selectable_value(
+                        &mut draft.gender,
+                        OfficerGender::Male,
+                        t.text("gender-male"),
+                    );
+                    ui.selectable_value(
+                        &mut draft.gender,
+                        OfficerGender::Female,
+                        t.text("gender-female"),
+                    );
                 });
             ui.end_row();
 
-            ui.label("可信度");
+            ui.label(t.text("officer-field-confidence"));
             egui::ComboBox::from_id_salt("officer_edit_confidence")
-                .selected_text(confidence_label(&draft.confidence))
+                .selected_text(confidence_label(t, &draft.confidence))
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut draft.confidence, SourceConfidence::High, "高");
-                    ui.selectable_value(&mut draft.confidence, SourceConfidence::Medium, "中");
-                    ui.selectable_value(&mut draft.confidence, SourceConfidence::Low, "低");
+                    ui.selectable_value(
+                        &mut draft.confidence,
+                        SourceConfidence::High,
+                        t.text("confidence-high"),
+                    );
+                    ui.selectable_value(
+                        &mut draft.confidence,
+                        SourceConfidence::Medium,
+                        t.text("confidence-medium"),
+                    );
+                    ui.selectable_value(
+                        &mut draft.confidence,
+                        SourceConfidence::Low,
+                        t.text("confidence-low"),
+                    );
                 });
             ui.end_row();
 
-            ui.label("标签");
+            ui.label(t.text("officer-field-tags"));
             ui.text_edit_singleline(&mut draft.tags);
             ui.end_row();
         });
 
     ui.add_space(10.0);
     ui.horizontal_wrapped(|ui| {
-        ability_drag(ui, "统率", &mut draft.leadership);
-        ability_drag(ui, "武力", &mut draft.strength);
-        ability_drag(ui, "智力", &mut draft.intelligence);
-        ability_drag(ui, "政治", &mut draft.politics);
-        ability_drag(ui, "魅力", &mut draft.charm);
+        ability_drag(ui, &t.text("stat-leadership"), &mut draft.leadership);
+        ability_drag(ui, &t.text("stat-strength"), &mut draft.strength);
+        ability_drag(ui, &t.text("stat-intelligence"), &mut draft.intelligence);
+        ability_drag(ui, &t.text("stat-politics"), &mut draft.politics);
+        ability_drag(ui, &t.text("stat-charm"), &mut draft.charm);
     });
 
     ui.add_space(10.0);
-    ui.label("详细生平");
+    ui.label(t.text("officer-field-biography"));
     ui.add_sized(
         [ui.available_width(), 150.0],
         egui::TextEdit::multiline(&mut draft.biography),
     );
     ui.add_space(8.0);
-    ui.label("备注");
+    ui.label(t.text("officer-field-notes"));
     ui.add_sized(
         [ui.available_width(), 72.0],
         egui::TextEdit::multiline(&mut draft.notes),
@@ -1417,7 +1507,8 @@ fn save_officer_profile_edit(ui_state: &mut GameUiState) {
     let update = match draft_to_update(&draft) {
         Ok(update) => update,
         Err(error) => {
-            ui_state.officer_edit_error = Some(error);
+            let t = Translator::new(ui_state.applied_settings.general.ui_language);
+            ui_state.officer_edit_error = Some(localized_officer_edit_error(&t, &error));
             return;
         }
     };
@@ -1426,7 +1517,11 @@ fn save_officer_profile_edit(ui_state: &mut GameUiState) {
     match result {
         Ok(profile) => {
             sync_updated_officer_profile(ui_state, profile);
-            ui_state.message = format!("已保存武将 {}", draft.name.trim());
+            let t = Translator::new(ui_state.applied_settings.general.ui_language);
+            ui_state.message = t.text_args(
+                "message-officer-saved",
+                &args([("name", draft.name.trim().to_string())]),
+            );
             close_officer_profile_editor(ui_state);
         }
         Err(error) => {
@@ -1437,14 +1532,14 @@ fn save_officer_profile_edit(ui_state: &mut GameUiState) {
 
 fn draft_to_update(draft: &OfficerEditDraft) -> Result<OfficerProfileUpdate, String> {
     if draft.name.trim().is_empty() {
-        return Err("武将姓名不能为空".to_string());
+        return Err("officer-edit-name-required".to_string());
     }
     Ok(OfficerProfileUpdate {
         name: draft.name.trim().to_string(),
         courtesy_name: optional_text(&draft.courtesy_name),
         native_place: optional_text(&draft.native_place),
-        birth_year: optional_year(&draft.birth_year, "生年")?,
-        death_year: optional_year(&draft.death_year, "卒年")?,
+        birth_year: optional_year(&draft.birth_year, "officer-field-birth-year")?,
+        death_year: optional_year(&draft.death_year, "officer-field-death-year")?,
         gender: draft.gender.clone(),
         stats: OfficerStats {
             leadership: draft.leadership,
@@ -1479,8 +1574,21 @@ fn optional_year(value: &str, label: &str) -> Result<Option<i32>, String> {
         value
             .parse::<i32>()
             .map(Some)
-            .map_err(|_| format!("{label} 必须是整数，留空表示未知"))
+            .map_err(|_| format!("officer-edit-year-invalid:{label}"))
     }
+}
+
+fn localized_officer_edit_error(t: &Translator, error: &str) -> String {
+    if error == "officer-edit-name-required" {
+        return t.text(error);
+    }
+    if let Some(label_key) = error.strip_prefix("officer-edit-year-invalid:") {
+        return t.text_args(
+            "officer-edit-year-invalid",
+            &args([("label", t.text(label_key))]),
+        );
+    }
+    error.to_string()
 }
 
 fn sync_updated_officer_profile(ui_state: &mut GameUiState, profile: OfficerProfile) {

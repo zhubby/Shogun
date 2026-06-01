@@ -1,6 +1,7 @@
 use crate::game::{City, CityMonthlyProjection};
 use bevy_egui::egui;
 
+use super::i18n::{Translator, args};
 use super::labels::facility_kind_label;
 use super::style::{war_danger, war_gold, war_success, war_text, war_text_muted};
 
@@ -11,7 +12,12 @@ const COMPACT_TILE_GAP: f32 = 5.0;
 const DEVELOPMENT_MAX: f32 = 999.0;
 const STABILITY_MAX: f32 = 100.0;
 
-pub(super) fn city_summary_intel(ui: &mut egui::Ui, city: &City, faction_name: &str) {
+pub(super) fn city_summary_intel(
+    ui: &mut egui::Ui,
+    city: &City,
+    faction_name: &str,
+    t: &Translator,
+) {
     ui.vertical(|ui| {
         ui.label(
             egui::RichText::new(&city.name)
@@ -20,15 +26,20 @@ pub(super) fn city_summary_intel(ui: &mut egui::Ui, city: &City, faction_name: &
                 .strong(),
         );
         ui.horizontal_wrapped(|ui| {
-            muted_label(ui, format!("归属: {faction_name}"));
+            muted_label(
+                ui,
+                t.text_args("city-owner", &args([("faction", faction_name.to_string())])),
+            );
             ui.separator();
             muted_label(
                 ui,
-                format!(
-                    "{}级城镇  槽位 {}/{}",
-                    city.level,
-                    city.facilities.len(),
-                    city.facility_slots()
+                t.text_args(
+                    "city-level-slots",
+                    &args([
+                        ("level", city.level.to_string()),
+                        ("used", city.facilities.len().to_string()),
+                        ("total", city.facility_slots().to_string()),
+                    ]),
                 ),
             );
         });
@@ -38,11 +49,31 @@ pub(super) fn city_summary_intel(ui: &mut egui::Ui, city: &City, faction_name: &
     metric_tiles(
         ui,
         &[
-            MetricTile::new(egui_phosphor::regular::USERS, "人口", city.population),
-            MetricTile::new(egui_phosphor::regular::SWORD, "兵力", city.troops.total()),
-            MetricTile::new(egui_phosphor::regular::COINS, "金", city.gold),
-            MetricTile::new(egui_phosphor::regular::BARN, "粮", city.food),
-            MetricTile::new(egui_phosphor::regular::STACK, "建材", city.materials),
+            MetricTile::new(
+                egui_phosphor::regular::USERS,
+                t.text("resource-population"),
+                city.population,
+            ),
+            MetricTile::new(
+                egui_phosphor::regular::SWORD,
+                t.text("resource-troops"),
+                city.troops.total(),
+            ),
+            MetricTile::new(
+                egui_phosphor::regular::COINS,
+                t.text("resource-gold"),
+                city.gold,
+            ),
+            MetricTile::new(
+                egui_phosphor::regular::BARN,
+                t.text("resource-food"),
+                city.food,
+            ),
+            MetricTile::new(
+                egui_phosphor::regular::STACK,
+                t.text("resource-materials"),
+                city.materials,
+            ),
         ],
         2,
         COMPACT_TILE_HEIGHT,
@@ -51,36 +82,61 @@ pub(super) fn city_summary_intel(ui: &mut egui::Ui, city: &City, faction_name: &
     );
 }
 
-pub(super) fn city_overview_intel(ui: &mut egui::Ui, city: &City, faction_name: &str) {
-    header_band(ui, city, faction_name);
+pub(super) fn city_overview_intel(
+    ui: &mut egui::Ui,
+    city: &City,
+    faction_name: &str,
+    t: &Translator,
+) {
+    header_band(ui, city, faction_name, t);
 }
 
-pub(super) fn city_resource_intel(ui: &mut egui::Ui, city: &City) {
-    intel_group(ui, "资源与民生", |ui| {
+pub(super) fn city_resource_intel(ui: &mut egui::Ui, city: &City, t: &Translator) {
+    intel_group(ui, &t.text("city-section-resources"), |ui| {
         metric_tiles(
             ui,
             &[
-                MetricTile::new(egui_phosphor::regular::COINS, "金", city.gold),
-                MetricTile::new(egui_phosphor::regular::BARN, "粮", city.food),
-                MetricTile::new(egui_phosphor::regular::STACK, "建材", city.materials),
-                MetricTile::new(egui_phosphor::regular::USERS, "人口", city.population),
-                MetricTile::new(egui_phosphor::regular::SWORD, "兵力", city.troops.total()),
+                MetricTile::new(
+                    egui_phosphor::regular::COINS,
+                    t.text("resource-gold"),
+                    city.gold,
+                ),
+                MetricTile::new(
+                    egui_phosphor::regular::BARN,
+                    t.text("resource-food"),
+                    city.food,
+                ),
+                MetricTile::new(
+                    egui_phosphor::regular::STACK,
+                    t.text("resource-materials"),
+                    city.materials,
+                ),
+                MetricTile::new(
+                    egui_phosphor::regular::USERS,
+                    t.text("resource-population"),
+                    city.population,
+                ),
+                MetricTile::new(
+                    egui_phosphor::regular::SWORD,
+                    t.text("resource-troops"),
+                    city.troops.total(),
+                ),
             ],
             2,
             TILE_HEIGHT,
             TILE_GAP,
             false,
         );
-        muted_label(ui, troop_pool_summary(city));
+        muted_label(ui, troop_pool_summary(city, t));
     });
 }
 
-pub(super) fn city_development_intel(ui: &mut egui::Ui, city: &City) {
-    intel_group(ui, "发展", |ui| {
+pub(super) fn city_development_intel(ui: &mut egui::Ui, city: &City, t: &Translator) {
+    intel_group(ui, &t.text("city-section-development"), |ui| {
         progress_metric(
             ui,
             egui_phosphor::regular::PLANT,
-            "农业",
+            t.text("development-focus-agriculture"),
             city.agriculture,
             DEVELOPMENT_MAX,
             war_success(),
@@ -88,7 +144,7 @@ pub(super) fn city_development_intel(ui: &mut egui::Ui, city: &City) {
         progress_metric(
             ui,
             egui_phosphor::regular::BANK,
-            "商业",
+            t.text("development-focus-commerce"),
             city.commerce,
             DEVELOPMENT_MAX,
             war_gold(),
@@ -96,7 +152,7 @@ pub(super) fn city_development_intel(ui: &mut egui::Ui, city: &City) {
         progress_metric(
             ui,
             egui_phosphor::regular::SHIELD,
-            "城防",
+            t.text("development-focus-defense"),
             city.defense,
             DEVELOPMENT_MAX,
             egui::Color32::from_rgb(142, 169, 191),
@@ -104,12 +160,12 @@ pub(super) fn city_development_intel(ui: &mut egui::Ui, city: &City) {
     });
 }
 
-pub(super) fn city_stability_intel(ui: &mut egui::Ui, city: &City) {
-    intel_group(ui, "稳定与军备", |ui| {
+pub(super) fn city_stability_intel(ui: &mut egui::Ui, city: &City, t: &Translator) {
+    intel_group(ui, &t.text("city-section-stability"), |ui| {
         progress_metric(
             ui,
             egui_phosphor::regular::SWORD,
-            "训练",
+            t.text("city-training"),
             city.training,
             STABILITY_MAX,
             egui::Color32::from_rgb(185, 128, 96),
@@ -117,7 +173,7 @@ pub(super) fn city_stability_intel(ui: &mut egui::Ui, city: &City) {
         progress_metric(
             ui,
             egui_phosphor::regular::SCALES,
-            "治安",
+            t.text("development-focus-order"),
             city.order,
             STABILITY_MAX,
             war_success(),
@@ -125,26 +181,38 @@ pub(super) fn city_stability_intel(ui: &mut egui::Ui, city: &City) {
     });
 }
 
-pub(super) fn city_monthly_trend_intel(ui: &mut egui::Ui, projection: &CityMonthlyProjection) {
-    intel_group(ui, "月度趋势", |ui| {
+pub(super) fn city_monthly_trend_intel(
+    ui: &mut egui::Ui,
+    projection: &CityMonthlyProjection,
+    t: &Translator,
+) {
+    intel_group(ui, &t.text("city-section-monthly-trend"), |ui| {
         trend_rows(
             ui,
             &[
-                TrendMetric::new(egui_phosphor::regular::COINS, "金", projection.net_gold),
-                TrendMetric::new(egui_phosphor::regular::BARN, "粮", projection.net_food),
+                TrendMetric::new(
+                    egui_phosphor::regular::COINS,
+                    t.text("resource-gold"),
+                    projection.net_gold,
+                ),
+                TrendMetric::new(
+                    egui_phosphor::regular::BARN,
+                    t.text("resource-food"),
+                    projection.net_food,
+                ),
                 TrendMetric::new(
                     egui_phosphor::regular::STACK,
-                    "建材",
+                    t.text("resource-materials"),
                     projection.net_materials,
                 ),
                 TrendMetric::new(
                     egui_phosphor::regular::USERS,
-                    "人口",
+                    t.text("resource-population"),
                     projection.population_delta,
                 ),
                 TrendMetric::new(
                     egui_phosphor::regular::SWORD,
-                    "兵力",
+                    t.text("resource-troops"),
                     projection.troop_delta,
                 ),
             ],
@@ -152,17 +220,17 @@ pub(super) fn city_monthly_trend_intel(ui: &mut egui::Ui, projection: &CityMonth
     });
 }
 
-pub(super) fn city_facility_intel(ui: &mut egui::Ui, city: &City) {
-    intel_group(ui, "设施", |ui| {
+pub(super) fn city_facility_intel(ui: &mut egui::Ui, city: &City, t: &Translator) {
+    intel_group(ui, &t.text("city-section-facilities"), |ui| {
         if city.facilities.is_empty() {
-            muted_label(ui, "未建设设施");
+            muted_label(ui, t.text("city-no-facilities"));
         } else {
-            ui.label(facility_list(city));
+            ui.label(facility_list(city, t));
         }
     });
 }
 
-fn header_band(ui: &mut egui::Ui, city: &City, faction_name: &str) {
+fn header_band(ui: &mut egui::Ui, city: &City, faction_name: &str, t: &Translator) {
     egui::Frame::new()
         .inner_margin(egui::Margin::symmetric(8, 7))
         .fill(egui::Color32::from_rgba_unmultiplied(44, 36, 25, 150))
@@ -174,18 +242,25 @@ fn header_band(ui: &mut egui::Ui, city: &City, faction_name: &str) {
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(
-                    egui::RichText::new(format!("{}级城镇", city.level))
-                        .color(war_gold())
-                        .strong(),
+                    egui::RichText::new(
+                        t.text_args("city-level", &args([("level", city.level.to_string())])),
+                    )
+                    .color(war_gold())
+                    .strong(),
                 );
                 ui.separator();
-                ui.label(format!(
-                    "槽位 {}/{}",
-                    city.facilities.len(),
-                    city.facility_slots()
+                ui.label(t.text_args(
+                    "city-slots",
+                    &args([
+                        ("used", city.facilities.len().to_string()),
+                        ("total", city.facility_slots().to_string()),
+                    ]),
                 ));
                 ui.separator();
-                muted_label(ui, format!("归属: {faction_name}"));
+                muted_label(
+                    ui,
+                    t.text_args("city-owner", &args([("faction", faction_name.to_string())])),
+                );
             });
         });
 }
@@ -261,7 +336,7 @@ fn draw_metric_tile(ui: &mut egui::Ui, metric: &MetricTile, size: egui::Vec2, co
             rect.top() + if compact { 5.0 } else { 6.0 },
         ),
         egui::Align2::LEFT_TOP,
-        metric.label,
+        &metric.label,
         egui::FontId::proportional(12.0),
         war_text_muted(),
     );
@@ -284,7 +359,7 @@ fn draw_metric_tile(ui: &mut egui::Ui, metric: &MetricTile, size: egui::Vec2, co
 fn progress_metric(
     ui: &mut egui::Ui,
     icon: &'static str,
-    label: &'static str,
+    label: String,
     value: impl Into<i32>,
     max: f32,
     fill: egui::Color32,
@@ -342,7 +417,7 @@ fn trend_metric(ui: &mut egui::Ui, metric: &TrendMetric) {
         );
         ui.add_sized(
             egui::vec2(34.0, 18.0),
-            egui::Label::new(egui::RichText::new(metric.label).color(war_text_muted())),
+            egui::Label::new(egui::RichText::new(&metric.label).color(war_text_muted())),
         );
         ui.label(
             egui::RichText::new(format!("{trend_icon} {:+}", metric.delta))
@@ -378,29 +453,41 @@ fn format_number(value: i64) -> String {
     output
 }
 
-fn facility_list(city: &City) -> String {
+fn facility_list(city: &City, t: &Translator) -> String {
     city.facilities
         .iter()
-        .map(|facility| format!("{}{}级", facility_kind_label(facility.kind), facility.level))
+        .map(|facility| {
+            t.text_args(
+                "facility-level",
+                &args([
+                    ("name", facility_kind_label(t, facility.kind)),
+                    ("level", facility.level.to_string()),
+                ]),
+            )
+        })
         .collect::<Vec<_>>()
         .join(" / ")
 }
 
-fn troop_pool_summary(city: &City) -> String {
-    format!(
-        "步 {} / 骑 {} / 弓 {}",
-        city.troops.infantry, city.troops.cavalry, city.troops.archers
+fn troop_pool_summary(city: &City, t: &Translator) -> String {
+    t.text_args(
+        "troop-pool-short",
+        &args([
+            ("infantry", city.troops.infantry.to_string()),
+            ("cavalry", city.troops.cavalry.to_string()),
+            ("archers", city.troops.archers.to_string()),
+        ]),
     )
 }
 
 struct MetricTile {
     icon: &'static str,
-    label: &'static str,
+    label: String,
     value: i64,
 }
 
 impl MetricTile {
-    fn new(icon: &'static str, label: &'static str, value: impl Into<i64>) -> Self {
+    fn new(icon: &'static str, label: String, value: impl Into<i64>) -> Self {
         Self {
             icon,
             label,
@@ -411,12 +498,12 @@ impl MetricTile {
 
 struct TrendMetric {
     icon: &'static str,
-    label: &'static str,
+    label: String,
     delta: i32,
 }
 
 impl TrendMetric {
-    fn new(icon: &'static str, label: &'static str, delta: i32) -> Self {
+    fn new(icon: &'static str, label: String, delta: i32) -> Self {
         Self { icon, label, delta }
     }
 }

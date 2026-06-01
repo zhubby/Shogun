@@ -1,11 +1,13 @@
 use crate::game::*;
 
+use super::i18n::{Translator, args};
 use super::map::reset_map_view;
 use super::state::{CityPanelTab, CommandAction, CommandCategory, GameUiState, Screen};
 
 pub(super) fn start_history_game(ui_state: &mut GameUiState) {
+    let t = Translator::new(ui_state.applied_settings.general.ui_language);
     if ui_state.selected_scenario_id.is_empty() {
-        ui_state.message = "没有可用的 SQLite 历史剧本".to_string();
+        ui_state.message = t.text("message-no-history-scenario");
         return;
     }
     match SqliteHistoricalCatalog::open_default().and_then(|catalog| {
@@ -14,17 +16,18 @@ pub(super) fn start_history_game(ui_state: &mut GameUiState) {
             &ui_state.selected_faction_id,
         )
     }) {
-        Ok(game) => enter_game(ui_state, game, "新游戏开始".to_string()),
+        Ok(game) => enter_game(ui_state, game, t.text("message-new-game-started")),
         Err(error) => ui_state.message = error.to_string(),
     }
 }
 
 pub(super) fn start_json_game(ui_state: &mut GameUiState) {
+    let t = Translator::new(ui_state.applied_settings.general.ui_language);
     match ui_state
         .json_scenario
         .build_game(&ui_state.selected_faction_id)
     {
-        Ok(game) => enter_game(ui_state, game, "兼容小剧本开始".to_string()),
+        Ok(game) => enter_game(ui_state, game, t.text("message-json-game-started")),
         Err(error) => ui_state.message = error.to_string(),
     }
 }
@@ -54,8 +57,9 @@ pub(super) fn enter_game(ui_state: &mut GameUiState, game: GameState, message: S
 }
 
 pub(super) fn finish_current_turn(ui_state: &mut GameUiState) {
+    let t = Translator::new(ui_state.applied_settings.general.ui_language);
     let Some(game) = &mut ui_state.game else {
-        ui_state.message = "尚未开始游戏".to_string();
+        ui_state.message = t.text("message-game-not-started");
         return;
     };
     if game.status != GameStatus::Running {
@@ -63,18 +67,22 @@ pub(super) fn finish_current_turn(ui_state: &mut GameUiState) {
     }
     let provider = RuleBasedAiProvider;
     let report = finish_turn(game, &provider);
-    ui_state.message = format!("完成 {} 条结算记录", report.entries.len());
+    ui_state.message = t.text_args(
+        "message-turn-finished",
+        &args([("count", report.entries.len().to_string())]),
+    );
     ui_state.selected_city_id = first_player_city(game);
     ui_state.city_drawer_open = false;
 }
 
 pub(super) fn clear_pending_commands(ui_state: &mut GameUiState) {
+    let t = Translator::new(ui_state.applied_settings.general.ui_language);
     let Some(game) = &mut ui_state.game else {
-        ui_state.message = "尚未开始游戏".to_string();
+        ui_state.message = t.text("message-game-not-started");
         return;
     };
     game.pending_commands.clear();
-    ui_state.message = "已清空玩家待命令".to_string();
+    ui_state.message = t.text("message-pending-commands-cleared");
 }
 
 pub(super) fn open_city(ui_state: &mut GameUiState, city_id: CityId) {

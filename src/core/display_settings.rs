@@ -6,9 +6,12 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use super::i18n::{Translator, UiLanguage, args};
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub(super) struct GameSettings {
+    pub(super) general: GeneralSettings,
     pub(super) display: DisplaySettings,
     pub(super) audio: AudioSettings,
 }
@@ -16,6 +19,7 @@ pub(super) struct GameSettings {
 impl GameSettings {
     pub(super) fn validated(self) -> Result<Self, GameSettingsError> {
         Ok(Self {
+            general: self.general,
             display: self.display.validate()?,
             audio: self.audio.normalized(),
         })
@@ -25,10 +29,17 @@ impl GameSettings {
 impl Default for GameSettings {
     fn default() -> Self {
         Self {
+            general: GeneralSettings::default(),
             display: DisplaySettings::default(),
             audio: AudioSettings::default(),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub(super) struct GeneralSettings {
+    pub(super) ui_language: UiLanguage,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -192,11 +203,11 @@ impl DisplayMode {
         &DISPLAY_MODE_VARIANTS
     }
 
-    pub(super) fn label(self) -> &'static str {
+    pub(super) fn label(self, t: &Translator) -> String {
         match self {
-            DisplayMode::Windowed => "窗口",
-            DisplayMode::BorderlessFullscreen => "无边框全屏",
-            DisplayMode::ExclusiveFullscreen => "独占全屏",
+            DisplayMode::Windowed => t.text("display-mode-windowed"),
+            DisplayMode::BorderlessFullscreen => t.text("display-mode-borderless-fullscreen"),
+            DisplayMode::ExclusiveFullscreen => t.text("display-mode-exclusive-fullscreen"),
         }
     }
 }
@@ -235,16 +246,16 @@ impl GameSettingsStore {
         match fs::read_to_string(&self.path) {
             Ok(body) => match parse_game_settings(&body) {
                 Ok(settings) => LoadedGameSettings::loaded(settings),
-                Err(error) => {
-                    LoadedGameSettings::fallback(format!("游戏设置无效，已使用默认设置: {error}"))
-                }
+                Err(error) => LoadedGameSettings::fallback(GameSettingsLoadMessage::Invalid {
+                    error: error.to_string(),
+                }),
             },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                LoadedGameSettings::fallback("未找到游戏设置，已使用默认设置".to_string())
+                LoadedGameSettings::fallback(GameSettingsLoadMessage::Missing)
             }
-            Err(error) => {
-                LoadedGameSettings::fallback(format!("读取游戏设置失败，已使用默认设置: {error}"))
-            }
+            Err(error) => LoadedGameSettings::fallback(GameSettingsLoadMessage::ReadFailed {
+                error: error.to_string(),
+            }),
         }
     }
 
@@ -270,12 +281,16 @@ impl Default for GameSettingsStore {
 
 fn parse_game_settings(body: &str) -> Result<GameSettings, GameSettingsError> {
     let value = serde_json::from_str::<serde_json::Value>(body).map_err(GameSettingsError::Json)?;
-    let settings = if value.get("display").is_some() || value.get("audio").is_some() {
+    let settings = if value.get("general").is_some()
+        || value.get("display").is_some()
+        || value.get("audio").is_some()
+    {
         serde_json::from_value::<GameSettings>(value).map_err(GameSettingsError::Json)?
     } else {
         let display =
             serde_json::from_value::<DisplaySettings>(value).map_err(GameSettingsError::Json)?;
         GameSettings {
+            general: GeneralSettings::default(),
             display,
             audio: AudioSettings::default(),
         }
@@ -286,7 +301,7 @@ fn parse_game_settings(body: &str) -> Result<GameSettings, GameSettingsError> {
 #[derive(Clone, Debug)]
 pub(super) struct LoadedGameSettings {
     pub(super) settings: GameSettings,
-    pub(super) message: Option<String>,
+    pub(super) message: Option<GameSettingsLoadMessage>,
 }
 
 impl LoadedGameSettings {
@@ -297,10 +312,33 @@ impl LoadedGameSettings {
         }
     }
 
-    fn fallback(message: String) -> Self {
+    fn fallback(message: GameSettingsLoadMessage) -> Self {
         Self {
             settings: GameSettings::default(),
             message: Some(message),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum GameSettingsLoadMessage {
+    Invalid { error: String },
+    Missing,
+    ReadFailed { error: String },
+}
+
+impl GameSettingsLoadMessage {
+    pub(super) fn localized(&self, t: &Translator) -> String {
+        match self {
+            Self::Invalid { error } => t.text_args(
+                "message-settings-invalid-defaulted",
+                &args([("error", error.clone())]),
+            ),
+            Self::Missing => t.text("message-settings-missing-defaulted"),
+            Self::ReadFailed { error } => t.text_args(
+                "message-settings-read-failed-defaulted",
+                &args([("error", error.clone())]),
+            ),
         }
     }
 }
@@ -342,6 +380,9 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let store = GameSettingsStore::new(temp.path().join("settings.json"));
         let settings = GameSettings {
+            general: GeneralSettings {
+                ui_language: UiLanguage::English,
+            },
             display: DisplaySettings {
                 resolution: DisplayResolution::new(1600, 900),
                 display_mode: DisplayMode::BorderlessFullscreen,
@@ -386,6 +427,67 @@ mod tests {
             }
         );
         assert_eq!(loaded.settings.audio, AudioSettings::default());
+        assert_eq!(loaded.settings.general, GeneralSettings::default());
+        assert!(loaded.message.is_none());
+    }
+
+    #[test]
+    fn nested_display_audio_settings_load_with_default_language() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{
+  "display": {
+    "resolution": { "width": 1366, "height": 768 },
+    "display_mode": "windowed",
+    "vsync": false
+  },
+  "audio": {
+    "master_volume": 0.5,
+    "output_device_name": "Built-in Output"
+  }
+}"#,
+        )
+        .unwrap();
+        let store = GameSettingsStore::new(path);
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.settings.general, GeneralSettings::default());
+        assert_eq!(
+            loaded.settings.display.resolution,
+            DisplayResolution::new(1366, 768)
+        );
+        assert_eq!(loaded.settings.audio.master_volume, 0.5);
+        assert!(loaded.message.is_none());
+    }
+
+    #[test]
+    fn general_ui_language_loads_from_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{
+  "general": { "ui_language": "en-US" },
+  "display": {
+    "resolution": { "width": 1280, "height": 820 },
+    "display_mode": "windowed",
+    "vsync": true
+  },
+  "audio": {
+    "master_volume": 1.0,
+    "output_device_name": null
+  }
+}"#,
+        )
+        .unwrap();
+        let store = GameSettingsStore::new(path);
+
+        let loaded = store.load();
+
+        assert_eq!(loaded.settings.general.ui_language, UiLanguage::English);
         assert!(loaded.message.is_none());
     }
 

@@ -5,6 +5,7 @@ mod city_intel;
 mod city_panel;
 mod display_settings;
 mod hud;
+mod i18n;
 mod labels;
 mod map;
 mod menu;
@@ -20,6 +21,7 @@ use bevy_egui::{EguiContexts, EguiPlugin, EguiPrimaryContextPass};
 use audio::MainMenuAudio;
 use display_settings::GameSettingsStore;
 use hud::in_game;
+use i18n::{Translator, args};
 use menu::{MainMenuAction, MainMenuAssets, main_menu, prepare_main_menu_assets_for_egui};
 use settings::apply_pending_game_settings;
 use state::{GameUiState, Screen};
@@ -76,6 +78,7 @@ fn sync_main_menu_bgm(
     mut main_menu_audio: NonSendMut<MainMenuAudio>,
 ) {
     let audio_settings = ui_state.applied_settings.audio.clone();
+    let t = Translator::new(ui_state.applied_settings.general.ui_language);
     match main_menu_audio.sync(
         ui_state.screen,
         ui_state.main_menu_bgm_enabled,
@@ -85,7 +88,7 @@ fn sync_main_menu_bgm(
         Ok(None) => {}
         Err(error) => {
             ui_state.main_menu_bgm_enabled = false;
-            ui_state.message = format!("背景音乐不可用: {error}");
+            ui_state.message = t.text_args("message-bgm-unavailable", &args([("error", error)]));
         }
     }
 }
@@ -102,6 +105,7 @@ fn game_ui_system(
     };
     configure_egui_fonts(ctx, &mut ui_state);
     configure_egui_theme(ctx);
+    let t = Translator::new(ui_state.applied_settings.general.ui_language);
 
     match ui_state.screen {
         Screen::MainMenu => match main_menu(ctx, &mut ui_state) {
@@ -110,7 +114,7 @@ fn game_ui_system(
                 Ok(mut window) => {
                     apply_pending_game_settings(&mut ui_state, &mut window, &mut main_menu_audio)
                 }
-                Err(_) => ui_state.message = "找不到主窗口，无法应用游戏设置".to_string(),
+                Err(_) => ui_state.message = t.text("message-main-window-missing"),
             },
             MainMenuAction::Exit => {
                 main_menu_audio.stop();

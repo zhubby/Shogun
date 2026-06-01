@@ -11,11 +11,14 @@ bevy_asset_loader = "0.25"
 bevy_egui = "0.39"
 directories = "6"
 egui-phosphor = "0.11"
+i18n-embed = { version = "0.15", features = ["fluent-system", "desktop-requester"] }
 rodio = { version = "0.20.1", default-features = false, features = ["mp3"] }
+rust-embed = "8.11.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8.6", default-features = false, features = ["macros", "migrate", "runtime-tokio", "sqlite"] }
 tokio = { version = "1.47", default-features = false, features = ["rt", "time"] }
+unic-langid = { version = "0.9", features = ["macros"] }
 winit = "0.30"
 
 [dev-dependencies]

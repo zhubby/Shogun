@@ -3,14 +3,15 @@ use bevy_egui::egui;
 use std::collections::BTreeMap;
 
 use super::actions::open_city;
+use super::i18n::{Translator, args};
 use super::state::GameUiState;
 use super::style::{draw_strategy_map_background, war_border, war_gold, war_text};
 use super::{MAP_MAX_ZOOM, MAP_MIN_ZOOM};
 
-pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
+pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
     if ui_state.game.is_none() {
         ui.centered_and_justified(|ui| {
-            ui.label("尚未开始游戏");
+            ui.label(t.text("message-game-not-started"));
         });
         return;
     }
@@ -73,7 +74,7 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
             .selected_city_id
             .as_deref()
             .is_some_and(|city_id| road.from.as_str() == city_id || road.to.as_str() == city_id);
-        draw_map_road(&painter, game, road, a, b, selected);
+        draw_map_road(&painter, game, road, a, b, selected, t);
     }
 
     for city in game.cities.values() {
@@ -82,7 +83,16 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
         let color = faction_color(faction);
         let selected = ui_state.selected_city_id.as_deref() == Some(city.id.as_str());
         let player_owned = city.faction_id == game.player_faction_id;
-        draw_city_marker(&painter, pos, city, color, selected, player_owned, ui_state);
+        draw_city_marker(
+            &painter,
+            pos,
+            city,
+            color,
+            selected,
+            player_owned,
+            ui_state,
+            t,
+        );
     }
 
     let picked_city = response
@@ -105,7 +115,7 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
         .or_else(|| ui_state.selected_city_id.clone());
     response.context_menu(|ui| {
         if let Some(city_id) = context_city_id.clone()
-            && ui.button("打开中军帐").clicked()
+            && ui.button(t.text("open-command-tent")).clicked()
         {
             open_city(ui_state, city_id);
             ui.close();
@@ -120,6 +130,7 @@ fn draw_map_road(
     a: egui::Pos2,
     b: egui::Pos2,
     selected: bool,
+    t: &Translator,
 ) {
     let bounds = egui::Rect::from_two_pos(a, b).expand(if selected { 10.0 } else { 7.0 });
     if !bounds.intersects(painter.clip_rect()) {
@@ -143,7 +154,7 @@ fn draw_map_road(
     painter.line_segment([a, b], egui::Stroke::new(road_width, road_color));
 
     if selected {
-        draw_road_distance_label(painter, game, road, a, b);
+        draw_road_distance_label(painter, game, road, a, b, t);
     }
 }
 
@@ -153,6 +164,7 @@ fn draw_road_distance_label(
     road: &Road,
     a: egui::Pos2,
     b: egui::Pos2,
+    t: &Translator,
 ) {
     let Some(distance_li) = game.road_distance_li(&road.from, &road.to) else {
         return;
@@ -160,7 +172,13 @@ fn draw_road_distance_label(
     let Some(travel_months) = game.travel_months_between(&road.from, &road.to) else {
         return;
     };
-    let text = format!("{distance_li}里 / {travel_months}月");
+    let text = t.text_args(
+        "map-road-distance",
+        &args([
+            ("distance", distance_li.to_string()),
+            ("months", travel_months.to_string()),
+        ]),
+    );
     let width = (text.chars().count() as f32 * 8.5 + 18.0).max(74.0);
     let label_pos = a + (b - a) * 0.5;
     let rect =
@@ -519,6 +537,7 @@ pub(super) fn draw_city_marker(
     selected: bool,
     player_owned: bool,
     ui_state: &GameUiState,
+    t: &Translator,
 ) {
     let scale = ui_state.map_zoom.sqrt().clamp(0.85, 1.35);
     let marker_scale = scale * city_marker_rank_scale(city);
@@ -641,7 +660,7 @@ pub(super) fn draw_city_marker(
     painter.text(
         base.center(),
         egui::Align2::CENTER_CENTER,
-        compact_troops(city.troops.total()),
+        compact_troops(city.troops.total(), t),
         egui::FontId::proportional(12.0 * scale),
         war_text(),
     );
@@ -679,9 +698,12 @@ pub(super) fn city_marker_rank_scale(city: &City) -> f32 {
     }
 }
 
-pub(super) fn compact_troops(troops: u32) -> String {
+pub(super) fn compact_troops(troops: u32, t: &Translator) -> String {
     if troops >= 10_000 {
-        format!("{:.1}万", troops as f32 / 10_000.0)
+        t.text_args(
+            "map-troops-ten-thousand",
+            &args([("value", format!("{:.1}", troops as f32 / 10_000.0))]),
+        )
     } else {
         troops.to_string()
     }

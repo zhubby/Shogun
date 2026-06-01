@@ -4,12 +4,14 @@ use bevy_egui::egui;
 use std::collections::BTreeMap;
 
 use super::display_settings::{GameSettings, GameSettingsStore, LoadedGameSettings};
+use super::i18n::{Translator, args};
 use super::map::MapBoundaryViewCache;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SettingsTab {
     Display,
     Audio,
+    Language,
 }
 
 #[derive(Resource)]
@@ -127,9 +129,18 @@ impl GameUiState {
             .unwrap_or_default();
         let save_manager = SaveManager::with_default_dir();
         let save_slots = save_manager.list_slots().unwrap_or_default();
-        let (map_boundaries, map_boundary_message) = load_map_boundary_catalog();
+        let translator = Translator::new(loaded_settings.settings.general.ui_language);
+        let (map_boundaries, map_boundary_message) = load_map_boundary_catalog(&translator);
+        let settings_message = loaded_settings
+            .message
+            .as_ref()
+            .map(|message| message.localized(&translator));
+        let history_message = history_menu
+            .message
+            .as_ref()
+            .map(|message| message.localized(&translator));
         let mut message =
-            combined_menu_message(loaded_settings.message.as_deref(), &history_menu.message);
+            combined_menu_message(settings_message.as_deref(), history_message.as_deref());
         if let Some(boundary_message) = &map_boundary_message {
             if !message.is_empty() {
                 message.push('\n');
@@ -201,7 +212,7 @@ impl GameUiState {
             save_manager,
             save_slots,
             save_slot_id: "slot1".to_string(),
-            save_display_name: "新存档".to_string(),
+            save_display_name: translator.text("save-default-name"),
             settings_store,
             applied_settings: loaded_settings.settings.clone(),
             pending_settings: loaded_settings.settings,
@@ -228,25 +239,30 @@ impl Default for GameUiState {
 
 pub(super) fn combined_menu_message(
     settings_message: Option<&str>,
-    history_message: &str,
+    history_message: Option<&str>,
 ) -> String {
     match (
         settings_message.filter(|message| !message.is_empty()),
-        history_message.is_empty(),
+        history_message.filter(|message| !message.is_empty()),
     ) {
-        (Some(message), false) => format!("{message}\n{history_message}"),
-        (Some(message), true) => message.to_string(),
-        (None, false) => history_message.to_string(),
-        (None, true) => String::new(),
+        (Some(settings), Some(history)) => format!("{settings}\n{history}"),
+        (Some(settings), None) => settings.to_string(),
+        (None, Some(history)) => history.to_string(),
+        (None, None) => String::new(),
     }
 }
 
-pub(super) fn load_map_boundary_catalog() -> (Option<MapBoundaryCatalog>, Option<String>) {
+pub(super) fn load_map_boundary_catalog(
+    t: &Translator,
+) -> (Option<MapBoundaryCatalog>, Option<String>) {
     match MapBoundaryCatalog::from_path(MAP_BOUNDARY_ASSET_PATH) {
         Ok(catalog) => (Some(catalog), None),
         Err(error) => (
             None,
-            Some(format!("州郡边界不可用，已退回点线地图: {error}")),
+            Some(t.text_args(
+                "message-map-boundary-unavailable",
+                &super::i18n::args([("error", error.to_string())]),
+            )),
         ),
     }
 }
@@ -255,7 +271,22 @@ pub(super) struct HistoryMenuState {
     scenarios: Vec<HistoricalScenario>,
     selected_scenario_id: ScenarioId,
     factions: Vec<Faction>,
-    message: String,
+    message: Option<HistoryMenuLoadMessage>,
+}
+
+pub(super) enum HistoryMenuLoadMessage {
+    CatalogUnavailable { error: String },
+}
+
+impl HistoryMenuLoadMessage {
+    fn localized(&self, t: &Translator) -> String {
+        match self {
+            Self::CatalogUnavailable { error } => t.text_args(
+                "message-history-catalog-unavailable",
+                &args([("error", error.clone())]),
+            ),
+        }
+    }
 }
 
 pub(super) fn load_history_menu(preferred_scenario_id: Option<&str>) -> HistoryMenuState {
@@ -275,7 +306,7 @@ pub(super) fn load_history_menu(preferred_scenario_id: Option<&str>) -> HistoryM
             scenarios,
             selected_scenario_id,
             factions,
-            message: String::new(),
+            message: None,
         })
     }) {
         Ok(menu) => menu,
@@ -283,7 +314,9 @@ pub(super) fn load_history_menu(preferred_scenario_id: Option<&str>) -> HistoryM
             scenarios: Vec::new(),
             selected_scenario_id: String::new(),
             factions: Vec::new(),
-            message: format!("历史资料库不可用，已启用兼容小剧本: {error}"),
+            message: Some(HistoryMenuLoadMessage::CatalogUnavailable {
+                error: error.to_string(),
+            }),
         },
     }
 }
@@ -293,8 +326,9 @@ pub(super) fn refresh_history_menu(ui_state: &mut GameUiState) {
     ui_state.history_scenarios = menu.scenarios;
     ui_state.selected_scenario_id = menu.selected_scenario_id;
     ui_state.history_factions = menu.factions;
-    if !menu.message.is_empty() {
-        ui_state.message = menu.message;
+    if let Some(message) = menu.message {
+        let t = Translator::new(ui_state.applied_settings.general.ui_language);
+        ui_state.message = message.localized(&t);
     }
     ensure_selected_faction(ui_state);
 }
@@ -309,7 +343,11 @@ pub(super) fn refresh_history_factions(ui_state: &mut GameUiState) {
         }
         Err(error) => {
             ui_state.history_factions.clear();
-            ui_state.message = format!("读取势力列表失败: {error}");
+            let t = Translator::new(ui_state.applied_settings.general.ui_language);
+            ui_state.message = t.text_args(
+                "message-history-factions-load-failed",
+                &args([("error", error.to_string())]),
+            );
         }
     }
 }

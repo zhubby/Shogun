@@ -2,6 +2,7 @@ use bevy_egui::egui;
 use std::fs;
 use std::path::PathBuf;
 
+use super::i18n::Translator;
 use super::state::GameUiState;
 
 pub(super) fn configure_egui_theme(ctx: &egui::Context) {
@@ -88,7 +89,7 @@ pub(super) fn war_danger() -> egui::Color32 {
     egui::Color32::from_rgb(218, 95, 76)
 }
 
-pub(super) fn modal_title_bar(ui: &mut egui::Ui, title: &str) -> bool {
+pub(super) fn modal_title_bar(ui: &mut egui::Ui, t: &Translator, title: &str) -> bool {
     let row_width = ui.available_width();
     let button_size = egui::vec2(30.0, 30.0);
     let mut close_clicked = false;
@@ -100,14 +101,14 @@ pub(super) fn modal_title_bar(ui: &mut egui::Ui, title: &str) -> bool {
             ui.set_width(row_width);
             ui.heading(egui::RichText::new(title).color(war_gold()));
             ui.add_space((ui.available_width() - button_size.x).max(0.0));
-            close_clicked = close_icon_button(ui, button_size).clicked();
+            close_clicked = close_icon_button(ui, t, button_size).clicked();
         },
     );
 
     close_clicked
 }
 
-fn close_icon_button(ui: &mut egui::Ui, size: egui::Vec2) -> egui::Response {
+fn close_icon_button(ui: &mut egui::Ui, t: &Translator, size: egui::Vec2) -> egui::Response {
     ui.add_sized(
         size,
         egui::Button::new(
@@ -116,7 +117,7 @@ fn close_icon_button(ui: &mut egui::Ui, size: egui::Vec2) -> egui::Response {
                 .color(war_gold()),
         ),
     )
-    .on_hover_text("关闭")
+    .on_hover_text(t.text("common-close"))
 }
 
 pub(super) fn draw_strategy_map_background(painter: &egui::Painter, rect: egui::Rect) {

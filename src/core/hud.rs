@@ -6,6 +6,7 @@ use super::actions::{
 };
 use super::city_intel::city_summary_intel;
 use super::city_panel::selected_city_panel;
+use super::i18n::{Translator, args};
 use super::labels::{officer_gender_label, technology_branch_label};
 use super::map::{map_panel, reset_map_view, zoom_map};
 use super::state::{
@@ -18,42 +19,52 @@ use super::style::{
 use super::{HUD_MARGIN, HUD_TOP_HEIGHT, HUD_TOP_OFFSET, MAP_ZOOM_STEP};
 
 pub(super) fn in_game(ctx: &egui::Context, ui_state: &mut GameUiState) {
+    let t = Translator::new(ui_state.applied_settings.general.ui_language);
     egui::CentralPanel::default()
         .frame(egui::Frame::NONE)
         .show(ctx, |ui| {
-            map_panel(ui, ui_state);
+            map_panel(ui, ui_state, &t);
         });
 
-    in_game_hud(ctx, ui_state);
+    in_game_hud(ctx, ui_state, &t);
 }
 
-pub(super) fn in_game_hud(ctx: &egui::Context, ui_state: &mut GameUiState) {
+pub(super) fn in_game_hud(ctx: &egui::Context, ui_state: &mut GameUiState, t: &Translator) {
     let screen = ctx.content_rect();
-    top_status_hud(ctx, ui_state, screen);
-    map_controls_hud(ctx, ui_state);
-    left_city_summary_hud(ctx, ui_state);
-    city_list_hud(ctx, ui_state, screen);
-    save_hud(ctx, ui_state, screen);
-    city_drawer_hud(ctx, ui_state, screen);
-    report_hud(ctx, ui_state, screen);
-    bottom_map_actions_hud(ctx, ui_state);
-    officer_browser_hud(ctx, ui_state, screen);
-    retainer_hud(ctx, ui_state, screen);
-    technology_hud(ctx, ui_state, screen);
+    top_status_hud(ctx, ui_state, t, screen);
+    map_controls_hud(ctx, ui_state, t);
+    left_city_summary_hud(ctx, ui_state, t);
+    city_list_hud(ctx, ui_state, t, screen);
+    save_hud(ctx, ui_state, t, screen);
+    city_drawer_hud(ctx, ui_state, t, screen);
+    report_hud(ctx, ui_state, t, screen);
+    bottom_map_actions_hud(ctx, ui_state, t);
+    officer_browser_hud(ctx, ui_state, t, screen);
+    retainer_hud(ctx, ui_state, t, screen);
+    technology_hud(ctx, ui_state, t, screen);
 }
 
-pub(super) fn top_status_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
+pub(super) fn top_status_hud(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    screen: egui::Rect,
+) {
     let width = (screen.width() - HUD_MARGIN * 2.0).max(320.0);
     let summary = ui_state.game.as_ref().map(|game| {
         let faction_name = game
             .factions
             .get(&game.player_faction_id)
             .map(|faction| faction.name.clone())
-            .unwrap_or_else(|| "未知势力".to_string());
+            .unwrap_or_else(|| t.text("unknown-faction"));
         let status = match &game.status {
             GameStatus::Running => None,
-            GameStatus::Victory { reason } => Some(format!("胜利: {reason}")),
-            GameStatus::Defeat { reason } => Some(format!("失败: {reason}")),
+            GameStatus::Victory { reason } => {
+                Some(t.text_args("game-status-victory", &args([("reason", reason.clone())])))
+            }
+            GameStatus::Defeat { reason } => {
+                Some(t.text_args("game-status-defeat", &args([("reason", reason.clone())])))
+            }
         };
         (
             game.scenario_name.clone(),
@@ -76,30 +87,38 @@ pub(super) fn top_status_hud(ctx: &egui::Context, ui_state: &mut GameUiState, sc
                 ui.set_width(width);
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new("三国争霸")
+                        egui::RichText::new(t.text("app-title"))
                             .size(24.0)
                             .color(war_gold())
                             .strong(),
                     );
                     ui.separator();
                     if let Some((scenario, year, month, turn, faction_name, status)) = summary {
-                        ui.label(format!("{scenario}  {year}年{month}月  第{turn}回合"));
-                        ui.label(format!("玩家: {faction_name}"));
+                        ui.label(t.text_args(
+                            "hud-date-turn",
+                            &args([
+                                ("scenario", scenario),
+                                ("year", year.to_string()),
+                                ("month", month.to_string()),
+                                ("turn", turn.to_string()),
+                            ]),
+                        ));
+                        ui.label(t.text_args("hud-player", &args([("faction", faction_name)])));
                         if let Some(status) = status {
                             ui.colored_label(egui::Color32::from_rgb(200, 72, 52), status);
                         }
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("主菜单").clicked() {
+                        if ui.button(t.text("hud-main-menu")).clicked() {
                             ui_state.screen = Screen::MainMenu;
                         }
-                        if ui.button("存档").clicked() {
+                        if ui.button(t.text("hud-save")).clicked() {
                             ui_state.save_panel_open = !ui_state.save_panel_open;
                         }
-                        if ui.button("清空命令").clicked() {
+                        if ui.button(t.text("hud-clear-commands")).clicked() {
                             clear_pending_commands(ui_state);
                         }
-                        if ui.button("结束本月").clicked() {
+                        if ui.button(t.text("hud-end-month")).clicked() {
                             finish_current_turn(ui_state);
                         }
                     });
@@ -108,7 +127,7 @@ pub(super) fn top_status_hud(ctx: &egui::Context, ui_state: &mut GameUiState, sc
         });
 }
 
-pub(super) fn map_controls_hud(ctx: &egui::Context, ui_state: &mut GameUiState) {
+pub(super) fn map_controls_hud(ctx: &egui::Context, ui_state: &mut GameUiState, t: &Translator) {
     egui::Area::new(egui::Id::new("hud_map_controls"))
         .order(egui::Order::Foreground)
         .anchor(
@@ -118,12 +137,16 @@ pub(super) fn map_controls_hud(ctx: &egui::Context, ui_state: &mut GameUiState) 
         .show(ctx, |ui| {
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(270.0);
-                map_controls(ui, ui_state);
+                map_controls(ui, ui_state, t);
             });
         });
 }
 
-pub(super) fn left_city_summary_hud(ctx: &egui::Context, ui_state: &mut GameUiState) {
+pub(super) fn left_city_summary_hud(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+) {
     egui::Area::new(egui::Id::new("hud_left_city_summary"))
         .order(egui::Order::Foreground)
         .anchor(
@@ -133,12 +156,16 @@ pub(super) fn left_city_summary_hud(ctx: &egui::Context, ui_state: &mut GameUiSt
         .show(ctx, |ui| {
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(285.0);
-                selected_city_summary(ui, ui_state);
+                selected_city_summary(ui, ui_state, t);
             });
         });
 }
 
-pub(super) fn bottom_map_actions_hud(ctx: &egui::Context, ui_state: &mut GameUiState) {
+pub(super) fn bottom_map_actions_hud(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+) {
     egui::Area::new(egui::Id::new("hud_bottom_map_actions"))
         .order(egui::Order::Foreground)
         .anchor(
@@ -149,36 +176,36 @@ pub(super) fn bottom_map_actions_hud(ctx: &egui::Context, ui_state: &mut GameUiS
             war_panel_frame().show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let city_label = if ui_state.city_list_open {
-                        "收起城池"
+                        t.text("hud-collapse-cities")
                     } else {
-                        "城池"
+                        t.text("hud-cities")
                     };
                     if ui.button(city_label).clicked() {
                         ui_state.city_list_open = !ui_state.city_list_open;
                     }
 
                     let officer_label = if ui_state.officer_browser_open {
-                        "收起武将"
+                        t.text("hud-collapse-officers")
                     } else {
-                        "武将"
+                        t.text("hud-officers")
                     };
                     if ui.button(officer_label).clicked() {
                         ui_state.officer_browser_open = !ui_state.officer_browser_open;
                     }
 
                     let retainer_label = if ui_state.retainers_open {
-                        "收起幕僚"
+                        t.text("hud-collapse-retainers")
                     } else {
-                        "幕僚"
+                        t.text("hud-retainers")
                     };
                     if ui.button(retainer_label).clicked() {
                         ui_state.retainers_open = !ui_state.retainers_open;
                     }
 
                     let technology_label = if ui_state.technology_open {
-                        "收起科技"
+                        t.text("hud-collapse-technology")
                     } else {
-                        "科技"
+                        t.text("hud-technology")
                     };
                     if ui.button(technology_label).clicked() {
                         ui_state.technology_open = !ui_state.technology_open;
@@ -188,7 +215,12 @@ pub(super) fn bottom_map_actions_hud(ctx: &egui::Context, ui_state: &mut GameUiS
         });
 }
 
-pub(super) fn technology_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
+pub(super) fn technology_hud(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    screen: egui::Rect,
+) {
     if !ui_state.technology_open {
         return;
     }
@@ -202,18 +234,24 @@ pub(super) fn technology_hud(ctx: &egui::Context, ui_state: &mut GameUiState, sc
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(width);
                 ui.set_min_height(height);
-                if modal_title_bar(ui, "科技") {
+                if modal_title_bar(ui, t, &t.text("technology-title")) {
                     ui_state.technology_open = false;
                 }
                 ui.separator();
-                technology_panel(ui, ui_state, width, height);
+                technology_panel(ui, ui_state, t, width, height);
             });
         });
 }
 
-fn technology_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, width: f32, height: f32) {
+fn technology_panel(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    width: f32,
+    height: f32,
+) {
     let Some(game) = ui_state.game.as_ref().cloned() else {
-        ui.label("当前没有剧本局面。");
+        ui.label(t.text("message-no-game-state"));
         return;
     };
     let branch = ui_state.selected_technology_branch;
@@ -229,7 +267,7 @@ fn technology_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, width: f32, h
             if ui
                 .selectable_label(
                     ui_state.selected_technology_branch == branch,
-                    technology_branch_label(branch),
+                    technology_branch_label(t, branch),
                 )
                 .clicked()
             {
@@ -246,15 +284,23 @@ fn technology_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, width: f32, h
     ui.columns(2, |columns| {
         columns[0].set_width(width * 0.46);
         war_sub_panel_frame().show(&mut columns[0], |ui| {
-            ui.label(egui::RichText::new("科技树").color(war_gold()).strong());
+            ui.label(
+                egui::RichText::new(t.text("technology-tree"))
+                    .color(war_gold())
+                    .strong(),
+            );
             ui.add_space(6.0);
-            technology_tree(ui, ui_state, &game, height - 118.0);
+            technology_tree(ui, ui_state, &game, t, height - 118.0);
         });
 
         war_sub_panel_frame().show(&mut columns[1], |ui| {
-            ui.label(egui::RichText::new("详情").color(war_gold()).strong());
+            ui.label(
+                egui::RichText::new(t.text("technology-detail"))
+                    .color(war_gold())
+                    .strong(),
+            );
             ui.add_space(6.0);
-            technology_detail(ui, ui_state, &game);
+            technology_detail(ui, ui_state, &game, t);
         });
     });
 }
@@ -263,6 +309,7 @@ fn technology_tree(
     ui: &mut egui::Ui,
     ui_state: &mut GameUiState,
     game: &GameState,
+    t: &Translator,
     max_height: f32,
 ) {
     let faction_state = faction_technology_state(game, &game.player_faction_id);
@@ -274,7 +321,7 @@ fn technology_tree(
             for spec in technology_specs_for_branch(ui_state.selected_technology_branch) {
                 let selected = ui_state.selected_technology_id == spec.id;
                 let status = technology_node_status(game, faction_state, spec);
-                let response = technology_tree_node(ui, spec, selected, status, faction_state);
+                let response = technology_tree_node(ui, spec, selected, status, faction_state, t);
                 if response.clicked() {
                     ui_state.selected_technology_id = spec.id;
                 }
@@ -290,6 +337,7 @@ fn technology_tree_node(
     selected: bool,
     status: TechnologyNodeStatus,
     faction_state: Option<&FactionTechnologyState>,
+    t: &Translator,
 ) -> egui::Response {
     const ROW_HEIGHT: f32 = 48.0;
     let depth = technology_depth(spec);
@@ -298,7 +346,7 @@ fn technology_tree_node(
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(available, ROW_HEIGHT), egui::Sense::click());
     let painter = ui.painter_at(rect);
-    let visuals = technology_status_visuals(status);
+    let visuals = technology_status_visuals(status, t);
     let node_center = egui::pos2(rect.left() + indent + 12.0, rect.center().y);
     let has_parent = !spec.prerequisites.is_empty();
 
@@ -365,9 +413,22 @@ fn technology_tree_node(
         .map(|state| technology_progress(state, spec.id))
         .unwrap_or_default();
     let meta = if status == TechnologyNodeStatus::Active {
-        format!("{progress}/{}回合  {}金", spec.turns, spec.gold_cost)
+        t.text_args(
+            "technology-node-active-meta",
+            &args([
+                ("progress", progress.to_string()),
+                ("turns", spec.turns.to_string()),
+                ("gold", spec.gold_cost.to_string()),
+            ]),
+        )
     } else {
-        format!("{}回合 / {}金", spec.turns, spec.gold_cost)
+        t.text_args(
+            "technology-node-meta",
+            &args([
+                ("turns", spec.turns.to_string()),
+                ("gold", spec.gold_cost.to_string()),
+            ]),
+        )
     };
     painter.text(
         egui::pos2(text_left, rect.top() + 29.0),
@@ -401,7 +462,12 @@ fn technology_tree_node(
     response
 }
 
-fn technology_detail(ui: &mut egui::Ui, ui_state: &mut GameUiState, game: &GameState) {
+fn technology_detail(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    game: &GameState,
+    t: &Translator,
+) {
     let faction_id = game.player_faction_id.clone();
     let spec = technology_spec(ui_state.selected_technology_id);
     let faction_state = faction_technology_state(game, &faction_id);
@@ -416,81 +482,131 @@ fn technology_detail(ui: &mut egui::Ui, ui_state: &mut GameUiState, game: &GameS
     let is_active = faction_state.is_some_and(|state| state.active == Some(spec.id));
 
     ui.heading(egui::RichText::new(spec.name).color(war_gold()));
-    ui.label(format!(
-        "{}科技  ·  {} 回合  ·  立项 {} 金",
-        technology_branch_label(spec.branch),
-        spec.turns,
-        cost
+    ui.label(t.text_args(
+        "technology-detail-meta",
+        &args([
+            ("branch", technology_branch_label(t, spec.branch)),
+            ("turns", spec.turns.to_string()),
+            ("gold", cost.to_string()),
+        ]),
     ));
     if cost != spec.gold_cost {
         ui.colored_label(
             war_success(),
-            format!("度支尚书减免后原价 {} 金", spec.gold_cost),
+            t.text_args(
+                "technology-original-cost",
+                &args([("gold", spec.gold_cost.to_string())]),
+            ),
         );
     }
-    ui.label(format!("当前势力金钱: {total_gold}"));
-    ui.label(format!("研发进度: {progress}/{}", spec.turns));
+    ui.label(t.text_args(
+        "technology-current-gold",
+        &args([("gold", total_gold.to_string())]),
+    ));
+    ui.label(t.text_args(
+        "technology-progress",
+        &args([
+            ("progress", progress.to_string()),
+            ("turns", spec.turns.to_string()),
+        ]),
+    ));
     ui.separator();
 
     if spec.prerequisites.is_empty() {
-        ui.label("前置: 无");
+        ui.label(t.text("technology-prerequisite-none"));
     } else if missing.is_empty() {
         ui.colored_label(
             war_success(),
-            format!("前置: {}", prerequisite_names(spec).join("、")),
+            t.text_args(
+                "technology-prerequisites",
+                &args([("names", prerequisite_names(spec).join("、"))]),
+            ),
         );
     } else {
-        ui.colored_label(war_warning(), format!("缺少前置: {}", missing.join("、")));
+        ui.colored_label(
+            war_warning(),
+            t.text_args(
+                "technology-missing-prerequisites",
+                &args([("names", missing.join("、"))]),
+            ),
+        );
     }
     ui.add_space(6.0);
-    ui.label("效果");
+    ui.label(t.text("technology-effect"));
     ui.colored_label(war_text_muted(), spec.effect);
     ui.separator();
 
     if is_completed {
-        ui.add_enabled(false, egui::Button::new("已完成"));
+        ui.add_enabled(false, egui::Button::new(t.text("technology-completed")));
         return;
     }
     if is_active {
         ui.add_enabled(
             false,
-            egui::Button::new(format!("研发中 {progress}/{}", spec.turns)),
+            egui::Button::new(t.text_args(
+                "technology-active-progress",
+                &args([
+                    ("progress", progress.to_string()),
+                    ("turns", spec.turns.to_string()),
+                ]),
+            )),
         );
         return;
     }
     if !missing.is_empty() {
-        ui.add_enabled(false, egui::Button::new("前置未完成"));
+        ui.add_enabled(
+            false,
+            egui::Button::new(t.text("technology-prerequisite-locked")),
+        );
         return;
     }
     if is_funded {
-        if ui.button("继续研发").clicked() {
-            start_player_research(ui_state, spec.id);
+        if ui.button(t.text("technology-continue-research")).clicked() {
+            start_player_research(ui_state, spec.id, t);
         }
         return;
     }
     if total_gold < cost {
-        ui.colored_label(war_danger(), format!("还缺 {} 金", cost - total_gold));
-        ui.add_enabled(false, egui::Button::new("金钱不足，无法立项"));
+        ui.colored_label(
+            war_danger(),
+            t.text_args(
+                "technology-gold-shortfall",
+                &args([("gold", (cost - total_gold).to_string())]),
+            ),
+        );
+        ui.add_enabled(
+            false,
+            egui::Button::new(t.text("technology-insufficient-gold")),
+        );
         return;
     }
-    if ui.button("立项研发").clicked() {
-        start_player_research(ui_state, spec.id);
+    if ui.button(t.text("technology-start-research")).clicked() {
+        start_player_research(ui_state, spec.id, t);
     }
 }
 
-fn start_player_research(ui_state: &mut GameUiState, technology_id: TechnologyId) {
+fn start_player_research(ui_state: &mut GameUiState, technology_id: TechnologyId, t: &Translator) {
     let Some(game) = ui_state.game.as_mut() else {
-        ui_state.message = "尚未开始游戏".to_string();
+        ui_state.message = t.text("message-game-not-started");
         return;
     };
     let faction_id = game.player_faction_id.clone();
     let spec = technology_spec(technology_id);
     match start_research(game, &faction_id, technology_id) {
         Ok(outcome) if outcome.resumed => {
-            ui_state.message = format!("继续研发 {}", spec.name);
+            ui_state.message = t.text_args(
+                "message-research-resumed",
+                &args([("name", spec.name.to_string())]),
+            );
         }
         Ok(outcome) => {
-            ui_state.message = format!("已立项研发 {}，消耗 {} 金", spec.name, outcome.cost_paid);
+            ui_state.message = t.text_args(
+                "message-research-started",
+                &args([
+                    ("name", spec.name.to_string()),
+                    ("gold", outcome.cost_paid.to_string()),
+                ]),
+            );
         }
         Err(error) => ui_state.message = error.to_string(),
     }
@@ -506,9 +622,9 @@ enum TechnologyNodeStatus {
     Locked,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct TechnologyNodeVisuals {
-    label: &'static str,
+    label: String,
     fill: egui::Color32,
     stroke: egui::Color32,
     icon_color: egui::Color32,
@@ -542,10 +658,13 @@ fn technology_node_status(
     }
 }
 
-fn technology_status_visuals(status: TechnologyNodeStatus) -> TechnologyNodeVisuals {
+fn technology_status_visuals(
+    status: TechnologyNodeStatus,
+    t: &Translator,
+) -> TechnologyNodeVisuals {
     match status {
         TechnologyNodeStatus::Completed => TechnologyNodeVisuals {
-            label: "已完成",
+            label: t.text("technology-completed"),
             fill: egui::Color32::from_rgba_unmultiplied(39, 86, 51, 220),
             stroke: war_success(),
             icon_color: egui::Color32::from_rgb(226, 244, 218),
@@ -553,7 +672,7 @@ fn technology_status_visuals(status: TechnologyNodeStatus) -> TechnologyNodeVisu
             badge_text: egui::Color32::from_rgb(226, 244, 218),
         },
         TechnologyNodeStatus::Active => TechnologyNodeVisuals {
-            label: "研发中",
+            label: t.text("technology-active"),
             fill: egui::Color32::from_rgba_unmultiplied(122, 59, 39, 230),
             stroke: war_gold(),
             icon_color: egui::Color32::from_rgb(255, 235, 180),
@@ -561,7 +680,7 @@ fn technology_status_visuals(status: TechnologyNodeStatus) -> TechnologyNodeVisu
             badge_text: egui::Color32::from_rgb(255, 236, 190),
         },
         TechnologyNodeStatus::Funded => TechnologyNodeVisuals {
-            label: "已付款",
+            label: t.text("technology-funded"),
             fill: egui::Color32::from_rgba_unmultiplied(72, 65, 39, 220),
             stroke: war_warning(),
             icon_color: egui::Color32::from_rgb(245, 216, 145),
@@ -569,7 +688,7 @@ fn technology_status_visuals(status: TechnologyNodeStatus) -> TechnologyNodeVisu
             badge_text: egui::Color32::from_rgb(246, 222, 160),
         },
         TechnologyNodeStatus::Available => TechnologyNodeVisuals {
-            label: "可立项",
+            label: t.text("technology-available"),
             fill: egui::Color32::from_rgba_unmultiplied(54, 48, 34, 220),
             stroke: war_gold(),
             icon_color: war_gold(),
@@ -577,7 +696,7 @@ fn technology_status_visuals(status: TechnologyNodeStatus) -> TechnologyNodeVisu
             badge_text: egui::Color32::from_rgb(247, 224, 173),
         },
         TechnologyNodeStatus::Unaffordable => TechnologyNodeVisuals {
-            label: "金不足",
+            label: t.text("technology-unaffordable"),
             fill: egui::Color32::from_rgba_unmultiplied(44, 39, 32, 190),
             stroke: war_warning(),
             icon_color: war_warning(),
@@ -585,7 +704,7 @@ fn technology_status_visuals(status: TechnologyNodeStatus) -> TechnologyNodeVisu
             badge_text: egui::Color32::from_rgb(236, 196, 122),
         },
         TechnologyNodeStatus::Locked => TechnologyNodeVisuals {
-            label: "未解锁",
+            label: t.text("technology-locked"),
             fill: egui::Color32::from_rgba_unmultiplied(34, 31, 27, 170),
             stroke: egui::Color32::from_rgba_unmultiplied(118, 105, 81, 150),
             icon_color: war_text_muted(),
@@ -658,7 +777,12 @@ fn prerequisite_names(spec: &TechnologySpec) -> Vec<&'static str> {
         .collect()
 }
 
-pub(super) fn city_list_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
+pub(super) fn city_list_hud(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    screen: egui::Rect,
+) {
     if !ui_state.city_list_open {
         return;
     }
@@ -673,12 +797,17 @@ pub(super) fn city_list_hud(ctx: &egui::Context, ui_state: &mut GameUiState, scr
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(285.0);
                 ui.set_max_height(max_height);
-                city_list(ui, ui_state);
+                city_list(ui, ui_state, t);
             });
         });
 }
 
-pub(super) fn save_hud(ctx: &egui::Context, ui_state: &mut GameUiState, _screen: egui::Rect) {
+pub(super) fn save_hud(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    _screen: egui::Rect,
+) {
     if !ui_state.save_panel_open {
         return;
     }
@@ -692,19 +821,24 @@ pub(super) fn save_hud(ctx: &egui::Context, ui_state: &mut GameUiState, _screen:
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(330.0);
                 ui.horizontal(|ui| {
-                    ui.heading(egui::RichText::new("存档").color(war_gold()));
+                    ui.heading(egui::RichText::new(t.text("save-title")).color(war_gold()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("收起").clicked() {
+                        if ui.button(t.text("common-collapse")).clicked() {
                             ui_state.save_panel_open = false;
                         }
                     });
                 });
-                save_controls(ui, ui_state);
+                save_controls(ui, ui_state, t);
             });
         });
 }
 
-pub(super) fn city_drawer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
+pub(super) fn city_drawer_hud(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    screen: egui::Rect,
+) {
     if !ui_state.city_drawer_open {
         return;
     }
@@ -718,9 +852,9 @@ pub(super) fn city_drawer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, s
                 ui.set_width(modal_width);
                 ui.set_min_height(modal_height);
                 ui.horizontal(|ui| {
-                    ui.heading(egui::RichText::new("中军帐").color(war_gold()));
+                    ui.heading(egui::RichText::new(t.text("command-tent-title")).color(war_gold()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("收起").clicked() {
+                        if ui.button(t.text("common-collapse")).clicked() {
                             ui_state.city_drawer_open = false;
                         }
                     });
@@ -730,14 +864,19 @@ pub(super) fn city_drawer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, s
                     egui::vec2(modal_width, modal_height - 54.0),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
-                        selected_city_panel(ui, ui_state);
+                        selected_city_panel(ui, ui_state, t);
                     },
                 );
             });
         });
 }
 
-pub(super) fn report_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
+pub(super) fn report_hud(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    screen: egui::Rect,
+) {
     let width = screen.width() * 0.5;
     egui::Area::new(egui::Id::new("hud_report_panel"))
         .order(egui::Order::Foreground)
@@ -749,13 +888,13 @@ pub(super) fn report_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(width);
                 ui.horizontal(|ui| {
-                    ui.heading(egui::RichText::new("回合报告").color(war_gold()));
+                    ui.heading(egui::RichText::new(t.text("report-title")).color(war_gold()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
                             .button(if ui_state.reports_open {
-                                "收起"
+                                t.text("common-collapse")
                             } else {
-                                "展开"
+                                t.text("common-expand")
                             })
                             .clicked()
                         {
@@ -765,7 +904,7 @@ pub(super) fn report_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen
                 });
                 if ui_state.reports_open {
                     ui.separator();
-                    report_panel(ui, ui_state, screen);
+                    report_panel(ui, ui_state, t, screen);
                 } else if !ui_state.message.is_empty() {
                     ui.label(&ui_state.message);
                 }
@@ -776,6 +915,7 @@ pub(super) fn report_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen
 pub(super) fn officer_browser_hud(
     ctx: &egui::Context,
     ui_state: &mut GameUiState,
+    t: &Translator,
     screen: egui::Rect,
 ) {
     if !ui_state.officer_browser_open {
@@ -791,7 +931,7 @@ pub(super) fn officer_browser_hud(
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(width);
                 ui.set_min_height(height);
-                if modal_title_bar(ui, "武将") {
+                if modal_title_bar(ui, t, &t.text("officer-browser-title")) {
                     ui_state.officer_browser_open = false;
                 }
                 ui.separator();
@@ -801,9 +941,10 @@ pub(super) fn officer_browser_hud(
                         game,
                         &mut ui_state.officer_browser_filters,
                         "hud_officer_browser_filters",
+                        t,
                     );
                 } else {
-                    ui.label("当前没有剧本局面。");
+                    ui.label(t.text("message-no-game-state"));
                 }
                 ui.separator();
                 if let Some(game) = &ui_state.game {
@@ -818,13 +959,19 @@ pub(super) fn officer_browser_hud(
                             editable: false,
                             retainer_faction_id: None,
                         },
+                        t,
                     );
                 }
             });
         });
 }
 
-pub(super) fn retainer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, screen: egui::Rect) {
+pub(super) fn retainer_hud(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    screen: egui::Rect,
+) {
     if !ui_state.retainers_open {
         return;
     }
@@ -838,7 +985,7 @@ pub(super) fn retainer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, scre
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(width);
                 ui.set_min_height(height);
-                if modal_title_bar(ui, "幕僚") {
+                if modal_title_bar(ui, t, &t.text("retainer-title")) {
                     ui_state.retainers_open = false;
                 }
                 ui.separator();
@@ -848,9 +995,10 @@ pub(super) fn retainer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, scre
                         game,
                         &mut ui_state.retainer_filters,
                         "hud_retainer_filters",
+                        t,
                     );
                 } else {
-                    ui.label("当前没有剧本局面。");
+                    ui.label(t.text("message-no-game-state"));
                 }
                 ui.separator();
                 let Some(game) = ui_state.game.as_ref() else {
@@ -868,6 +1016,7 @@ pub(super) fn retainer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, scre
                         editable: false,
                         retainer_faction_id: Some(player_faction_id.as_str()),
                     },
+                    t,
                 );
 
                 if response.appoint_officer_id.is_some() || response.dismiss_officer_id.is_some() {
@@ -892,8 +1041,13 @@ pub(super) fn retainer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, scre
                                 let office_name = official_post_spec(&office_id)
                                     .map(|spec| spec.name)
                                     .unwrap_or(office_id.as_str());
-                                ui_state.message = format!(
-                                    "{officer_name} 被任命为 {office_name}，忠诚 {loyalty}"
+                                ui_state.message = t.text_args(
+                                    "message-officer-appointed",
+                                    &args([
+                                        ("officer", officer_name),
+                                        ("office", office_name.to_string()),
+                                        ("loyalty", loyalty.to_string()),
+                                    ]),
                                 );
                             }
                             Err(error) => ui_state.message = error.to_string(),
@@ -906,7 +1060,13 @@ pub(super) fn retainer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, scre
                                     .get(&officer_id)
                                     .map(|officer| (officer.name.clone(), officer.loyalty))
                                     .unwrap_or((officer_id, 0));
-                                ui_state.message = format!("{officer_name} 已免官，忠诚 {loyalty}");
+                                ui_state.message = t.text_args(
+                                    "message-officer-dismissed",
+                                    &args([
+                                        ("officer", officer_name),
+                                        ("loyalty", loyalty.to_string()),
+                                    ]),
+                                );
                             }
                             Err(error) => ui_state.message = error.to_string(),
                         }
@@ -916,36 +1076,39 @@ pub(super) fn retainer_hud(ctx: &egui::Context, ui_state: &mut GameUiState, scre
         });
 }
 
-pub(super) fn selected_city_summary(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
+pub(super) fn selected_city_summary(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
     let summary = ui_state.game.as_ref().and_then(|game| {
         let city = game.cities.get(ui_state.selected_city_id.as_deref()?)?;
         let faction_name = game
             .factions
             .get(&city.faction_id)
             .map(|faction| faction.name.clone())
-            .unwrap_or_else(|| "未知".to_string());
+            .unwrap_or_else(|| t.text("unknown"));
         Some((city.id.clone(), city.clone(), faction_name))
     });
 
     let Some((city_id, city, faction_name)) = summary else {
-        ui.label("未选择城池");
+        ui.label(t.text("selected-city-none"));
         return;
     };
 
-    city_summary_intel(ui, &city, &faction_name);
+    city_summary_intel(ui, &city, &faction_name, t);
     ui.add_space(8.0);
-    if ui.button("打开中军帐").clicked() {
+    if ui.button(t.text("open-command-tent")).clicked() {
         open_city(ui_state, city_id);
     }
 }
 
-pub(super) fn map_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
+pub(super) fn map_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
     ui.horizontal(|ui| {
-        ui.heading(egui::RichText::new("地图").color(war_gold()));
+        ui.heading(egui::RichText::new(t.text("map-title")).color(war_gold()));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.add_enabled(
                 ui_state.map_boundaries.is_some(),
-                egui::Checkbox::new(&mut ui_state.map_boundaries_enabled, "州郡边界"),
+                egui::Checkbox::new(
+                    &mut ui_state.map_boundaries_enabled,
+                    t.text("map-boundaries"),
+                ),
             );
         });
     });
@@ -961,16 +1124,16 @@ pub(super) fn map_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
         if ui.button("+").clicked() {
             zoom_map(ui_state, MAP_ZOOM_STEP, None, None);
         }
-        if ui.button("重置").clicked() {
+        if ui.button(t.text("common-reset")).clicked() {
             reset_map_view(ui_state);
         }
     });
     if ui_state.map_boundaries.is_none() {
-        ui.colored_label(war_text_muted(), "边界资产未加载");
+        ui.colored_label(war_text_muted(), t.text("map-boundary-asset-missing"));
     }
 }
 
-pub(super) fn city_list(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
+pub(super) fn city_list(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
     let Some(game) = &ui_state.game else {
         return;
     };
@@ -982,13 +1145,13 @@ pub(super) fn city_list(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
                 .factions
                 .get(&city.faction_id)
                 .map(|faction| faction.name.clone())
-                .unwrap_or_else(|| "未知".to_string());
+                .unwrap_or_else(|| t.text("unknown"));
             (city.id.clone(), city.name.clone(), faction_name)
         })
         .collect();
     rows.sort_by(|a, b| a.1.cmp(&b.1));
 
-    ui.heading("城池");
+    ui.heading(t.text("city-list-title"));
     egui::ScrollArea::vertical()
         .id_salt("city_list")
         .max_height(460.0)
@@ -1005,7 +1168,7 @@ pub(super) fn city_list(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
                     ui_state.selected_city_id = Some(city_id.clone());
                 }
                 response.context_menu(|ui| {
-                    if ui.button("打开中军帐").clicked() {
+                    if ui.button(t.text("open-command-tent")).clicked() {
                         open_city(ui_state, city_id.clone());
                         ui.close();
                     }
@@ -1019,20 +1182,22 @@ pub(super) fn officer_browser_filters(
     game: &GameState,
     filters: &mut OfficerBrowserFilters,
     id_salt: &'static str,
+    t: &Translator,
 ) {
     const FILTER_HEIGHT: f32 = 30.0;
     ui.horizontal(|ui| {
         ui.spacing_mut().interact_size.y = FILTER_HEIGHT;
         ui.spacing_mut().item_spacing.x = 12.0;
-        ui.label("搜索");
+        ui.label(t.text("officer-filter-search"));
         ui.add_sized(
             [260.0, FILTER_HEIGHT],
-            egui::TextEdit::singleline(&mut filters.search).hint_text("姓名 / ID / 字 / 籍贯"),
+            egui::TextEdit::singleline(&mut filters.search)
+                .hint_text(t.text("officer-filter-search-hint")),
         );
 
         egui::ComboBox::from_id_salt((id_salt, "gender"))
             .width(160.0)
-            .selected_text(officer_gender_filter_label(filters.gender))
+            .selected_text(officer_gender_filter_label(filters.gender, t))
             .show_ui(ui, |ui| {
                 for filter in [
                     OfficerGenderFilter::All,
@@ -1042,23 +1207,26 @@ pub(super) fn officer_browser_filters(
                     ui.selectable_value(
                         &mut filters.gender,
                         filter,
-                        officer_gender_filter_label(filter),
+                        officer_gender_filter_label(filter, t),
                     );
                 }
             });
 
+        let selected_faction_text = filters
+            .faction_id
+            .as_deref()
+            .and_then(|id| game.factions.get(id))
+            .map(|faction| faction.name.clone())
+            .unwrap_or_else(|| t.text("officer-filter-all-factions"));
         egui::ComboBox::from_id_salt((id_salt, "faction"))
             .width(170.0)
-            .selected_text(
-                filters
-                    .faction_id
-                    .as_deref()
-                    .and_then(|id| game.factions.get(id))
-                    .map(|faction| faction.name.as_str())
-                    .unwrap_or("全部势力"),
-            )
+            .selected_text(selected_faction_text)
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut filters.faction_id, None, "全部势力");
+                ui.selectable_value(
+                    &mut filters.faction_id,
+                    None,
+                    t.text("officer-filter-all-factions"),
+                );
                 for faction in game.factions.values() {
                     ui.selectable_value(
                         &mut filters.faction_id,
@@ -1070,7 +1238,7 @@ pub(super) fn officer_browser_filters(
 
         egui::ComboBox::from_id_salt((id_salt, "status"))
             .width(170.0)
-            .selected_text(officer_status_filter_label(filters.status))
+            .selected_text(officer_status_filter_label(filters.status, t))
             .show_ui(ui, |ui| {
                 for filter in [
                     OfficerStatusFilter::All,
@@ -1082,23 +1250,26 @@ pub(super) fn officer_browser_filters(
                     ui.selectable_value(
                         &mut filters.status,
                         filter,
-                        officer_status_filter_label(filter),
+                        officer_status_filter_label(filter, t),
                     );
                 }
             });
 
+        let selected_city_text = filters
+            .city_id
+            .as_deref()
+            .and_then(|id| game.cities.get(id))
+            .map(|city| city.name.clone())
+            .unwrap_or_else(|| t.text("officer-filter-all-cities"));
         egui::ComboBox::from_id_salt((id_salt, "city"))
             .width(170.0)
-            .selected_text(
-                filters
-                    .city_id
-                    .as_deref()
-                    .and_then(|id| game.cities.get(id))
-                    .map(|city| city.name.as_str())
-                    .unwrap_or("全部城池"),
-            )
+            .selected_text(selected_city_text)
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut filters.city_id, None, "全部城池");
+                ui.selectable_value(
+                    &mut filters.city_id,
+                    None,
+                    t.text("officer-filter-all-cities"),
+                );
                 let mut cities: Vec<_> = game.cities.values().collect();
                 cities.sort_by(|a, b| a.name.cmp(&b.name));
                 for city in cities {
@@ -1107,7 +1278,10 @@ pub(super) fn officer_browser_filters(
             });
 
         if ui
-            .add_sized([86.0, FILTER_HEIGHT], egui::Button::new("重置"))
+            .add_sized(
+                [86.0, FILTER_HEIGHT],
+                egui::Button::new(t.text("common-reset")),
+            )
             .clicked()
         {
             filters.reset();
@@ -1120,13 +1294,17 @@ pub(super) fn officer_browser_table(
     game: &GameState,
     filters: &OfficerBrowserFilters,
     options: OfficerBrowserTableOptions<'_>,
+    t: &Translator,
 ) -> OfficerBrowserTableResponse {
     let rows = options.retainer_faction_id.map_or_else(
-        || filtered_officer_rows(filters, game),
-        |faction_id| retainer_officer_rows(filters, game, faction_id),
+        || filtered_officer_rows(filters, game, t),
+        |faction_id| retainer_officer_rows(filters, game, faction_id, t),
     );
     let mut table_response = OfficerBrowserTableResponse::default();
-    ui.label(format!("共 {} 名武将", rows.len()));
+    ui.label(t.text_args(
+        "officer-browser-count",
+        &args([("count", rows.len().to_string())]),
+    ));
     egui::ScrollArea::vertical()
         .id_salt(options.id_salt)
         .max_height(options.max_height.max(260.0))
@@ -1138,19 +1316,19 @@ pub(super) fn officer_browser_table(
                 .min_col_width(42.0)
                 .spacing(egui::vec2(12.0, 6.0))
                 .show(ui, |ui| {
-                    ui.strong("姓名");
-                    ui.strong("性别");
-                    ui.strong("势力");
-                    ui.strong("城池");
-                    ui.strong("官职");
-                    ui.strong("俸禄");
-                    ui.strong("状态");
-                    ui.strong("忠诚");
-                    ui.strong("统");
-                    ui.strong("武");
-                    ui.strong("智");
-                    ui.strong("政");
-                    ui.strong("魅");
+                    ui.strong(t.text("officer-column-name"));
+                    ui.strong(t.text("officer-column-gender"));
+                    ui.strong(t.text("officer-column-faction"));
+                    ui.strong(t.text("officer-column-city"));
+                    ui.strong(t.text("officer-column-office"));
+                    ui.strong(t.text("officer-column-salary"));
+                    ui.strong(t.text("officer-column-status"));
+                    ui.strong(t.text("officer-column-loyalty"));
+                    ui.strong(t.text("stat-leadership"));
+                    ui.strong(t.text("stat-strength"));
+                    ui.strong(t.text("stat-intelligence"));
+                    ui.strong(t.text("stat-politics"));
+                    ui.strong(t.text("stat-charm"));
                     ui.end_row();
 
                     for row in rows {
@@ -1161,14 +1339,15 @@ pub(super) fn officer_browser_table(
                             table_response: &mut table_response,
                             editable: options.editable,
                             retainer_faction_id: options.retainer_faction_id,
+                            t,
                         };
                         officer_row_cell(&mut cell_context, &row, selected, &row.name);
-                        officer_row_cell(&mut cell_context, &row, selected, row.gender);
+                        officer_row_cell(&mut cell_context, &row, selected, &row.gender);
                         officer_row_cell(&mut cell_context, &row, selected, &row.faction_name);
                         officer_row_cell(&mut cell_context, &row, selected, &row.city_name);
                         officer_row_cell(&mut cell_context, &row, selected, &row.office_name);
                         officer_row_cell(&mut cell_context, &row, selected, row.salary.to_string());
-                        officer_row_cell(&mut cell_context, &row, selected, row.status);
+                        officer_row_cell(&mut cell_context, &row, selected, &row.status);
                         officer_row_cell(
                             &mut cell_context,
                             &row,
@@ -1221,12 +1400,12 @@ pub(super) struct OfficerBrowserRow {
     id: OfficerId,
     name: String,
     faction_id: FactionId,
-    gender: &'static str,
+    gender: String,
     faction_name: String,
     city_name: String,
     office_name: String,
     salary: i32,
-    status: &'static str,
+    status: String,
     loyalty: u8,
     leadership: u8,
     strength: u8,
@@ -1256,13 +1435,13 @@ fn officer_row_cell(
     }
     if context.editable || context.retainer_faction_id.is_some() {
         response.context_menu(|ui| {
-            if context.editable && ui.button("编辑").clicked() {
+            if context.editable && ui.button(context.t.text("officer-action-edit")).clicked() {
                 context.table_response.selected_officer_id = Some(row.id.clone());
                 context.table_response.edit_officer_id = Some(row.id.clone());
                 ui.close();
             }
             if context.retainer_faction_id.is_some() {
-                ui.menu_button("授官", |ui| {
+                ui.menu_button(context.t.text("officer-action-appoint-office"), |ui| {
                     for spec in official_post_specs() {
                         let occupant = context.game.officers.values().find(|officer| {
                             officer.faction_id == row.faction_id
@@ -1270,17 +1449,31 @@ fn officer_row_cell(
                         });
                         let label = if let Some(occupant) = occupant {
                             if occupant.id == row.id {
-                                format!("{} ({}, 当前)", spec.name, official_rank_label(spec.rank))
+                                context.t.text_args(
+                                    "official-post-current",
+                                    &args([
+                                        ("name", spec.name.to_string()),
+                                        ("rank", official_rank_label(spec.rank).to_string()),
+                                    ]),
+                                )
                             } else {
-                                format!(
-                                    "{} ({}, 现任: {})",
-                                    spec.name,
-                                    official_rank_label(spec.rank),
-                                    occupant.name
+                                context.t.text_args(
+                                    "official-post-occupied",
+                                    &args([
+                                        ("name", spec.name.to_string()),
+                                        ("rank", official_rank_label(spec.rank).to_string()),
+                                        ("occupant", occupant.name.clone()),
+                                    ]),
                                 )
                             }
                         } else {
-                            format!("{} ({})", spec.name, official_rank_label(spec.rank))
+                            context.t.text_args(
+                                "official-post-empty",
+                                &args([
+                                    ("name", spec.name.to_string()),
+                                    ("rank", official_rank_label(spec.rank).to_string()),
+                                ]),
+                            )
                         };
                         if ui.button(label).clicked() {
                             context.table_response.selected_officer_id = Some(row.id.clone());
@@ -1290,7 +1483,11 @@ fn officer_row_cell(
                         }
                     }
                 });
-                if row.office_name != "无" && ui.button("免官").clicked() {
+                if row.office_name != context.t.text("none")
+                    && ui
+                        .button(context.t.text("officer-action-dismiss-office"))
+                        .clicked()
+                {
                     context.table_response.selected_officer_id = Some(row.id.clone());
                     context.table_response.dismiss_officer_id = Some(row.id.clone());
                     ui.close();
@@ -1306,11 +1503,13 @@ struct OfficerRowCellContext<'ui, 'data> {
     table_response: &'ui mut OfficerBrowserTableResponse,
     editable: bool,
     retainer_faction_id: Option<&'data str>,
+    t: &'data Translator,
 }
 
 pub(super) fn filtered_officer_rows(
     filters: &OfficerBrowserFilters,
     game: &GameState,
+    t: &Translator,
 ) -> Vec<OfficerBrowserRow> {
     let search = filters.search.trim().to_lowercase();
     let mut officers: Vec<_> = game.officers.values().collect();
@@ -1319,24 +1518,24 @@ pub(super) fn filtered_officer_rows(
             .factions
             .get(&a.faction_id)
             .map(|faction| faction.name.as_str())
-            .unwrap_or("未知");
+            .unwrap_or("");
         let b_faction = game
             .factions
             .get(&b.faction_id)
             .map(|faction| faction.name.as_str())
-            .unwrap_or("未知");
+            .unwrap_or("");
         let a_city = a
             .city_id
             .as_deref()
             .and_then(|city_id| game.cities.get(city_id))
             .map(|city| city.name.as_str())
-            .unwrap_or("未配置");
+            .unwrap_or("");
         let b_city = b
             .city_id
             .as_deref()
             .and_then(|city_id| game.cities.get(city_id))
             .map(|city| city.name.as_str())
-            .unwrap_or("未配置");
+            .unwrap_or("");
         (a_faction, a_city, a.name.as_str(), a.id.as_str()).cmp(&(
             b_faction,
             b_city,
@@ -1353,29 +1552,29 @@ pub(super) fn filtered_officer_rows(
                 .factions
                 .get(&officer.faction_id)
                 .map(|faction| faction.name.clone())
-                .unwrap_or_else(|| "未知".to_string());
+                .unwrap_or_else(|| t.text("unknown"));
             let city_name = officer
                 .city_id
                 .as_deref()
                 .and_then(|city_id| game.cities.get(city_id))
                 .map(|city| city.name.clone())
-                .unwrap_or_else(|| "未配置".to_string());
+                .unwrap_or_else(|| t.text("officer-city-unassigned"));
             let office_name = officer
                 .office_id
                 .as_deref()
                 .and_then(official_post_spec)
                 .map(|spec| spec.name.to_string())
-                .unwrap_or_else(|| "无".to_string());
+                .unwrap_or_else(|| t.text("none"));
             OfficerBrowserRow {
                 id: officer.id.clone(),
                 name: officer.name.clone(),
                 faction_id: officer.faction_id.clone(),
-                gender: officer_gender_label(&officer.gender),
+                gender: officer_gender_label(t, &officer.gender),
                 faction_name,
                 city_name,
                 office_name,
                 salary: officer_monthly_salary(officer),
-                status: officer_status_label(&officer.status),
+                status: officer_status_label(&officer.status, t),
                 loyalty: officer.loyalty,
                 leadership: officer.stats.leadership,
                 strength: officer.stats.strength,
@@ -1391,11 +1590,12 @@ pub(super) fn retainer_officer_rows(
     filters: &OfficerBrowserFilters,
     game: &GameState,
     faction_id: &str,
+    t: &Translator,
 ) -> Vec<OfficerBrowserRow> {
     let mut locked_filters = filters.clone();
     locked_filters.faction_id = Some(faction_id.to_string());
     locked_filters.status = OfficerStatusFilter::Active;
-    filtered_officer_rows(&locked_filters, game)
+    filtered_officer_rows(&locked_filters, game, t)
 }
 
 fn officer_matches_filters(
@@ -1480,36 +1680,36 @@ fn officer_status_matches(status: &OfficerStatus, filter: OfficerStatusFilter) -
     }
 }
 
-fn officer_gender_filter_label(filter: OfficerGenderFilter) -> &'static str {
+fn officer_gender_filter_label(filter: OfficerGenderFilter, t: &Translator) -> String {
     match filter {
-        OfficerGenderFilter::All => "全部性别",
-        OfficerGenderFilter::Male => "男",
-        OfficerGenderFilter::Female => "女",
+        OfficerGenderFilter::All => t.text("officer-filter-all-genders"),
+        OfficerGenderFilter::Male => t.text("gender-male"),
+        OfficerGenderFilter::Female => t.text("gender-female"),
     }
 }
 
-fn officer_status_filter_label(filter: OfficerStatusFilter) -> &'static str {
+fn officer_status_filter_label(filter: OfficerStatusFilter, t: &Translator) -> String {
     match filter {
-        OfficerStatusFilter::All => "全部状态",
-        OfficerStatusFilter::Active => "在任",
-        OfficerStatusFilter::Wild => "在野",
-        OfficerStatusFilter::Unavailable => "不可用",
-        OfficerStatusFilter::Dead => "死亡",
+        OfficerStatusFilter::All => t.text("officer-filter-all-statuses"),
+        OfficerStatusFilter::Active => t.text("officer-status-active"),
+        OfficerStatusFilter::Wild => t.text("officer-status-wild"),
+        OfficerStatusFilter::Unavailable => t.text("officer-status-unavailable"),
+        OfficerStatusFilter::Dead => t.text("officer-status-dead"),
     }
 }
 
-fn officer_status_label(status: &OfficerStatus) -> &'static str {
+fn officer_status_label(status: &OfficerStatus, t: &Translator) -> String {
     match status {
-        OfficerStatus::Active => "在任",
-        OfficerStatus::Wild => "在野",
-        OfficerStatus::Unavailable => "不可用",
-        OfficerStatus::Dead => "死亡",
+        OfficerStatus::Active => t.text("officer-status-active"),
+        OfficerStatus::Wild => t.text("officer-status-wild"),
+        OfficerStatus::Unavailable => t.text("officer-status-unavailable"),
+        OfficerStatus::Dead => t.text("officer-status-dead"),
     }
 }
 
-pub(super) fn save_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
+pub(super) fn save_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
     ui.horizontal(|ui| {
-        ui.label("槽位");
+        ui.label(t.text("save-slot"));
         egui::ComboBox::from_id_salt("save_slot_combo")
             .selected_text(&ui_state.save_slot_id)
             .show_ui(ui, |ui| {
@@ -1519,11 +1719,11 @@ pub(super) fn save_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
             });
     });
     ui.horizontal(|ui| {
-        ui.label("名称");
+        ui.label(t.text("save-name"));
         ui.text_edit_singleline(&mut ui_state.save_display_name);
     });
     ui.horizontal(|ui| {
-        if ui.button("保存").clicked()
+        if ui.button(t.text("common-save")).clicked()
             && let Some(game) = &ui_state.game
         {
             match ui_state.save_manager.save_slot(
@@ -1533,21 +1733,25 @@ pub(super) fn save_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
             ) {
                 Ok(meta) => {
                     refresh_saves(ui_state);
-                    ui_state.message = format!("保存到 {}", meta.display_name);
+                    ui_state.message =
+                        t.text_args("message-save-saved", &args([("name", meta.display_name)]));
                 }
                 Err(error) => ui_state.message = error.to_string(),
             }
         }
-        if ui.button("读取当前槽").clicked() {
+        if ui.button(t.text("save-load-current-slot")).clicked() {
             match ui_state.save_manager.load_slot(&ui_state.save_slot_id) {
                 Ok(game) => {
-                    enter_game(ui_state, game, "读取当前槽位".to_string());
+                    enter_game(ui_state, game, t.text("message-save-loaded-current"));
                 }
                 Err(error) => {
                     let slot_id = ui_state.save_slot_id.clone();
                     let _ = ui_state.save_manager.delete_slot(&slot_id);
                     refresh_saves(ui_state);
-                    ui_state.message = format!("存档已失效，已丢弃: {error}");
+                    ui_state.message = t.text_args(
+                        "message-save-invalid-discarded",
+                        &args([("error", error.to_string())]),
+                    );
                 }
             }
         }
@@ -1557,7 +1761,12 @@ pub(super) fn save_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState) {
     }
 }
 
-pub(super) fn report_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, screen: egui::Rect) {
+pub(super) fn report_panel(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    screen: egui::Rect,
+) {
     let Some(game) = &ui_state.game else {
         return;
     };
@@ -1577,12 +1786,16 @@ pub(super) fn report_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, screen
                 ui.separator();
             }
             if game.reports.is_empty() {
-                ui.label("暂无报告");
+                ui.label(t.text("report-empty"));
             }
             for report in game.reports.iter().skip(visible_start) {
-                ui.label(format!(
-                    "{}年{}月 第{}回合",
-                    report.year, report.month, report.turn
+                ui.label(t.text_args(
+                    "report-turn-heading",
+                    &args([
+                        ("year", report.year.to_string()),
+                        ("month", report.month.to_string()),
+                        ("turn", report.turn.to_string()),
+                    ]),
                 ));
                 for entry in &report.entries {
                     match entry.severity {
@@ -1603,6 +1816,7 @@ pub(super) fn report_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, screen
 mod tests {
     use super::*;
     use crate::core::display_settings::{GameSettings, LoadedGameSettings};
+    use crate::core::i18n::{Translator, UiLanguage};
     use crate::core::state::{GameUiState, OfficerGenderFilter, OfficerStatusFilter};
     use crate::game::{OfficerGender, OfficerStatus, ScenarioData};
 
@@ -1623,6 +1837,10 @@ mod tests {
         state
     }
 
+    fn zh() -> Translator {
+        Translator::new(UiLanguage::SimplifiedChinese)
+    }
+
     #[test]
     fn officer_browser_search_matches_name_id_faction_and_city() {
         let mut state = ui_state_with_game();
@@ -1630,24 +1848,24 @@ mod tests {
 
         state.officer_browser_filters.search = "关羽".to_string();
         assert!(
-            filtered_officer_rows(&state.officer_browser_filters, game)
+            filtered_officer_rows(&state.officer_browser_filters, game, &zh())
                 .iter()
                 .any(|row| row.name == "关羽")
         );
 
         state.officer_browser_filters.search = "guan_yu".to_string();
         assert!(
-            filtered_officer_rows(&state.officer_browser_filters, game)
+            filtered_officer_rows(&state.officer_browser_filters, game, &zh())
                 .iter()
                 .any(|row| row.id == "guan_yu" && row.name == "关羽")
         );
 
         state.officer_browser_filters.search = "刘备军".to_string();
-        assert!(!filtered_officer_rows(&state.officer_browser_filters, game).is_empty());
+        assert!(!filtered_officer_rows(&state.officer_browser_filters, game, &zh()).is_empty());
 
         state.officer_browser_filters.search = "平原".to_string();
         assert!(
-            filtered_officer_rows(&state.officer_browser_filters, game)
+            filtered_officer_rows(&state.officer_browser_filters, game, &zh())
                 .iter()
                 .all(|row| row.city_name == "平原")
         );
@@ -1667,7 +1885,7 @@ mod tests {
         state.officer_browser_filters.city_id = Some("pingyuan".to_string());
 
         let game = state.game.as_ref().unwrap();
-        let rows = filtered_officer_rows(&state.officer_browser_filters, game);
+        let rows = filtered_officer_rows(&state.officer_browser_filters, game, &zh());
 
         assert!(!rows.is_empty());
         assert!(rows.iter().all(|row| {
@@ -1683,7 +1901,7 @@ mod tests {
         let state = ui_state_with_game();
         let game = state.game.as_ref().unwrap();
 
-        let rows = filtered_officer_rows(&state.officer_browser_filters, game);
+        let rows = filtered_officer_rows(&state.officer_browser_filters, game, &zh());
         let sorted_names = rows.windows(2).all(|pair| {
             (&pair[0].faction_name, &pair[0].city_name, &pair[0].name)
                 <= (&pair[1].faction_name, &pair[1].city_name, &pair[1].name)
@@ -1707,7 +1925,7 @@ mod tests {
         state.officer_browser_filters.search = "guan_yu".to_string();
 
         let game = state.game.as_ref().unwrap();
-        let rows = filtered_officer_rows(&state.officer_browser_filters, game);
+        let rows = filtered_officer_rows(&state.officer_browser_filters, game, &zh());
 
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].id, "guan_yu");
@@ -1729,7 +1947,7 @@ mod tests {
         state.officer_browser_filters.search = "万石".to_string();
 
         let game = state.game.as_ref().unwrap();
-        let rows = filtered_officer_rows(&state.officer_browser_filters, game);
+        let rows = filtered_officer_rows(&state.officer_browser_filters, game, &zh());
 
         assert!(rows.iter().any(|row| {
             row.id == "guan_yu"
@@ -1749,7 +1967,12 @@ mod tests {
         }
 
         let game = state.game.as_ref().unwrap();
-        let rows = retainer_officer_rows(&state.retainer_filters, game, &game.player_faction_id);
+        let rows = retainer_officer_rows(
+            &state.retainer_filters,
+            game,
+            &game.player_faction_id,
+            &zh(),
+        );
 
         assert!(!rows.is_empty());
         assert!(
