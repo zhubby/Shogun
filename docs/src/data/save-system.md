@@ -23,6 +23,19 @@ save_slot(slot_id, display_name, &game_state)
   └─ 更新 manifest.json
 ```
 
+## 自动存档
+
+自动存档使用同一套 JSON envelope 和 `SaveSlotMeta`，但固定写入 `autosave/latest.json`：
+
+```
+save_autosave(&game_state)
+  ├─ 创建 autosave 目录
+  ├─ 序列化 GameState 为 JSON
+  └─ 覆盖 autosave/latest.json
+```
+
+自动存档不会写入 `manifest.json`，因此 `list_slots()` 不会返回它，也不会占用普通槽位。读取存档界面通过 `autosave_meta()` 单独读取自动档元数据，并用 `load_autosave()` 加载最新自动档。
+
 ## 元数据
 
 每个存档槽位有一个 `SaveSlotMeta`：
@@ -65,4 +78,5 @@ pub const SAVE_VERSION: u32 = 5;
 | JSON 格式 | 人类可读、调试友好、serde 直接支持 |
 | 多槽位 | 策略游戏通常需要并行多局 |
 | manifest 分离 | 快速列表，不需要加载完整存档 |
+| 自动存档独立于 manifest | 自动档只保留最新一份，不挤占玩家手动槽位 |
 | Unix 时间戳 | 排序简单，无时区问题 |

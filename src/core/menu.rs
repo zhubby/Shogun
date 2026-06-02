@@ -863,6 +863,8 @@ pub(super) fn load_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &
             refresh_saves(ui_state);
         }
         ui.add_space(8.0);
+        autosave_load_card(ui, ui_state, t);
+        ui.add_space(8.0);
         let slots = ui_state.save_slots.clone();
         if slots.is_empty() {
             ui.label(t.text("load-game-empty"));
@@ -923,6 +925,56 @@ pub(super) fn load_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &
                     ui.add_space(6.0);
                 }
             });
+    });
+}
+
+fn autosave_load_card(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
+    war_sub_panel_frame().show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.label(
+            egui::RichText::new(t.text("load-game-autosave-title"))
+                .color(war_gold())
+                .strong(),
+        );
+        let Some(meta) = ui_state.autosave_meta.clone() else {
+            ui.label(
+                egui::RichText::new(t.text("load-game-autosave-empty")).color(war_text_muted()),
+            );
+            return;
+        };
+        ui.label(t.text_args(
+            "load-game-slot-line",
+            &args([
+                ("name", t.text("load-game-autosave-name")),
+                ("year", meta.year.to_string()),
+                ("month", meta.month.to_string()),
+                ("turn", meta.turn.to_string()),
+            ]),
+        ));
+        ui.horizontal(|ui| {
+            if ui.button(t.text("load-game-load")).clicked() {
+                match ui_state.save_manager.load_autosave() {
+                    Ok(game) => enter_game(ui_state, game, t.text("message-autosave-loaded")),
+                    Err(error) => {
+                        let _ = ui_state.save_manager.delete_autosave();
+                        refresh_saves(ui_state);
+                        ui_state.message = t.text_args(
+                            "message-save-invalid-discarded",
+                            &args([("error", error.to_string())]),
+                        );
+                    }
+                }
+            }
+            if ui.button(t.text("load-game-delete")).clicked() {
+                match ui_state.save_manager.delete_autosave() {
+                    Ok(()) => {
+                        refresh_saves(ui_state);
+                        ui_state.message = t.text("message-autosave-deleted");
+                    }
+                    Err(error) => ui_state.message = error.to_string(),
+                }
+            }
+        });
     });
 }
 

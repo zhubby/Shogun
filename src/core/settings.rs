@@ -21,6 +21,7 @@ pub(super) struct GameSettings {
     pub(super) general: GeneralSettings,
     pub(super) display: DisplaySettings,
     pub(super) audio: AudioSettings,
+    pub(super) gameplay: GameplaySettings,
     pub(super) shortcuts: ShortcutSettings,
     pub(super) ai: AiSettings,
 }
@@ -31,6 +32,7 @@ impl GameSettings {
             general: self.general,
             display: self.display.validate()?,
             audio: self.audio.normalized(),
+            gameplay: self.gameplay,
             shortcuts: self
                 .shortcuts
                 .validated()
@@ -44,6 +46,12 @@ impl GameSettings {
 #[serde(default)]
 pub(super) struct GeneralSettings {
     pub(super) ui_language: UiLanguage,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub(super) struct GameplaySettings {
+    pub(super) autosave_enabled: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -367,6 +375,7 @@ fn parse_game_settings(body: &str) -> Result<GameSettings, GameSettingsError> {
     let settings = if value.get("general").is_some()
         || value.get("display").is_some()
         || value.get("audio").is_some()
+        || value.get("gameplay").is_some()
         || value.get("shortcuts").is_some()
         || value.get("ai").is_some()
     {
@@ -378,6 +387,7 @@ fn parse_game_settings(body: &str) -> Result<GameSettings, GameSettingsError> {
             general: GeneralSettings::default(),
             display,
             audio: AudioSettings::default(),
+            gameplay: GameplaySettings::default(),
             shortcuts: ShortcutSettings::default(),
             ai: AiSettings::default(),
         }
@@ -527,6 +537,7 @@ pub(super) fn settings_controls(
             SettingsTab::Display => display_settings_controls(ui, ui_state, t),
             SettingsTab::Audio => audio_settings_controls(ui, ui_state, t),
             SettingsTab::Language => language_settings_controls(ui, ui_state, t),
+            SettingsTab::Gameplay => gameplay_settings_controls(ui, ui_state, t),
             SettingsTab::Shortcuts => shortcut_settings_controls(ui, ui_state, t),
             SettingsTab::Ai => ai_settings_controls(ui, ui_state, t),
         }
@@ -574,6 +585,11 @@ fn settings_tabs(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) 
             &mut ui_state.settings_tab,
             SettingsTab::Language,
             t.text("settings-tab-language"),
+        );
+        ui.selectable_value(
+            &mut ui_state.settings_tab,
+            SettingsTab::Gameplay,
+            t.text("settings-tab-gameplay"),
         );
         ui.selectable_value(
             &mut ui_state.settings_tab,
@@ -706,6 +722,16 @@ fn language_settings_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: 
             });
     });
     ui.colored_label(war_text_muted(), t.text("settings-language-apply-hint"));
+}
+
+fn gameplay_settings_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
+    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+        ui.checkbox(
+            &mut ui_state.pending_settings.gameplay.autosave_enabled,
+            t.text("settings-gameplay-autosave"),
+        );
+        ui.colored_label(war_text_muted(), t.text("settings-gameplay-autosave-hint"));
+    });
 }
 
 fn shortcut_settings_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
@@ -1010,6 +1036,9 @@ mod tests {
                 master_volume: 0.42,
                 output_device_name: Some("Built-in Output".to_string()),
             },
+            gameplay: GameplaySettings {
+                autosave_enabled: true,
+            },
             shortcuts: ShortcutSettings {
                 toggle_city_list: ShortcutBinding::new("KeyL").with_ctrl(),
                 ..ShortcutSettings::default()
@@ -1062,6 +1091,7 @@ mod tests {
         );
         assert_eq!(loaded.settings.audio, AudioSettings::default());
         assert_eq!(loaded.settings.general, GeneralSettings::default());
+        assert_eq!(loaded.settings.gameplay, GameplaySettings::default());
         assert_eq!(loaded.settings.shortcuts, ShortcutSettings::default());
         assert_eq!(loaded.settings.ai, AiSettings::default());
         assert!(loaded.message.is_none());
@@ -1096,8 +1126,35 @@ mod tests {
             DisplayResolution::new(1366, 768)
         );
         assert_eq!(loaded.settings.audio.master_volume, 0.5);
+        assert_eq!(loaded.settings.gameplay, GameplaySettings::default());
         assert_eq!(loaded.settings.shortcuts, ShortcutSettings::default());
         assert_eq!(loaded.settings.ai, AiSettings::default());
+        assert!(loaded.message.is_none());
+    }
+
+    #[test]
+    fn default_gameplay_settings_disable_autosave() {
+        assert!(!GameSettings::default().gameplay.autosave_enabled);
+    }
+
+    #[test]
+    fn gameplay_settings_load_from_settings() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("settings.json");
+        fs::write(
+            &path,
+            r#"{
+  "gameplay": {
+    "autosave_enabled": true
+  }
+}"#,
+        )
+        .unwrap();
+        let store = GameSettingsStore::new(path);
+
+        let loaded = store.load();
+
+        assert!(loaded.settings.gameplay.autosave_enabled);
         assert!(loaded.message.is_none());
     }
 

@@ -15,6 +15,7 @@ pub(super) enum SettingsTab {
     Display,
     Audio,
     Language,
+    Gameplay,
     Shortcuts,
     Ai,
 }
@@ -97,6 +98,7 @@ pub(super) struct GameUiState {
     pub(super) selected_diplomacy_target: Option<FactionId>,
     pub(super) selected_diplomacy_proposal: DiplomacyProposal,
     pub(super) save_manager: SaveManager,
+    pub(super) autosave_meta: Option<SaveSlotMeta>,
     pub(super) save_slots: Vec<SaveSlotMeta>,
     pub(super) save_slot_id: String,
     pub(super) save_display_name: String,
@@ -143,6 +145,7 @@ impl GameUiState {
             .map(|faction| faction.id.clone())
             .unwrap_or_default();
         let save_manager = SaveManager::with_default_dir();
+        let autosave_meta = save_manager.autosave_meta().ok().flatten();
         let save_slots = save_manager.list_slots().unwrap_or_default();
         let translator = Translator::new(loaded_settings.settings.general.ui_language);
         let (map_boundaries, map_boundary_message) = load_map_boundary_catalog(&translator);
@@ -239,6 +242,7 @@ impl GameUiState {
             selected_diplomacy_target: None,
             selected_diplomacy_proposal: DiplomacyProposal::ImproveRelations,
             save_manager,
+            autosave_meta,
             save_slots,
             save_slot_id: "slot1".to_string(),
             save_display_name: translator.text("save-default-name"),

@@ -1525,6 +1525,66 @@ fn save_manager_round_trips_multiple_slots() {
 }
 
 #[test]
+fn autosave_round_trips_without_occupying_slot_manifest() {
+    let temp = tempfile::tempdir().unwrap();
+    let manager = SaveManager::new(temp.path());
+    let mut game = sample_game();
+    game.year = 201;
+    game.month = 5;
+    game.turn = 7;
+
+    let meta = manager.save_autosave(&game).unwrap();
+
+    assert_eq!(meta.slot_id, "autosave");
+    assert_eq!(meta.year, 201);
+    assert_eq!(meta.month, 5);
+    assert_eq!(meta.turn, 7);
+    assert!(manager.list_slots().unwrap().is_empty());
+
+    let loaded = manager.load_autosave().unwrap();
+    assert_eq!(loaded.year, 201);
+    assert_eq!(loaded.month, 5);
+    assert_eq!(loaded.turn, 7);
+}
+
+#[test]
+fn autosave_keeps_only_latest_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let manager = SaveManager::new(temp.path());
+    let mut game = sample_game();
+    manager.save_autosave(&game).unwrap();
+
+    game.year = 202;
+    game.month = 9;
+    game.turn = 12;
+    manager.save_autosave(&game).unwrap();
+
+    let meta = manager.autosave_meta().unwrap().unwrap();
+    assert_eq!(meta.year, 202);
+    assert_eq!(meta.month, 9);
+    assert_eq!(meta.turn, 12);
+
+    let loaded = manager.load_autosave().unwrap();
+    assert_eq!(loaded.year, 202);
+    assert_eq!(loaded.month, 9);
+    assert_eq!(loaded.turn, 12);
+}
+
+#[test]
+fn autosave_delete_removes_autosave_without_touching_slots() {
+    let temp = tempfile::tempdir().unwrap();
+    let manager = SaveManager::new(temp.path());
+    let game = sample_game();
+    manager.save_autosave(&game).unwrap();
+    manager.save_slot("slot1", "第一档", &game).unwrap();
+
+    manager.delete_autosave().unwrap();
+
+    assert_eq!(manager.autosave_meta().unwrap(), None);
+    assert_eq!(manager.list_slots().unwrap().len(), 1);
+}
+
+#[test]
 fn save_load_preserves_wounded_and_expedition_supply_state() {
     let temp = tempfile::tempdir().unwrap();
     let manager = SaveManager::new(temp.path());

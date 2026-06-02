@@ -21,7 +21,10 @@ pub(super) fn start_history_game(ui_state: &mut GameUiState) {
             &ui_state.selected_faction_id,
         )
     }) {
-        Ok(game) => enter_game(ui_state, game, t.text("message-new-game-started")),
+        Ok(game) => {
+            enter_game(ui_state, game, t.text("message-new-game-started"));
+            autosave_current_game(ui_state, &t);
+        }
         Err(error) => ui_state.message = error.to_string(),
     }
 }
@@ -76,6 +79,7 @@ pub(super) fn finish_current_turn(ui_state: &mut GameUiState) {
     );
     ui_state.selected_city_id = first_player_city(game);
     ui_state.city_drawer_open = false;
+    autosave_current_game(ui_state, &t);
 }
 
 pub(super) fn clear_pending_commands(ui_state: &mut GameUiState) {
@@ -165,7 +169,50 @@ fn ai_child_name_generator(
 }
 
 pub(super) fn refresh_saves(ui_state: &mut GameUiState) {
+    ui_state.autosave_meta = ui_state.save_manager.autosave_meta().ok().flatten();
     ui_state.save_slots = ui_state.save_manager.list_slots().unwrap_or_default();
+}
+
+pub(super) fn autosave_current_game(ui_state: &mut GameUiState, t: &Translator) {
+    if !ui_state.applied_settings.gameplay.autosave_enabled {
+        return;
+    }
+    let Some(game) = &ui_state.game else {
+        return;
+    };
+    match ui_state.save_manager.save_autosave(game) {
+        Ok(meta) => {
+            ui_state.autosave_meta = Some(meta.clone());
+            append_message(
+                &mut ui_state.message,
+                t.text_args(
+                    "message-autosave-saved",
+                    &args([
+                        ("year", meta.year.to_string()),
+                        ("month", meta.month.to_string()),
+                        ("turn", meta.turn.to_string()),
+                    ]),
+                ),
+            );
+        }
+        Err(error) => append_message(
+            &mut ui_state.message,
+            t.text_args(
+                "message-autosave-failed",
+                &args([("error", error.to_string())]),
+            ),
+        ),
+    }
+}
+
+fn append_message(message: &mut String, addition: String) {
+    if addition.is_empty() {
+        return;
+    }
+    if !message.is_empty() {
+        message.push('\n');
+    }
+    message.push_str(&addition);
 }
 
 pub(super) fn first_player_city(game: &GameState) -> Option<CityId> {
