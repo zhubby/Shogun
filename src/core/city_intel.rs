@@ -18,13 +18,39 @@ pub(super) fn city_summary_intel(
     faction_name: &str,
     t: &Translator,
 ) {
+    city_summary_header(ui, city, faction_name, t, |_| {});
+    city_summary_metrics(ui, city, t);
+}
+
+pub(super) fn city_summary_intel_with_title_action(
+    ui: &mut egui::Ui,
+    city: &City,
+    faction_name: &str,
+    t: &Translator,
+    add_action: impl FnOnce(&mut egui::Ui),
+) {
+    city_summary_header(ui, city, faction_name, t, add_action);
+    city_summary_metrics(ui, city, t);
+}
+
+fn city_summary_header(
+    ui: &mut egui::Ui,
+    city: &City,
+    faction_name: &str,
+    t: &Translator,
+    add_action: impl FnOnce(&mut egui::Ui),
+) {
     ui.vertical(|ui| {
-        ui.label(
-            egui::RichText::new(&city.name)
-                .size(22.0)
-                .color(war_gold())
-                .strong(),
-        );
+        ui.horizontal(|ui| {
+            ui.set_width(ui.available_width());
+            ui.label(
+                egui::RichText::new(&city.name)
+                    .size(22.0)
+                    .color(war_gold())
+                    .strong(),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), add_action);
+        });
         ui.horizontal_wrapped(|ui| {
             muted_label(
                 ui,
@@ -43,7 +69,9 @@ pub(super) fn city_summary_intel(
             );
         });
     });
+}
 
+fn city_summary_metrics(ui: &mut egui::Ui, city: &City, t: &Translator) {
     ui.add_space(7.0);
     metric_tiles(
         ui,

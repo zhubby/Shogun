@@ -136,7 +136,7 @@ pub(super) fn collapse_icon_button(
     square_icon_button(ui, icon, tooltip, egui::vec2(30.0, 30.0))
 }
 
-fn square_icon_button(
+pub(super) fn square_icon_button(
     ui: &mut egui::Ui,
     icon: &str,
     tooltip: String,

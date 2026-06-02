@@ -4,9 +4,10 @@ use egui_extras::{Column, Size, StripBuilder, TableBuilder};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::actions::{
-    clear_pending_commands, enter_game, finish_current_turn, open_city, refresh_saves,
+    clear_pending_commands, confirm_return_main_menu, enter_game, finish_current_turn, open_city,
+    refresh_saves, request_return_main_menu,
 };
-use super::city_intel::city_summary_intel;
+use super::city_intel::{city_summary_intel, city_summary_intel_with_title_action};
 use super::city_panel::selected_city_panel;
 use super::i18n::{Translator, UiLanguage, args};
 use super::labels::{
@@ -21,11 +22,11 @@ use super::portraits::{
 use super::runtime::CoreAsyncRuntime;
 use super::state::{
     GameUiState, OfficerBrowserFilters, OfficerEditDraft, OfficerGenderFilter, OfficerStatusFilter,
-    Screen, ShrineTab,
+    ShrineTab,
 };
 use super::style::{
-    collapse_icon_button, modal_content_width, modal_title_bar, war_bar_frame, war_border,
-    war_danger, war_gold, war_panel_frame, war_sub_panel_frame, war_success, war_text,
+    collapse_icon_button, modal_content_width, modal_title_bar, square_icon_button, war_bar_frame,
+    war_border, war_danger, war_gold, war_panel_frame, war_sub_panel_frame, war_success, war_text,
     war_text_muted, war_warning,
 };
 use super::{HUD_MARGIN, HUD_TOP_HEIGHT, HUD_TOP_OFFSET, MAP_ZOOM_STEP};
@@ -71,6 +72,7 @@ pub(super) fn in_game_hud(
     technology_hud(ctx, ui_state, t, screen);
     event_center_hud(ctx, ui_state, t, screen);
     event_popup_hud(ctx, ui_state, t, screen);
+    return_main_menu_confirm_hud(ctx, ui_state, t, screen);
 }
 
 pub(super) fn top_status_hud(
@@ -144,7 +146,7 @@ pub(super) fn top_status_hud(
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button(t.text("hud-main-menu")).clicked() {
-                            ui_state.screen = Screen::MainMenu;
+                            request_return_main_menu(ui_state);
                         }
                         if ui.button(t.text("hud-save")).clicked() {
                             ui_state.save_panel_open = !ui_state.save_panel_open;
@@ -401,6 +403,72 @@ fn ensure_selected_event(ui_state: &mut GameUiState) {
             .max_by_key(|event| event.sequence)
             .map(|event| event.id.clone());
     }
+}
+
+fn return_main_menu_confirm_hud(
+    ctx: &egui::Context,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    screen: egui::Rect,
+) {
+    if !ui_state.return_main_menu_confirm_open {
+        return;
+    }
+
+    egui::Area::new(egui::Id::new("hud_return_main_menu_confirm_scrim"))
+        .order(egui::Order::Foreground)
+        .fixed_pos(screen.min)
+        .show(ctx, |ui| {
+            let (rect, response) = ui.allocate_exact_size(screen.size(), egui::Sense::click());
+            ui.painter().rect_filled(
+                rect,
+                0.0,
+                egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150),
+            );
+            if response.clicked() {
+                ui_state.return_main_menu_confirm_open = false;
+            }
+        });
+
+    let width = modal_content_width(screen, 420.0);
+    let button_size = egui::vec2(112.0, 34.0);
+    egui::Area::new(egui::Id::new("hud_return_main_menu_confirm"))
+        .order(egui::Order::Foreground)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            war_panel_frame().show(ui, |ui| {
+                ui.set_width(width);
+                if modal_title_bar(ui, t, &t.text("hud-main-menu-confirm-title")) {
+                    ui_state.return_main_menu_confirm_open = false;
+                }
+                ui.separator();
+                ui.set_max_width(width);
+                ui.label(egui::RichText::new(t.text("hud-main-menu-confirm-heading")).strong());
+                ui.add_space(4.0);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(t.text("hud-main-menu-confirm-message"))
+                            .color(war_text_muted()),
+                    )
+                    .wrap(),
+                );
+                ui.add_space(12.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_sized(button_size, egui::Button::new(t.text("common-confirm")))
+                        .clicked()
+                    {
+                        confirm_return_main_menu(ui_state);
+                    }
+                    if ui
+                        .add_sized(button_size, egui::Button::new(t.text("common-cancel")))
+                        .clicked()
+                    {
+                        ui_state.return_main_menu_confirm_open = false;
+                    }
+                });
+            });
+        });
 }
 
 fn event_center(
@@ -1413,14 +1481,9 @@ pub(super) fn city_drawer_hud(
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(modal_width);
                 ui.set_min_height(modal_height);
-                ui.horizontal(|ui| {
-                    ui.heading(egui::RichText::new(t.text("command-tent-title")).color(war_gold()));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if collapse_icon_button(ui, t, true).clicked() {
-                            ui_state.city_drawer_open = false;
-                        }
-                    });
-                });
+                if modal_title_bar(ui, t, &t.text("command-tent-title")) {
+                    ui_state.city_drawer_open = false;
+                }
                 ui.separator();
                 ui.allocate_ui_with_layout(
                     egui::vec2(modal_width, modal_height - 54.0),
@@ -2734,9 +2797,20 @@ pub(super) fn selected_city_summary(ui: &mut egui::Ui, ui_state: &mut GameUiStat
         return;
     };
 
-    city_summary_intel(ui, &city, &faction_name, t);
-    ui.add_space(8.0);
-    if ui.button(t.text("open-command-tent")).clicked() {
+    let mut open_requested = false;
+    city_summary_intel_with_title_action(ui, &city, &faction_name, t, |ui| {
+        if square_icon_button(
+            ui,
+            egui_phosphor::regular::GAVEL,
+            t.text("open-command-tent"),
+            egui::vec2(30.0, 30.0),
+        )
+        .clicked()
+        {
+            open_requested = true;
+        }
+    });
+    if open_requested {
         open_city(ui_state, city_id);
     }
 }

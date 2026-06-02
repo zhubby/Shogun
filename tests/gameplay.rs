@@ -648,7 +648,7 @@ fn technology_completes_after_required_turns() {
         report
             .entries
             .iter()
-            .any(|entry| entry.message.contains("完成科技：乡勇操练"))
+            .any(|entry| entry.message.contains("完成太学研习：乡勇操练"))
     );
 }
 

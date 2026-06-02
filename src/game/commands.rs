@@ -180,7 +180,7 @@ fn advance_research_and_report(state: &mut GameState, report: &mut TurnReport) {
             .map(|faction| faction.name.as_str())
             .unwrap_or(completed.faction_id.as_str());
         let spec = technology_spec(completed.technology_id);
-        report.info(format!("{faction_name} 完成科技：{}", spec.name));
+        report.info(format!("{faction_name} 完成太学研习：{}", spec.name));
         if completed.faction_id == state.player_faction_id {
             record_game_event(
                 state,
@@ -188,9 +188,9 @@ fn advance_research_and_report(state: &mut GameState, report: &mut TurnReport) {
                     kind: GameEventKind::TechnologyCompleted,
                     severity: GameEventSeverity::Important,
                     scope: GameEventScope::Player,
-                    title: "科技完成".to_string(),
-                    summary: format!("{faction_name} 完成科技：{}", spec.name),
-                    detail: format!("{} 已完成研究。{}", spec.name, spec.effect),
+                    title: "太学研习完成".to_string(),
+                    summary: format!("{faction_name} 完成太学研习：{}", spec.name),
+                    detail: format!("{} 已完成太学研习。{}", spec.name, spec.effect),
                     city_id: None,
                     faction_id: Some(completed.faction_id.clone()),
                     officer_id: None,
