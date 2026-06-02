@@ -2,6 +2,11 @@
 name = "shogun"
 version = "0.1.0"
 edition = "2024"
+description = "A turn-based Three Kingdoms strategy game built with Bevy and egui, featuring SQLite-backed historical data, rule-based AI, and bilingual UI"
+license = "MIT"
+readme = "README.md"
+keywords = ["game", "strategy", "three-kingdoms", "bevy", "turn-based"]
+categories = ["games"]
 default-run = "shogun"
 build = "build.rs"
 

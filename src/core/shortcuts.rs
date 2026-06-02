@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use super::MAP_ZOOM_STEP;
-use super::actions::{clear_pending_commands, finish_current_turn, open_city};
+use super::actions::{
+    clear_pending_commands, finish_current_turn, open_city, request_return_main_menu,
+};
 use super::i18n::{Translator, args};
 use super::map::{reset_map_view, zoom_map};
 use super::state::{GameUiState, Screen};
@@ -617,6 +619,10 @@ pub(super) fn close_top_panel(ui_state: &mut GameUiState) -> bool {
     if ui_state.screen != Screen::InGame {
         return false;
     }
+    if ui_state.return_main_menu_confirm_open {
+        ui_state.return_main_menu_confirm_open = false;
+        return true;
+    }
     if let Some(event_id) = ui_state
         .game
         .as_ref()
@@ -756,24 +762,10 @@ fn dispatch_shortcut_action(action: ShortcutAction, ui_state: &mut GameUiState) 
         }
         ShortcutAction::ReturnMainMenu => {
             if ui_state.screen == Screen::InGame {
-                close_in_game_panels(ui_state);
-                ui_state.screen = Screen::MainMenu;
+                request_return_main_menu(ui_state);
             }
         }
     }
-}
-
-fn close_in_game_panels(ui_state: &mut GameUiState) {
-    ui_state.shortcut_capture_action = None;
-    ui_state.city_drawer_open = false;
-    ui_state.city_list_open = false;
-    ui_state.officer_browser_open = false;
-    ui_state.officer_detail_id = None;
-    ui_state.retainers_open = false;
-    ui_state.shrine_open = false;
-    ui_state.technology_open = false;
-    ui_state.events_open = false;
-    ui_state.save_panel_open = false;
 }
 
 fn key_code_from_name(name: &str) -> Option<KeyCode> {
@@ -1258,5 +1250,22 @@ mod tests {
 
         assert!(close_top_panel(&mut ui_state));
         assert!(ui_state.officer_detail_id.is_none());
+    }
+
+    #[test]
+    fn close_top_panel_closes_return_main_menu_confirmation_first() {
+        let mut ui_state = GameUiState {
+            screen: Screen::InGame,
+            return_main_menu_confirm_open: true,
+            technology_open: true,
+            ..GameUiState::default()
+        };
+
+        assert!(close_top_panel(&mut ui_state));
+        assert!(!ui_state.return_main_menu_confirm_open);
+        assert!(ui_state.technology_open);
+
+        assert!(close_top_panel(&mut ui_state));
+        assert!(!ui_state.technology_open);
     }
 }

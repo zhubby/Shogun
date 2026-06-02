@@ -97,22 +97,29 @@ pub(super) fn modal_title_bar(ui: &mut egui::Ui, t: &Translator, title: &str) ->
 
     ui.allocate_ui_with_layout(
         egui::vec2(row_width, 34.0),
-        egui::Layout::left_to_right(egui::Align::Center),
+        egui::Layout::right_to_left(egui::Align::Center),
         |ui| {
-            ui.set_width(row_width);
-            ui.heading(egui::RichText::new(title).color(war_gold()));
-            ui.add_space((ui.available_width() - button_size.x).max(0.0));
             close_clicked = square_icon_button(
                 ui,
-                egui_phosphor::regular::X_SQUARE,
+                egui_phosphor::regular::X,
                 t.text("common-close"),
                 button_size,
             )
             .clicked();
+
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.set_width((row_width - button_size.x - ui.spacing().item_spacing.x).max(0.0));
+                ui.heading(egui::RichText::new(title).color(war_gold()));
+            });
         },
     );
 
     close_clicked
+}
+
+pub(super) fn modal_content_width(screen: egui::Rect, target_width: f32) -> f32 {
+    let max_width = (screen.width() - 56.0).max(360.0);
+    target_width.min(max_width)
 }
 
 pub(super) fn collapse_icon_button(
@@ -129,7 +136,7 @@ pub(super) fn collapse_icon_button(
     square_icon_button(ui, icon, tooltip, egui::vec2(30.0, 30.0))
 }
 
-fn square_icon_button(
+pub(super) fn square_icon_button(
     ui: &mut egui::Ui,
     icon: &str,
     tooltip: String,

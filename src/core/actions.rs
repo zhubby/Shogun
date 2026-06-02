@@ -41,6 +41,7 @@ pub(super) fn enter_game(ui_state: &mut GameUiState, game: GameState, message: S
     ui_state.city_list_open = false;
     ui_state.technology_open = false;
     ui_state.events_open = false;
+    ui_state.return_main_menu_confirm_open = false;
     ui_state.selected_event_id = None;
     ui_state.officer_detail_id = None;
     ui_state.event_message.clear();
@@ -87,9 +88,34 @@ pub(super) fn clear_pending_commands(ui_state: &mut GameUiState) {
     ui_state.message = t.text("message-pending-commands-cleared");
 }
 
+pub(super) fn request_return_main_menu(ui_state: &mut GameUiState) {
+    if ui_state.screen == Screen::InGame {
+        ui_state.return_main_menu_confirm_open = true;
+    }
+}
+
+pub(super) fn confirm_return_main_menu(ui_state: &mut GameUiState) {
+    close_in_game_panels(ui_state);
+    ui_state.screen = Screen::MainMenu;
+}
+
 pub(super) fn open_city(ui_state: &mut GameUiState, city_id: CityId) {
     ui_state.selected_city_id = Some(city_id);
     ui_state.city_drawer_open = true;
+}
+
+fn close_in_game_panels(ui_state: &mut GameUiState) {
+    ui_state.shortcut_capture_action = None;
+    ui_state.city_drawer_open = false;
+    ui_state.city_list_open = false;
+    ui_state.officer_browser_open = false;
+    ui_state.officer_detail_id = None;
+    ui_state.retainers_open = false;
+    ui_state.shrine_open = false;
+    ui_state.technology_open = false;
+    ui_state.events_open = false;
+    ui_state.return_main_menu_confirm_open = false;
+    ui_state.save_panel_open = false;
 }
 
 pub(super) fn finish_turn(game: &mut GameState, provider: &RuleBasedAiProvider) -> TurnReport {

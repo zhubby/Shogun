@@ -16,9 +16,9 @@ use crate::game::{
 use super::HUD_MARGIN;
 use super::actions::{enter_game, refresh_saves, start_history_game};
 use super::hud::{
-    OfficerBrowserTableOptions, OfficerPortraitModalContext, officer_browser_filters,
-    officer_browser_table, officer_detail_modal_for_game, officer_tag_category_label,
-    officer_tag_definitions_by_category, officer_tag_label,
+    OFFICER_BROWSER_MODAL_WIDTH, OfficerBrowserTableOptions, OfficerPortraitModalContext,
+    officer_browser_filters, officer_browser_table, officer_detail_modal_for_game,
+    officer_tag_category_label, officer_tag_definitions_by_category, officer_tag_label,
 };
 use super::i18n::{Translator, args};
 use super::labels::{confidence_label, officer_gender_label};
@@ -34,8 +34,8 @@ use super::state::{
     refresh_history_factions, refresh_history_menu,
 };
 use super::style::{
-    modal_title_bar, war_border, war_gold, war_panel_frame, war_sub_panel_frame, war_text,
-    war_text_muted, war_warning,
+    modal_content_width, modal_title_bar, war_border, war_gold, war_panel_frame,
+    war_sub_panel_frame, war_text, war_text_muted, war_warning,
 };
 
 #[cfg(test)]
@@ -1581,7 +1581,7 @@ pub(super) fn officer_settings_modal(
             }
         });
 
-    let width = (screen.width() * 0.86).clamp(760.0, 1120.0);
+    let width = modal_content_width(screen, OFFICER_BROWSER_MODAL_WIDTH);
     let height = (screen.height() * 0.78).clamp(460.0, 720.0);
     egui::Area::new(egui::Id::new("officer_settings_modal"))
         .order(egui::Order::Foreground)

@@ -384,7 +384,7 @@ pub const TECHNOLOGY_SPECS: [TechnologySpec; 28] = [
         turns: 8,
         gold_cost: 1500,
         prerequisites: MINISTRY_OF_FINANCE_REQS,
-        effect: "金/粮/建材各 +4%；后续科技立项成本 -10%",
+        effect: "金/粮/建材各 +4%；后续太学研习立项成本 -10%",
     },
 ];
 
@@ -773,7 +773,10 @@ impl std::fmt::Display for TechnologyError {
             TechnologyError::InsufficientGold {
                 required,
                 available,
-            } => write!(f, "金钱不足，立项需要 {required} 金，当前 {available} 金"),
+            } => write!(
+                f,
+                "金钱不足，太学研习立项需要 {required} 金，当前 {available} 金"
+            ),
         }
     }
 }
