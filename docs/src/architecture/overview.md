@@ -9,7 +9,7 @@ Shogun 采用**两层架构**：纯净的领域逻辑层（`game`）和引擎/UI
 │                   core                      │
 │  Bevy App · egui UI · Audio · i18n · Input  │
 │                                             │
-│  state.rs  hud.rs  menu.rs  map.rs  ...     │
+│  state.rs  hud/  menu.rs  map.rs  ...       │
 ├─────────────────────────────────────────────┤
 │               公开 API 调用                  │
 │         game::queue_player_command()         │

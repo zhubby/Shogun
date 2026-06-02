@@ -1,6 +1,19 @@
 # HUD 与面板
 
-游戏内界面由 `hud.rs` 中的多个 HUD 函数组合而成，每个函数负责一个 UI 区域。
+游戏内界面由 `src/core/hud/` 目录模块组合而成。`hud/mod.rs` 负责入口编排，各子模块按面板职责维护具体 UI。
+
+## 模块划分
+
+- `chrome.rs` — 顶部状态栏、底部入口栏、返回主菜单确认框
+- `map_overlays.rs` — 地图控制、选中城池摘要
+- `city_list.rs` — 城池列表弹窗、城池详情抽屉
+- `save_report.rs` — 存档面板、月报查看器
+- `events.rs` — 事件中心、事件弹窗
+- `technology.rs` — 科技面板和科技树
+- `officer_browser.rs` — 武将浏览器、家臣面板、武将筛选表格
+- `officer_detail.rs` — 武将详情模态框、关系图、头像生成入口
+- `shrine.rs` — 宗庙、亲族图、婚姻、继承、禅让
+- `officer_common.rs` — 武将 HUD 共享显示 helper
 
 ## HUD 组成
 
@@ -16,7 +29,10 @@ pub fn in_game_hud(ctx, ui_state, t) {
     bottom_map_actions_hud(..) // 底部：命令分类按钮
     officer_browser_hud(...)   // 浮动：武将浏览器
     retainer_hud(...)          // 浮动：家臣面板
+    shrine_hud(...)            // 浮动：宗庙面板
     technology_hud(...)        // 浮动：科技面板
+    event_center_hud(...)      // 浮动：事件中心
+    event_popup_hud(...)       // 浮动：事件提醒
 }
 ```
 

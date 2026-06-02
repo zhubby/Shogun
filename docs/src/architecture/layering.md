@@ -56,7 +56,7 @@ core/
   mod.rs          # pub fn run() — 唯一对外入口
   state.rs        # GameUiState — UI 状态（非 pub）
   actions.rs      # 玩家动作处理（pub(super)）
-  hud.rs          # 游戏内 HUD 渲染
+  hud/            # 游戏内 HUD 编排与面板模块
   menu.rs         # 主菜单
   map.rs          # 地图渲染与交互
   city_panel.rs   # 城池详情面板
