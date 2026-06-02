@@ -549,9 +549,10 @@ pub(super) fn settings_controls(
 
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
+            let footer_button_size = egui::vec2(132.0, 34.0);
             if ui
                 .add_sized(
-                    [132.0, 34.0],
+                    footer_button_size,
                     egui::Button::new(t.text("settings-apply-save")),
                 )
                 .clicked()
@@ -559,7 +560,13 @@ pub(super) fn settings_controls(
                 apply_settings = true;
                 ui_state.settings_open = false;
             }
-            if ui.button(t.text("settings-restore-defaults")).clicked() {
+            if ui
+                .add_sized(
+                    footer_button_size,
+                    egui::Button::new(t.text("settings-restore-defaults")),
+                )
+                .clicked()
+            {
                 ui_state.pending_settings = GameSettings::default();
                 ui_state.shortcut_capture_action = None;
                 ui_state.message = t.text("message-settings-restored");
@@ -838,87 +845,134 @@ fn shortcut_binding_text(binding: &ShortcutBinding, t: &Translator) -> String {
         .unwrap_or_else(|| t.text("settings-shortcut-unbound"))
 }
 
+const AI_SETTINGS_LABEL_WIDTH: f32 = 140.0;
+const AI_SETTINGS_FIELD_MIN_WIDTH: f32 = 160.0;
+const AI_SETTINGS_FIELD_MAX_WIDTH: f32 = 430.0;
+const AI_SETTINGS_GRID_COLUMN_GAP: f32 = 18.0;
+
 fn ai_settings_controls(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
     ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-        ui.label(egui::RichText::new(t.text("settings-ai-reasoning")).strong());
-        openai_api_type_selector(ui, ui_state, t);
-        settings_text_field(
-            ui,
-            t,
-            "settings-ai-openai-api-url",
-            "ai_reasoning_api_url",
-            &mut ui_state.pending_settings.ai.reasoning.api_url,
-            false,
-        );
-        settings_text_field(
-            ui,
-            t,
-            "settings-ai-openai-token",
-            "ai_reasoning_token",
-            &mut ui_state.pending_settings.ai.reasoning.token,
-            true,
-        );
-        settings_text_field(
-            ui,
-            t,
-            "settings-ai-openai-model",
-            "ai_reasoning_model",
-            &mut ui_state.pending_settings.ai.reasoning.model_name,
-            false,
-        );
+        let field_width = ai_settings_field_width(ui.available_width());
+        egui::Grid::new("settings_ai_grid")
+            .num_columns(2)
+            .spacing(egui::vec2(AI_SETTINGS_GRID_COLUMN_GAP, 8.0))
+            .show(ui, |ui| {
+                ai_settings_section_row(ui, t, "settings-ai-reasoning");
+                openai_api_type_row(ui, ui_state, t, field_width);
+                ai_settings_text_field_row(
+                    ui,
+                    t,
+                    "settings-ai-openai-api-url",
+                    "ai_reasoning_api_url",
+                    &mut ui_state.pending_settings.ai.reasoning.api_url,
+                    false,
+                    field_width,
+                );
+                ai_settings_text_field_row(
+                    ui,
+                    t,
+                    "settings-ai-openai-token",
+                    "ai_reasoning_token",
+                    &mut ui_state.pending_settings.ai.reasoning.token,
+                    true,
+                    field_width,
+                );
+                ai_settings_text_field_row(
+                    ui,
+                    t,
+                    "settings-ai-openai-model",
+                    "ai_reasoning_model",
+                    &mut ui_state.pending_settings.ai.reasoning.model_name,
+                    false,
+                    field_width,
+                );
 
-        ui.add_space(10.0);
-        ui.separator();
-        ui.add_space(8.0);
-
-        ui.label(egui::RichText::new(t.text("settings-ai-multimodal")).strong());
-        settings_text_field(
-            ui,
-            t,
-            "settings-ai-bailian-api-key",
-            "ai_multimodal_api_key",
-            &mut ui_state.pending_settings.ai.multimodal.api_key,
-            true,
-        );
-        settings_text_field(
-            ui,
-            t,
-            "settings-ai-bailian-model",
-            "ai_multimodal_model",
-            &mut ui_state.pending_settings.ai.multimodal.model_name,
-            false,
-        );
+                ai_settings_spacer_row(ui);
+                ai_settings_section_row(ui, t, "settings-ai-multimodal");
+                ai_settings_text_field_row(
+                    ui,
+                    t,
+                    "settings-ai-bailian-api-key",
+                    "ai_multimodal_api_key",
+                    &mut ui_state.pending_settings.ai.multimodal.api_key,
+                    true,
+                    field_width,
+                );
+                ai_settings_text_field_row(
+                    ui,
+                    t,
+                    "settings-ai-bailian-model",
+                    "ai_multimodal_model",
+                    &mut ui_state.pending_settings.ai.multimodal.model_name,
+                    false,
+                    field_width,
+                );
+            });
     });
 }
 
-fn openai_api_type_selector(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label(
-            egui::RichText::new(t.text("settings-ai-openai-api-type")).color(war_text_muted()),
-        );
-        let previous = ui_state.pending_settings.ai.reasoning.api_type;
-        egui::ComboBox::from_id_salt("ai_reasoning_api_type")
-            .width(210.0)
-            .selected_text(openai_api_type_label(previous, t))
-            .show_ui(ui, |ui| {
-                for api_type in OpenAiApiType::variants() {
-                    ui.selectable_value(
-                        &mut ui_state.pending_settings.ai.reasoning.api_type,
-                        *api_type,
-                        openai_api_type_label(*api_type, t),
-                    );
-                }
-            });
-        let selected = ui_state.pending_settings.ai.reasoning.api_type;
-        if selected != previous {
-            let api_url = &mut ui_state.pending_settings.ai.reasoning.api_url;
-            if api_url.trim().is_empty() {
-                *api_url = selected.default_api_url();
-            } else if let Some(updated) = selected.api_url_from_existing_url(api_url) {
-                *api_url = updated;
-            }
-        }
+fn ai_settings_field_width(available_width: f32) -> f32 {
+    (available_width - AI_SETTINGS_LABEL_WIDTH - AI_SETTINGS_GRID_COLUMN_GAP)
+        .clamp(AI_SETTINGS_FIELD_MIN_WIDTH, AI_SETTINGS_FIELD_MAX_WIDTH)
+}
+
+fn ai_settings_section_row(ui: &mut egui::Ui, t: &Translator, label_key: &str) {
+    ai_settings_grid_label(
+        ui,
+        egui::RichText::new(t.text(label_key))
+            .strong()
+            .color(war_gold()),
+    );
+    ui.add_space(0.0);
+    ui.end_row();
+}
+
+fn ai_settings_spacer_row(ui: &mut egui::Ui) {
+    ui.add_space(4.0);
+    ui.add_space(4.0);
+    ui.end_row();
+}
+
+fn ai_settings_grid_label(ui: &mut egui::Ui, label: egui::RichText) {
+    ui.scope(|ui| {
+        ui.set_width(AI_SETTINGS_LABEL_WIDTH);
+        ui.label(label);
     });
+}
+
+fn openai_api_type_row(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    field_width: f32,
+) {
+    ai_settings_grid_label(
+        ui,
+        egui::RichText::new(t.text("settings-ai-openai-api-type")).color(war_text_muted()),
+    );
+    let previous = ui_state.pending_settings.ai.reasoning.api_type;
+    egui::ComboBox::from_id_salt("ai_reasoning_api_type")
+        .width(field_width)
+        .selected_text(openai_api_type_label(previous, t))
+        .show_ui(ui, |ui| {
+            for api_type in OpenAiApiType::variants() {
+                ui.selectable_value(
+                    &mut ui_state.pending_settings.ai.reasoning.api_type,
+                    *api_type,
+                    openai_api_type_label(*api_type, t),
+                );
+            }
+        });
+    let selected = ui_state.pending_settings.ai.reasoning.api_type;
+    if selected != previous {
+        let api_url = &mut ui_state.pending_settings.ai.reasoning.api_url;
+        if api_url.trim().is_empty() {
+            *api_url = selected.default_api_url();
+        } else if let Some(updated) = selected.api_url_from_existing_url(api_url) {
+            *api_url = updated;
+        }
+    }
+    ui.end_row();
 }
 
 fn openai_api_type_label(api_type: OpenAiApiType, t: &Translator) -> String {
@@ -929,26 +983,28 @@ fn openai_api_type_label(api_type: OpenAiApiType, t: &Translator) -> String {
     }
 }
 
-fn settings_text_field(
+fn ai_settings_text_field_row(
     ui: &mut egui::Ui,
     t: &Translator,
     label_key: &str,
     id_salt: &str,
     value: &mut String,
     password: bool,
+    field_width: f32,
 ) {
-    ui.horizontal_wrapped(|ui| {
-        ui.label(egui::RichText::new(t.text(label_key)).color(war_text_muted()));
-        let width = ui.available_width().clamp(260.0, 430.0);
-        let edit = egui::TextEdit::singleline(value)
-            .id_salt(id_salt)
-            .desired_width(width);
-        if password {
-            ui.add(edit.password(true));
-        } else {
-            ui.add(edit);
-        }
-    });
+    ai_settings_grid_label(
+        ui,
+        egui::RichText::new(t.text(label_key)).color(war_text_muted()),
+    );
+    let edit = egui::TextEdit::singleline(value)
+        .id_salt(id_salt)
+        .desired_width(field_width);
+    if password {
+        ui.add(edit.password(true));
+    } else {
+        ui.add(edit);
+    }
+    ui.end_row();
 }
 
 pub(super) fn apply_pending_game_settings(
