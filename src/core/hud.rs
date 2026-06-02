@@ -2515,29 +2515,34 @@ pub(super) fn shrine_hud(
                 }
                 ui.separator();
                 ui.horizontal(|ui| {
-                    for (tab, icon, label) in [
+                    for (tab, icon, label, accent) in [
                         (
                             ShrineTab::Kinship,
                             egui_phosphor::regular::TREE_STRUCTURE,
                             t.text("shrine-tab-kinship"),
+                            egui::Color32::from_rgb(119, 184, 141),
                         ),
                         (
                             ShrineTab::Marriage,
                             egui_phosphor::regular::HEART,
                             t.text("shrine-tab-marriage"),
+                            egui::Color32::from_rgb(217, 126, 118),
                         ),
                         (
                             ShrineTab::ChildrenHeir,
                             egui_phosphor::regular::BABY,
                             t.text("shrine-tab-children-heir"),
+                            egui::Color32::from_rgb(120, 178, 211),
                         ),
                         (
                             ShrineTab::Abdication,
                             egui_phosphor::regular::SEAL,
                             t.text("shrine-tab-abdication"),
+                            war_gold(),
                         ),
                     ] {
-                        if shrine_tab_button(ui, ui_state.shrine_tab == tab, icon, label).clicked()
+                        if shrine_tab_button(ui, ui_state.shrine_tab == tab, icon, label, accent)
+                            .clicked()
                         {
                             ui_state.shrine_tab = tab;
                             ui_state.shrine_abdication_confirm = false;
@@ -2564,8 +2569,9 @@ fn shrine_tab_button(
     selected: bool,
     icon: &str,
     label: String,
+    accent: egui::Color32,
 ) -> egui::Response {
-    let color = if selected { war_gold() } else { war_text() };
+    let color = if selected { accent } else { war_text() };
     let fill = if selected {
         egui::Color32::from_rgba_unmultiplied(84, 54, 30, 190)
     } else {
@@ -3055,6 +3061,66 @@ fn shrine_legend_item(ui: &mut egui::Ui, color: egui::Color32, label: String) {
     ui.label(egui::RichText::new(label).color(war_text_muted()));
 }
 
+fn shrine_badge(ui: &mut egui::Ui, icon: &str, label: String, color: egui::Color32) {
+    let fill = egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 36);
+    egui::Frame::new()
+        .inner_margin(egui::Margin::symmetric(6, 3))
+        .fill(fill)
+        .stroke(egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), 130),
+        ))
+        .corner_radius(4)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(format!("{icon} {label}"))
+                    .size(12.0)
+                    .color(color),
+            );
+        });
+}
+
+fn shrine_source_badge(ui: &mut egui::Ui, t: &Translator, source: ShrineRelationshipSource) {
+    let (icon, color) = match source {
+        ShrineRelationshipSource::Dynamic => (
+            egui_phosphor::regular::GAME_CONTROLLER,
+            egui::Color32::from_rgb(120, 178, 211),
+        ),
+        ShrineRelationshipSource::Historical => (
+            egui_phosphor::regular::SCROLL,
+            egui::Color32::from_rgb(190, 151, 88),
+        ),
+        ShrineRelationshipSource::Mixed => (
+            egui_phosphor::regular::SPARKLE,
+            egui::Color32::from_rgb(217, 126, 118),
+        ),
+    };
+    shrine_badge(ui, icon, shrine_relationship_source_label(t, source), color);
+}
+
+fn shrine_gender_icon(gender: &OfficerGender) -> (&'static str, egui::Color32) {
+    match gender {
+        OfficerGender::Male => (
+            egui_phosphor::regular::GENDER_MALE,
+            egui::Color32::from_rgb(120, 178, 211),
+        ),
+        OfficerGender::Female => (
+            egui_phosphor::regular::GENDER_FEMALE,
+            egui::Color32::from_rgb(217, 126, 118),
+        ),
+    }
+}
+
+fn shrine_status_color(status: &OfficerStatus) -> egui::Color32 {
+    match status {
+        OfficerStatus::Active => war_success(),
+        OfficerStatus::Minor => egui::Color32::from_rgb(120, 178, 211),
+        OfficerStatus::Wild => war_warning(),
+        OfficerStatus::Unavailable => war_text_muted(),
+        OfficerStatus::Dead => war_danger(),
+    }
+}
+
 const SHRINE_MAX_KINSHIP_NODES: usize = 64;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3068,6 +3134,7 @@ struct ShrineKinshipGraph {
 struct ShrineKinshipNode {
     id: OfficerId,
     name: String,
+    gender: OfficerGender,
     generation: i32,
     tooltip: String,
     role: ShrineKinshipNodeRole,
@@ -3141,6 +3208,7 @@ fn shrine_kinship_graph(
             Some(ShrineKinshipNode {
                 id: officer.id.clone(),
                 name: officer.name.clone(),
+                gender: officer.gender.clone(),
                 generation: *generations.get(&officer.id).unwrap_or(&0),
                 tooltip: shrine_officer_tooltip(game, faction, officer, t),
                 role: if faction.ruler_id == officer.id {
@@ -3499,11 +3567,12 @@ fn draw_shrine_kinship_node(
         ShrineKinshipNodeRole::Heir => (egui_phosphor::regular::SEAL_CHECK, war_success()),
         ShrineKinshipNodeRole::Officer => (egui_phosphor::regular::USER, war_border()),
     };
-    painter.rect_filled(
-        rect,
-        5.0,
-        egui::Color32::from_rgba_unmultiplied(35, 29, 22, 235),
-    );
+    let fill = match node.role {
+        ShrineKinshipNodeRole::Ruler => egui::Color32::from_rgba_unmultiplied(65, 43, 22, 238),
+        ShrineKinshipNodeRole::Heir => egui::Color32::from_rgba_unmultiplied(31, 55, 36, 238),
+        ShrineKinshipNodeRole::Officer => egui::Color32::from_rgba_unmultiplied(35, 29, 22, 235),
+    };
+    painter.rect_filled(rect, 5.0, fill);
     painter.rect_stroke(
         rect,
         5.0,
@@ -3516,6 +3585,14 @@ fn draw_shrine_kinship_node(
         icon,
         egui::FontId::proportional(15.0),
         stroke_color,
+    );
+    let (gender_icon, gender_color) = shrine_gender_icon(&node.gender);
+    painter.text(
+        egui::pos2(rect.right() - 10.0, rect.top() + 12.0),
+        egui::Align2::CENTER_CENTER,
+        gender_icon,
+        egui::FontId::proportional(12.0),
+        gender_color,
     );
     painter.text(
         egui::pos2(rect.center().x, rect.bottom() - 18.0),
@@ -3662,12 +3739,18 @@ fn shrine_marriage_row(
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(egui_phosphor::regular::HEART)
+                    .size(18.0)
                     .color(relationship_kind_color(RelationshipGraphKind::Spouse)),
             );
             ui.vertical(|ui| {
+                let husband_gender = shrine_gender_icon(&OfficerGender::Male);
+                let wife_gender = shrine_gender_icon(&OfficerGender::Female);
                 ui.label(
-                    egui::RichText::new(format!("{} - {}", entry.husband_name, entry.wife_name))
-                        .strong(),
+                    egui::RichText::new(format!(
+                        "{} {}  -  {} {}",
+                        husband_gender.0, entry.husband_name, wife_gender.0, entry.wife_name
+                    ))
+                    .strong(),
                 );
                 let date = entry
                     .date
@@ -3678,14 +3761,23 @@ fn shrine_marriage_row(
                         )
                     })
                     .unwrap_or_else(|| t.text("shrine-marriage-date-historical"));
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{} | {}",
-                        shrine_relationship_source_label(t, entry.source),
-                        date
-                    ))
-                    .color(war_text_muted()),
-                );
+                ui.horizontal_wrapped(|ui| {
+                    shrine_source_badge(ui, t, entry.source);
+                    shrine_badge(
+                        ui,
+                        if entry.date.is_some() {
+                            egui_phosphor::regular::CALENDAR_HEART
+                        } else {
+                            egui_phosphor::regular::SCROLL
+                        },
+                        date,
+                        if entry.date.is_some() {
+                            relationship_kind_color(RelationshipGraphKind::Spouse)
+                        } else {
+                            war_text_muted()
+                        },
+                    );
+                });
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let pair = (entry.husband_id.clone(), entry.wife_id.clone());
@@ -3754,18 +3846,32 @@ fn shrine_child_card(
             );
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(&child.name).strong());
-                ui.label(
-                    egui::RichText::new(t.text_args(
-                        "shrine-child-row",
-                        &args([
-                            ("name", child.name.clone()),
-                            ("age", child.age_at(game.year).to_string()),
-                            ("status", officer_status_label(&child.status, t)),
-                            ("parents", shrine_parent_names(game, &child.id, t)),
-                        ]),
-                    ))
-                    .color(war_text_muted()),
-                );
+                ui.horizontal_wrapped(|ui| {
+                    shrine_badge(
+                        ui,
+                        egui_phosphor::regular::CLOCK,
+                        t.text_args(
+                            "shrine-chip-age",
+                            &args([("age", child.age_at(game.year).to_string())]),
+                        ),
+                        egui::Color32::from_rgb(120, 178, 211),
+                    );
+                    shrine_badge(
+                        ui,
+                        egui_phosphor::regular::USER_CHECK,
+                        officer_status_label(&child.status, t),
+                        shrine_status_color(&child.status),
+                    );
+                    shrine_badge(
+                        ui,
+                        egui_phosphor::regular::USERS_THREE,
+                        t.text_args(
+                            "shrine-chip-parents",
+                            &args([("parents", shrine_parent_names(game, &child.id, t))]),
+                        ),
+                        war_text_muted(),
+                    );
+                });
             });
         });
     });
@@ -3796,17 +3902,32 @@ fn shrine_heir_candidate_row(
             );
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new(&officer.name).strong());
-                ui.label(
-                    egui::RichText::new(t.text_args(
-                        "shrine-heir-candidate",
-                        &args([
-                            ("name", officer.name.clone()),
-                            ("age", officer.age_at(game.year).to_string()),
-                            ("loyalty", officer.loyalty.to_string()),
-                        ]),
-                    ))
-                    .color(war_text_muted()),
-                );
+                ui.horizontal_wrapped(|ui| {
+                    shrine_badge(
+                        ui,
+                        egui_phosphor::regular::CLOCK,
+                        t.text_args(
+                            "shrine-chip-age",
+                            &args([("age", officer.age_at(game.year).to_string())]),
+                        ),
+                        egui::Color32::from_rgb(120, 178, 211),
+                    );
+                    shrine_badge(
+                        ui,
+                        egui_phosphor::regular::MEDAL,
+                        t.text_args(
+                            "shrine-chip-loyalty",
+                            &args([("loyalty", officer.loyalty.to_string())]),
+                        ),
+                        war_gold(),
+                    );
+                    shrine_badge(
+                        ui,
+                        egui_phosphor::regular::USER_CHECK,
+                        officer_status_label(&officer.status, t),
+                        shrine_status_color(&officer.status),
+                    );
+                });
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if square_icon_button(
@@ -3832,21 +3953,25 @@ fn shrine_selectable_officer_card(
     selected: bool,
 ) -> egui::Response {
     let label = format!(
-        "{}  {}",
+        "{}  {}   {} {}   {} {}   {} {}",
         if selected {
             egui_phosphor::regular::SEAL_CHECK
         } else {
             egui_phosphor::regular::USER
         },
+        officer.name,
+        egui_phosphor::regular::CLOCK,
         t.text_args(
-            "shrine-officer-summary",
-            &args([
-                ("name", officer.name.clone()),
-                ("age", officer.age_at(game.year).to_string()),
-                ("status", officer_status_label(&officer.status, t)),
-                ("loyalty", officer.loyalty.to_string()),
-            ]),
-        )
+            "shrine-chip-age",
+            &args([("age", officer.age_at(game.year).to_string())]),
+        ),
+        egui_phosphor::regular::MEDAL,
+        t.text_args(
+            "shrine-chip-loyalty",
+            &args([("loyalty", officer.loyalty.to_string())]),
+        ),
+        egui_phosphor::regular::USER_CHECK,
+        officer_status_label(&officer.status, t),
     );
     ui.add_sized(
         egui::vec2(ui.available_width(), 36.0),
@@ -3855,7 +3980,12 @@ fn shrine_selectable_officer_card(
         } else {
             war_text()
         }))
-        .selected(selected),
+        .selected(selected)
+        .fill(if selected {
+            egui::Color32::from_rgba_unmultiplied(84, 54, 30, 190)
+        } else {
+            egui::Color32::from_rgba_unmultiplied(38, 31, 23, 120)
+        }),
     )
 }
 
