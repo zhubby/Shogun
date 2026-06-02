@@ -67,7 +67,7 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
         let pool = open_pool(&path).await;
         assert_eq!(
             applied_sqlx_migration_versions(&pool).await,
-            [1, 2, 3, 4, 5, 6, 7, 8]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9]
         );
 
         let fk_rows = sqlx::query("PRAGMA foreign_key_check")
@@ -159,6 +159,18 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
             .await,
             1
         );
+        let zhang_daoling = sqlx::query(
+            "SELECT name, biography
+             FROM officers
+             WHERE id = 'ctk_5f20_9053_9675'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(zhang_daoling.get::<String, _>("name"), "张道陵");
+        assert!(zhang_daoling
+            .get::<String, _>("biography")
+            .contains("初名张陵"));
         assert_eq!(
             query_count_sql(
                 &pool,
@@ -293,7 +305,7 @@ fn open_or_create_creates_database_and_runs_initial_migration() {
         let pool = open_pool(&path).await;
         assert_eq!(
             applied_sqlx_migration_versions(&pool).await,
-            [1, 2, 3, 4, 5, 6, 7, 8]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9]
         );
         pool.close().await;
     });
@@ -337,6 +349,23 @@ fn officer_profiles_include_gender_biography_sources_and_relationships() {
     let lady_gan = catalog.officer_profile("lady_gan").unwrap().unwrap();
     assert_eq!(lady_gan.gender, OfficerGender::Female);
     assert!(lady_gan.biography.contains("刘禅生母"));
+}
+
+#[test]
+fn officer_profiles_bulk_load_tags_and_relationships() {
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
+
+    let profiles = catalog.officer_profiles().unwrap();
+    let liu_bei = profiles
+        .iter()
+        .find(|profile| profile.id == "liu_bei")
+        .unwrap();
+
+    assert!(liu_bei.tags.iter().any(|tag| tag == "role:ruler"));
+    assert!(liu_bei.relationships.iter().any(|relationship| {
+        relationship.kind == OfficerRelationshipKind::SwornSibling
+            && relationship.target_id == "guan_yu"
+    }));
 }
 
 #[test]

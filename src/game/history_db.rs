@@ -441,9 +441,13 @@ impl OfficerCatalog for SqliteHistoricalCatalog {
                 .into_iter()
                 .map(officer_profile_from_row)
                 .collect::<Result<Vec<_>, _>>()?;
+            let mut tags_by_officer = officer_tag_ids_by_officer(&self.pool).await?;
+            let mut relationships_by_officer = officer_relationships_by_officer(&self.pool).await?;
             for profile in &mut profiles {
-                profile.tags = officer_tag_ids(&self.pool, &profile.id).await?;
-                profile.relationships = officer_relationships(&self.pool, &profile.id).await?;
+                profile.tags = tags_by_officer.remove(&profile.id).unwrap_or_default();
+                profile.relationships = relationships_by_officer
+                    .remove(&profile.id)
+                    .unwrap_or_default();
             }
             Ok(profiles)
         })
@@ -894,6 +898,30 @@ async fn officer_relationships(
     rows.into_iter().map(relationship_from_row).collect()
 }
 
+async fn officer_relationships_by_officer(
+    pool: &SqlitePool,
+) -> Result<BTreeMap<OfficerId, Vec<OfficerRelationship>>, HistoryDbError> {
+    let rows = sqlx::query(
+        "SELECT r.source_officer_id, r.target_officer_id, target.name AS target_name,
+                r.relationship_kind, r.confidence, r.notes, r.source
+         FROM officer_relationships r
+         JOIN officers target ON target.id = r.target_officer_id
+         ORDER BY r.source_officer_id, r.relationship_kind, target.name",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(HistoryDbError::Sqlx)?;
+    let mut relationships_by_officer = BTreeMap::new();
+    for row in rows {
+        let source_officer_id = row.get("source_officer_id");
+        relationships_by_officer
+            .entry(source_officer_id)
+            .or_insert_with(Vec::new)
+            .push(relationship_from_row(row)?);
+    }
+    Ok(relationships_by_officer)
+}
+
 async fn officer_tag_ids(
     pool: &SqlitePool,
     officer_id: &str,
@@ -910,6 +938,29 @@ async fn officer_tag_ids(
     .await
     .map_err(HistoryDbError::Sqlx)?;
     Ok(rows.into_iter().map(|row| row.get("tag_id")).collect())
+}
+
+async fn officer_tag_ids_by_officer(
+    pool: &SqlitePool,
+) -> Result<BTreeMap<OfficerId, Vec<String>>, HistoryDbError> {
+    let rows = sqlx::query(
+        "SELECT t.officer_id, t.tag_id
+         FROM officer_tags t
+         JOIN officer_tag_definitions d ON d.id = t.tag_id
+         ORDER BY t.officer_id, d.category, d.sort_order, d.id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(HistoryDbError::Sqlx)?;
+    let mut tags_by_officer = BTreeMap::new();
+    for row in rows {
+        let officer_id = row.get("officer_id");
+        tags_by_officer
+            .entry(officer_id)
+            .or_insert_with(Vec::new)
+            .push(row.get("tag_id"));
+    }
+    Ok(tags_by_officer)
 }
 
 async fn officer_tag_definitions(
