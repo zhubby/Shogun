@@ -1,6 +1,7 @@
 mod chrome;
 mod city_list;
 mod events;
+mod faction_overview;
 mod map_overlays;
 mod officer_browser;
 mod officer_common;
@@ -55,6 +56,7 @@ pub(super) fn in_game_hud(
     city_list::city_drawer_hud(ctx, ui_state, t, screen);
     save_report::report_hud(ctx, ui_state, t, screen);
     chrome::bottom_map_actions_hud(ctx, ui_state, t);
+    faction_overview::faction_overview_hud(ctx, ui_state, t, screen);
     officer_browser::officer_browser_hud(ctx, ui_state, t, screen);
     officer_browser::retainer_hud(ctx, ui_state, t, screen);
     shrine::shrine_hud(ctx, ui_state, t, screen);

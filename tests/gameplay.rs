@@ -710,13 +710,13 @@ fn technology_research_pays_full_cost_up_front() {
     let mut game = sample_game();
     let before_total = faction_total_gold(&game, "liu_bei");
 
-    let outcome = start_research(&mut game, "liu_bei", TechnologyId::MilitiaDrill).unwrap();
+    let outcome = start_research(&mut game, "liu_bei", "militia_drill").unwrap();
 
     assert_eq!(outcome.cost_paid, 90);
     assert_eq!(faction_total_gold(&game, "liu_bei"), before_total - 90);
     let state = faction_technology_state(&game, "liu_bei").unwrap();
-    assert_eq!(state.active, Some(TechnologyId::MilitiaDrill));
-    assert!(state.funded.contains(&TechnologyId::MilitiaDrill));
+    assert_eq!(state.active.as_deref(), Some("militia_drill"));
+    assert!(state.funded.contains("militia_drill"));
 }
 
 #[test]
@@ -730,7 +730,7 @@ fn technology_research_rejects_insufficient_gold_without_progress() {
         city.gold = 0;
     }
 
-    let result = start_research(&mut game, "liu_bei", TechnologyId::MilitiaDrill);
+    let result = start_research(&mut game, "liu_bei", "militia_drill");
 
     assert!(matches!(
         result,
@@ -748,37 +748,40 @@ fn technology_research_rejects_insufficient_gold_without_progress() {
 #[test]
 fn funded_technology_can_resume_without_repaying() {
     let mut game = sample_game();
-    start_research(&mut game, "liu_bei", TechnologyId::MilitiaDrill).unwrap();
-    start_research(&mut game, "liu_bei", TechnologyId::ArsenalLogistics).unwrap();
+    start_research(&mut game, "liu_bei", "militia_drill").unwrap();
+    start_research(&mut game, "liu_bei", "arsenal_logistics").unwrap();
     let after_two_projects = faction_total_gold(&game, "liu_bei");
 
-    let outcome = start_research(&mut game, "liu_bei", TechnologyId::MilitiaDrill).unwrap();
+    let outcome = start_research(&mut game, "liu_bei", "militia_drill").unwrap();
 
     assert!(outcome.resumed);
     assert_eq!(outcome.cost_paid, 0);
     assert_eq!(faction_total_gold(&game, "liu_bei"), after_two_projects);
     assert_eq!(
-        faction_technology_state(&game, "liu_bei").unwrap().active,
-        Some(TechnologyId::MilitiaDrill)
+        faction_technology_state(&game, "liu_bei")
+            .unwrap()
+            .active
+            .as_deref(),
+        Some("militia_drill")
     );
 }
 
 #[test]
 fn technology_completes_after_required_turns() {
     let mut game = sample_game();
-    start_research(&mut game, "liu_bei", TechnologyId::MilitiaDrill).unwrap();
+    start_research(&mut game, "liu_bei", "militia_drill").unwrap();
 
     resolve_command_batch(&mut game, Vec::new());
     assert!(
         !faction_technology_state(&game, "liu_bei")
             .unwrap()
             .completed
-            .contains(&TechnologyId::MilitiaDrill)
+            .contains("militia_drill")
     );
     let report = resolve_command_batch(&mut game, Vec::new());
 
     let state = faction_technology_state(&game, "liu_bei").unwrap();
-    assert!(state.completed.contains(&TechnologyId::MilitiaDrill));
+    assert!(state.completed.contains("militia_drill"));
     assert!(state.active.is_none());
     assert!(
         report
@@ -792,7 +795,7 @@ fn technology_completes_after_required_turns() {
 fn technology_prerequisites_are_enforced() {
     let mut game = sample_game();
 
-    let result = start_research(&mut game, "liu_bei", TechnologyId::IronWeapons);
+    let result = start_research(&mut game, "liu_bei", "iron_weapons");
 
     assert!(matches!(
         result,
@@ -805,9 +808,9 @@ fn completed_technology_affects_training_recruitment_and_income() {
     let mut game = sample_game();
     {
         let state = faction_technology_state_mut(&mut game, "liu_bei");
-        state.completed.insert(TechnologyId::MilitiaDrill);
-        state.completed.insert(TechnologyId::ArsenalLogistics);
-        state.completed.insert(TechnologyId::HouseholdRegisters);
+        state.completed.insert("militia_drill".to_string());
+        state.completed.insert("arsenal_logistics".to_string());
+        state.completed.insert("household_registers".to_string());
     }
 
     let discounted = recruit_cost_for_faction(&game, "liu_bei", 500);
@@ -830,13 +833,178 @@ fn completed_scout_roads_reduces_travel_months() {
     let baseline = game.travel_months_between("jiangxia", "jianye").unwrap();
     faction_technology_state_mut(&mut game, "sun_quan")
         .completed
-        .insert(TechnologyId::ScoutRoads);
+        .insert("scout_roads".to_string());
     let distance = game.road_distance_li("jiangxia", "jianye").unwrap();
 
     assert_eq!(
         travel_months_for_faction(&game, "sun_quan", distance),
         baseline.saturating_sub(1).max(1)
     );
+}
+
+#[test]
+fn completed_domestic_technologies_affect_development_and_research_cost() {
+    let mut baseline = sample_game();
+    let mut boosted = sample_game();
+    {
+        let state = faction_technology_state_mut(&mut boosted, "liu_bei");
+        state.completed.insert("irrigation_survey".to_string());
+        state.completed.insert("commandery_reviews".to_string());
+        state.completed.insert("ministry_of_finance".to_string());
+    }
+
+    assert_eq!(
+        effective_technology_cost(&baseline, "liu_bei", "militia_drill").unwrap(),
+        90
+    );
+    assert_eq!(
+        effective_technology_cost(&boosted, "liu_bei", "militia_drill").unwrap(),
+        81
+    );
+
+    let baseline_before = baseline.cities["pingyuan"].agriculture;
+    queue_player_command(
+        &mut baseline,
+        command(
+            "pingyuan",
+            "liu_bei",
+            CommandKind::Develop {
+                focus: DevelopmentFocus::Agriculture,
+            },
+        ),
+    )
+    .unwrap();
+    let commands = baseline.pending_commands.clone();
+    resolve_command_batch(&mut baseline, commands);
+    let baseline_gain = baseline.cities["pingyuan"].agriculture - baseline_before;
+
+    let boosted_before = boosted.cities["pingyuan"].agriculture;
+    queue_player_command(
+        &mut boosted,
+        command(
+            "pingyuan",
+            "liu_bei",
+            CommandKind::Develop {
+                focus: DevelopmentFocus::Agriculture,
+            },
+        ),
+    )
+    .unwrap();
+    let commands = boosted.pending_commands.clone();
+    resolve_command_batch(&mut boosted, commands);
+    let boosted_gain = boosted.cities["pingyuan"].agriculture - boosted_before;
+
+    assert!(boosted_gain >= baseline_gain + 5);
+}
+
+#[test]
+fn completed_military_technologies_affect_siege_pressure_and_losses() {
+    let mut baseline = sample_game();
+    let mut boosted = sample_game();
+    for game in [&mut baseline, &mut boosted] {
+        let source = game.cities.get_mut("xiapi").unwrap();
+        source.troops = TroopPool::new(10_000, 0, 0);
+        source.training = 80;
+        source.food = 5_000;
+        source.facilities.clear();
+        let target = game.cities.get_mut("xuchang").unwrap();
+        target.troops = TroopPool::new(0, 24_000, 0);
+        target.training = 80;
+        target.defense = 160;
+        target.order = 80;
+        target.governor_id = None;
+        target.facilities.clear();
+    }
+    {
+        let state = faction_technology_state_mut(&mut boosted, "liu_bei");
+        state.completed.insert("iron_weapons".to_string());
+        state.completed.insert("gate_fire_tactics".to_string());
+        state.completed.insert("supply_escort".to_string());
+    }
+
+    for game in [&mut baseline, &mut boosted] {
+        queue_player_command(
+            game,
+            command(
+                "xiapi",
+                "zhang_fei",
+                expedition("xuchang", "zhang_fei", TroopKind::Infantry, 3_000),
+            ),
+        )
+        .unwrap();
+        let commands = game.pending_commands.clone();
+        resolve_command_batch(game, commands);
+        resolve_until_arrival(game, "xiapi", "xuchang");
+    }
+
+    let baseline_movement = baseline
+        .army_movements
+        .iter()
+        .find(|movement| movement.target_city_id == "xuchang")
+        .unwrap();
+    let boosted_movement = boosted
+        .army_movements
+        .iter()
+        .find(|movement| movement.target_city_id == "xuchang")
+        .unwrap();
+
+    assert!(boosted.cities["xuchang"].troops.total() < baseline.cities["xuchang"].troops.total());
+    assert!(boosted_movement.troops.total() > baseline_movement.troops.total());
+}
+
+#[test]
+fn strict_discipline_converts_more_attacker_losses_to_wounded() {
+    let mut baseline = sample_game();
+    let mut disciplined = sample_game();
+    for game in [&mut baseline, &mut disciplined] {
+        let source = game.cities.get_mut("xiapi").unwrap();
+        source.troops = TroopPool::new(8_000, 0, 0);
+        source.training = 70;
+        source.food = 5_000;
+        source.facilities.clear();
+        let target = game.cities.get_mut("xuchang").unwrap();
+        target.troops = TroopPool::new(0, 20_000, 0);
+        target.training = 85;
+        target.defense = 150;
+        target.order = 80;
+        target.governor_id = None;
+        target.facilities.clear();
+    }
+    faction_technology_state_mut(&mut disciplined, "liu_bei")
+        .completed
+        .insert("strict_discipline".to_string());
+
+    for game in [&mut baseline, &mut disciplined] {
+        queue_player_command(
+            game,
+            command(
+                "xiapi",
+                "zhang_fei",
+                expedition("xuchang", "zhang_fei", TroopKind::Infantry, 3_000),
+            ),
+        )
+        .unwrap();
+        let commands = game.pending_commands.clone();
+        resolve_command_batch(game, commands);
+        resolve_until_arrival(game, "xiapi", "xuchang");
+    }
+
+    let baseline_movement = baseline
+        .army_movements
+        .iter()
+        .find(|movement| movement.target_city_id == "xuchang")
+        .unwrap();
+    let disciplined_movement = disciplined
+        .army_movements
+        .iter()
+        .find(|movement| movement.target_city_id == "xuchang")
+        .unwrap();
+
+    assert_eq!(
+        disciplined_movement.troops.total(),
+        baseline_movement.troops.total()
+    );
+    assert!(disciplined_movement.wounded_troops.total() > baseline_movement.wounded_troops.total());
 }
 
 #[test]
@@ -2308,22 +2476,23 @@ fn save_load_preserves_technology_state() {
     let temp = tempfile::tempdir().unwrap();
     let manager = SaveManager::new(temp.path());
     let mut game = sample_game();
-    start_research(&mut game, "liu_bei", TechnologyId::MilitiaDrill).unwrap();
+    start_research(&mut game, "liu_bei", "militia_drill").unwrap();
     resolve_command_batch(&mut game, Vec::new());
 
     manager.save_slot("technology", "科技", &game).unwrap();
     let loaded = manager.load_slot("technology").unwrap();
     let state = faction_technology_state(&loaded, "liu_bei").unwrap();
 
-    assert_eq!(state.active, Some(TechnologyId::MilitiaDrill));
-    assert!(state.funded.contains(&TechnologyId::MilitiaDrill));
-    assert_eq!(technology_progress(state, TechnologyId::MilitiaDrill), 1);
+    assert_eq!(state.active.as_deref(), Some("militia_drill"));
+    assert!(state.funded.contains("militia_drill"));
+    assert_eq!(technology_progress(state, "militia_drill"), 1);
+    assert_eq!(loaded.technology_catalog.len(), 28);
 }
 
 #[test]
 fn technology_completion_records_player_event() {
     let mut game = sample_game();
-    start_research(&mut game, "liu_bei", TechnologyId::MilitiaDrill).unwrap();
+    start_research(&mut game, "liu_bei", "militia_drill").unwrap();
     resolve_command_batch(&mut game, Vec::new());
     resolve_command_batch(&mut game, Vec::new());
 

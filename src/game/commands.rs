@@ -172,7 +172,7 @@ fn begin_ai_research(state: &mut GameState) {
         let Some(technology_id) = choose_ai_research(state, &faction_id) else {
             continue;
         };
-        let _ = start_research(state, &faction_id, technology_id);
+        let _ = start_research(state, &faction_id, &technology_id);
     }
 }
 
@@ -183,7 +183,13 @@ fn advance_research_and_report(state: &mut GameState, report: &mut TurnReport) {
             .get(&completed.faction_id)
             .map(|faction| faction.name.as_str())
             .unwrap_or(completed.faction_id.as_str());
-        let spec = technology_spec(completed.technology_id);
+        let Some(spec) = state.technology_catalog.spec(&completed.technology_id) else {
+            report.warning(format!(
+                "{faction_name} 完成未知太学研习：{}",
+                completed.technology_id
+            ));
+            continue;
+        };
         report.info(format!("{faction_name} 完成太学研习：{}", spec.name));
         if completed.faction_id == state.player_faction_id {
             record_game_event(
@@ -1316,7 +1322,10 @@ fn resolve_expedition_siege_round(
     );
 
     let attacker_loss_pool = movement.troops.loss_pool(attacker_loss);
-    let attacker_wounded = wounded_pool_from_loss(attacker_loss_pool);
+    let attacker_wounded = wounded_pool_from_loss_with_bonus(
+        attacker_loss_pool,
+        attacker_bonuses.retreat_survival_percent,
+    );
     movement.troops.saturating_sub_pool(attacker_loss_pool);
     movement.wounded_troops.add_pool(attacker_wounded);
     reduce_assignments_by_loss(&mut movement.assignments, attacker_loss_pool);
@@ -1465,9 +1474,14 @@ fn apply_loss_reduction(loss: u32, reduction_percent: i32) -> u32 {
 }
 
 fn wounded_pool_from_loss(loss_pool: TroopPool) -> TroopPool {
+    wounded_pool_from_loss_with_bonus(loss_pool, 0)
+}
+
+fn wounded_pool_from_loss_with_bonus(loss_pool: TroopPool, bonus_percent: i32) -> TroopPool {
+    let wounded_percent = (WOUNDED_PERCENT as i32 + bonus_percent).clamp(0, 95) as u32;
     let wounded_total = loss_pool
         .total()
-        .saturating_mul(WOUNDED_PERCENT)
+        .saturating_mul(wounded_percent)
         .saturating_add(50)
         / 100;
     loss_pool.loss_pool(wounded_total)

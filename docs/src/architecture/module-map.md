@@ -8,7 +8,7 @@
 | **commands** | `commands.rs` | 命令验证、队列、月度结算（`queue_player_command`、`resolve_command_batch`）、战斗、收入、生命事件 |
 | **city** | `city.rs` | `City`、`CityProfile`、`FacilityKind`（12 种设施）、城池等级、经济效果计算 |
 | **officer** | `officer.rs` | `Officer`、`OfficerStats`、官职系统（32 个官职）、忠诚度、武将关系、生命阶段 |
-| **technology** | `technology.rs` | `TechnologyId`（27 项科技）、军事/内政双分支、研究进度、科技加成 |
+| **technology** | `technology.rs` | 字符串 `TechnologyId`、SQLite 加载的 `TechnologyCatalog`、军事/内政双分支、研究进度、数据驱动科技加成 |
 | **ai** | `ai.rs` | `AiProvider` trait、`AiDecisionRequest/Response`、`RuleBasedAiProvider`、`MockAiProvider` |
 | **save** | `save.rs` | `SaveManager`、存档槽位、版本化序列化、`ProjectDirs` 路径 |
 | **history_db** | `history_db.rs` | `HistoricalCatalog` trait、`SqliteHistoricalCatalog`、`LifeEvent`、迁移管理、剧本构建 |

@@ -35,6 +35,10 @@ pub(super) struct GameUiState {
     pub(super) map_boundary_view_cache: MapBoundaryViewCache,
     pub(super) city_drawer_open: bool,
     pub(super) city_list_open: bool,
+    pub(super) faction_overview_open: bool,
+    pub(super) faction_overview_sort: FactionOverviewSort,
+    pub(super) selected_faction_overview_id: Option<FactionId>,
+    pub(super) faction_detail_id: Option<FactionId>,
     pub(super) officer_browser_open: bool,
     pub(super) officer_browser_selected_id: Option<OfficerId>,
     pub(super) officer_browser_filters: OfficerBrowserFilters,
@@ -184,6 +188,10 @@ impl GameUiState {
             map_boundary_view_cache: MapBoundaryViewCache::default(),
             city_drawer_open: false,
             city_list_open: false,
+            faction_overview_open: false,
+            faction_overview_sort: FactionOverviewSort::default(),
+            selected_faction_overview_id: None,
+            faction_detail_id: None,
             officer_browser_open: false,
             officer_browser_selected_id: None,
             officer_browser_filters: OfficerBrowserFilters::default(),
@@ -202,7 +210,7 @@ impl GameUiState {
             selected_event_id: None,
             event_message: String::new(),
             selected_technology_branch: TechnologyBranch::Military,
-            selected_technology_id: TechnologyId::MilitiaDrill,
+            selected_technology_id: String::new(),
             retainer_filters: OfficerBrowserFilters::default(),
             reports_open: true,
             turn_summary_open: false,
@@ -433,6 +441,53 @@ pub(super) enum CityPanelTab {
     Domestic,
     Military,
     Diplomacy,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct FactionOverviewSort {
+    pub(super) column: FactionOverviewSortColumn,
+    pub(super) descending: bool,
+}
+
+impl FactionOverviewSort {
+    pub(super) fn activate(&mut self, column: FactionOverviewSortColumn) {
+        if self.column == column {
+            self.descending = !self.descending;
+        } else {
+            self.column = column;
+            self.descending = column.default_descending();
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum FactionOverviewSortColumn {
+    Faction,
+    #[default]
+    Cities,
+    Officers,
+    Gold,
+    Food,
+    Materials,
+    Troops,
+    Population,
+    Wounded,
+}
+
+impl FactionOverviewSortColumn {
+    pub(super) const fn default_descending(self) -> bool {
+        !matches!(self, Self::Faction)
+    }
+}
+
+impl Default for FactionOverviewSort {
+    fn default() -> Self {
+        let column = FactionOverviewSortColumn::Cities;
+        Self {
+            column,
+            descending: column.default_descending(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

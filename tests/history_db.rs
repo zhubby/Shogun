@@ -67,7 +67,7 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
         let pool = open_pool(&path).await;
         assert_eq!(
             applied_sqlx_migration_versions(&pool).await,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
         );
 
         let fk_rows = sqlx::query("PRAGMA foreign_key_check")
@@ -97,6 +97,33 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
         assert!(query_count(&pool, "officer_life_events").await >= officer_count);
         assert_eq!(query_count(&pool, "dynamic_event_templates").await, 42);
         assert_eq!(query_count(&pool, "dynamic_event_choices").await, 84);
+        assert_eq!(query_count(&pool, "technologies").await, 28);
+        assert_eq!(query_count(&pool, "technology_prerequisites").await, 34);
+        assert_eq!(query_count(&pool, "technology_effects").await, 56);
+        assert_eq!(
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count
+                 FROM technologies t
+                 WHERE NOT EXISTS (
+                     SELECT 1
+                     FROM technology_effects e
+                     WHERE e.technology_id = t.id
+                 )",
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count
+                 FROM technologies
+                 WHERE branch NOT IN ('Military', 'Domestic')",
+            )
+            .await,
+            0
+        );
         assert_eq!(
             query_count_sql(
                 &pool,
@@ -359,6 +386,11 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
             "idx_dynamic_event_choices_template",
             "idx_dynamic_event_choice_requirements_choice",
             "idx_dynamic_event_choice_effects_choice",
+            "idx_technologies_branch",
+            "idx_technologies_ai_priority",
+            "idx_technology_prerequisites_technology",
+            "idx_technology_prerequisites_prerequisite",
+            "idx_technology_effects_technology",
         ] {
             assert!(indexes.contains(index), "missing index {index}");
         }
@@ -379,10 +411,56 @@ fn open_or_create_creates_database_and_runs_initial_migration() {
         let pool = open_pool(&path).await;
         assert_eq!(
             applied_sqlx_migration_versions(&pool).await,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
         );
         pool.close().await;
     });
+}
+
+#[test]
+fn technology_catalog_loads_seed_tree_effects_and_ai_priority() {
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
+    let technologies = catalog.technology_catalog().unwrap();
+
+    assert_eq!(technologies.len(), 28);
+    assert_eq!(
+        technologies
+            .specs_for_branch(TechnologyBranch::Military)
+            .count(),
+        14
+    );
+    assert_eq!(
+        technologies
+            .specs_for_branch(TechnologyBranch::Domestic)
+            .count(),
+        14
+    );
+    assert_eq!(
+        technologies
+            .first_id_for_branch(TechnologyBranch::Military)
+            .map(String::as_str),
+        Some("militia_drill")
+    );
+    assert_eq!(
+        technologies
+            .ai_research_specs()
+            .next()
+            .map(|spec| spec.id.as_str()),
+        Some("household_registers")
+    );
+
+    let iron_weapons = technologies.spec("iron_weapons").unwrap();
+    assert_eq!(iron_weapons.name, "铁制兵器");
+    assert_eq!(
+        iron_weapons.prerequisites,
+        vec!["arsenal_logistics".to_string()]
+    );
+    assert!(iron_weapons.effects.iter().any(|effect| {
+        effect.kind == TechnologyEffectKind::AttackPercent && effect.amount == 4
+    }));
+
+    let game = catalog.build_game("ad200", "liu_bei").unwrap();
+    assert_eq!(game.technology_catalog.len(), 28);
 }
 
 #[test]

@@ -1,4 +1,4 @@
-use super::history_db::SqliteHistoricalCatalog;
+use super::history_db::{HistoricalCatalog, SqliteHistoricalCatalog};
 use super::ids::FactionId;
 use super::model::*;
 use super::officer::OfficerCatalog;
@@ -152,6 +152,7 @@ impl SaveManager {
         }
         let mut state = envelope.state;
         hydrate_officer_tag_metadata(&mut state);
+        hydrate_technology_catalog(&mut state);
         normalize_personnel_state(&mut state);
         Ok(state)
     }
@@ -212,6 +213,18 @@ fn hydrate_officer_tag_metadata(state: &mut GameState) {
         && let Ok(aliases) = catalog.officer_tag_aliases()
     {
         state.officer_tag_aliases = aliases.into_iter().collect();
+    }
+}
+
+fn hydrate_technology_catalog(state: &mut GameState) {
+    if !state.technology_catalog.is_empty() {
+        return;
+    }
+    let Ok(catalog) = SqliteHistoricalCatalog::open_default() else {
+        return;
+    };
+    if let Ok(technology_catalog) = catalog.technology_catalog() {
+        state.technology_catalog = technology_catalog;
     }
 }
 

@@ -1,5 +1,6 @@
 use crate::game::*;
 use bevy_egui::egui;
+use std::collections::BTreeSet;
 
 use super::super::i18n::{Translator, args};
 use super::super::labels::technology_branch_label;
@@ -47,12 +48,21 @@ fn technology_panel(
         ui.label(t.text("message-no-game-state"));
         return;
     };
+    if game.technology_catalog.is_empty() {
+        ui.label(t.text("technology-catalog-empty"));
+        return;
+    }
     let branch = ui_state.selected_technology_branch;
-    if technology_spec(ui_state.selected_technology_id).branch != branch {
-        ui_state.selected_technology_id = technology_specs_for_branch(branch)
-            .next()
-            .map(|spec| spec.id)
-            .unwrap_or(TechnologyId::MilitiaDrill);
+    if !game
+        .technology_catalog
+        .spec(&ui_state.selected_technology_id)
+        .is_some_and(|spec| spec.branch == branch)
+    {
+        ui_state.selected_technology_id = game
+            .technology_catalog
+            .first_id_for_branch(branch)
+            .cloned()
+            .unwrap_or_default();
     }
 
     ui.horizontal(|ui| {
@@ -65,10 +75,11 @@ fn technology_panel(
                 .clicked()
             {
                 ui_state.selected_technology_branch = branch;
-                ui_state.selected_technology_id = technology_specs_for_branch(branch)
-                    .next()
-                    .map(|spec| spec.id)
-                    .unwrap_or(ui_state.selected_technology_id);
+                ui_state.selected_technology_id = game
+                    .technology_catalog
+                    .first_id_for_branch(branch)
+                    .cloned()
+                    .unwrap_or_else(|| ui_state.selected_technology_id.clone());
             }
         }
     });
@@ -111,14 +122,25 @@ fn technology_tree(
         .max_height(max_height.max(320.0))
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            for spec in technology_specs_for_branch(ui_state.selected_technology_branch) {
+            for spec in game
+                .technology_catalog
+                .specs_for_branch(ui_state.selected_technology_branch)
+            {
                 let selected = ui_state.selected_technology_id == spec.id;
                 let status = technology_node_status(game, faction_state, spec);
-                let response = technology_tree_node(ui, spec, selected, status, faction_state, t);
+                let response = technology_tree_node(
+                    ui,
+                    &game.technology_catalog,
+                    spec,
+                    selected,
+                    status,
+                    faction_state,
+                    t,
+                );
                 if response.clicked() {
-                    ui_state.selected_technology_id = spec.id;
+                    ui_state.selected_technology_id = spec.id.clone();
                 }
-                response.on_hover_text(spec.effect);
+                response.on_hover_text(spec.effect.as_str());
                 ui.add_space(7.0);
             }
         });
@@ -126,6 +148,7 @@ fn technology_tree(
 
 fn technology_tree_node(
     ui: &mut egui::Ui,
+    catalog: &TechnologyCatalog,
     spec: &TechnologySpec,
     selected: bool,
     status: TechnologyNodeStatus,
@@ -133,7 +156,7 @@ fn technology_tree_node(
     t: &Translator,
 ) -> egui::Response {
     const ROW_HEIGHT: f32 = 48.0;
-    let depth = technology_depth(spec);
+    let depth = technology_depth(spec, catalog);
     let indent = 18.0 + depth as f32 * 34.0;
     let available = ui.available_width().max(360.0);
     let (rect, response) =
@@ -193,7 +216,7 @@ fn technology_tree_node(
     painter.text(
         egui::pos2(text_left, rect.top() + 6.0),
         egui::Align2::LEFT_TOP,
-        spec.name,
+        spec.name.as_str(),
         egui::FontId::proportional(18.0),
         if status == TechnologyNodeStatus::Locked {
             war_text_muted()
@@ -203,7 +226,7 @@ fn technology_tree_node(
     );
 
     let progress = faction_state
-        .map(|state| technology_progress(state, spec.id))
+        .map(|state| technology_progress(state, &spec.id))
         .unwrap_or_default();
     let meta = if status == TechnologyNodeStatus::Active {
         t.text_args(
@@ -262,19 +285,27 @@ fn technology_detail(
     t: &Translator,
 ) {
     let faction_id = game.player_faction_id.clone();
-    let spec = technology_spec(ui_state.selected_technology_id);
+    let Some(spec) = game
+        .technology_catalog
+        .spec(&ui_state.selected_technology_id)
+    else {
+        ui.label(t.text("technology-catalog-empty"));
+        return;
+    };
     let faction_state = faction_technology_state(game, &faction_id);
     let progress = faction_state
-        .map(|state| technology_progress(state, spec.id))
+        .map(|state| technology_progress(state, &spec.id))
         .unwrap_or_default();
     let total_gold = faction_total_gold(game, &faction_id);
-    let cost = effective_technology_cost(game, &faction_id, spec.id);
-    let missing = missing_prerequisite_names(faction_state, spec.id);
+    let cost = effective_technology_cost(game, &faction_id, &spec.id).unwrap_or(spec.gold_cost);
+    let missing = missing_prerequisite_names(faction_state, &game.technology_catalog, &spec.id)
+        .unwrap_or_default();
     let is_completed = faction_state.is_some_and(|state| state.completed.contains(&spec.id));
     let is_funded = faction_state.is_some_and(|state| state.funded.contains(&spec.id));
-    let is_active = faction_state.is_some_and(|state| state.active == Some(spec.id));
+    let is_active =
+        faction_state.is_some_and(|state| state.active.as_deref() == Some(spec.id.as_str()));
 
-    ui.heading(egui::RichText::new(spec.name).color(war_gold()));
+    ui.heading(egui::RichText::new(spec.name.as_str()).color(war_gold()));
     ui.label(t.text_args(
         "technology-detail-meta",
         &args([
@@ -312,7 +343,10 @@ fn technology_detail(
             war_success(),
             t.text_args(
                 "technology-prerequisites",
-                &args([("names", prerequisite_names(spec).join("、"))]),
+                &args([(
+                    "names",
+                    prerequisite_names(spec, &game.technology_catalog).join("、"),
+                )]),
             ),
         );
     } else {
@@ -326,7 +360,7 @@ fn technology_detail(
     }
     ui.add_space(6.0);
     ui.label(t.text("technology-effect"));
-    ui.colored_label(war_text_muted(), spec.effect);
+    ui.colored_label(war_text_muted(), spec.effect.as_str());
     ui.separator();
 
     if is_completed {
@@ -355,7 +389,7 @@ fn technology_detail(
     }
     if is_funded {
         if ui.button(t.text("technology-continue-research")).clicked() {
-            start_player_research(ui_state, spec.id, t);
+            start_player_research(ui_state, spec.id.clone(), t);
         }
         return;
     }
@@ -374,7 +408,7 @@ fn technology_detail(
         return;
     }
     if ui.button(t.text("technology-start-research")).clicked() {
-        start_player_research(ui_state, spec.id, t);
+        start_player_research(ui_state, spec.id.clone(), t);
     }
 }
 
@@ -384,19 +418,23 @@ fn start_player_research(ui_state: &mut GameUiState, technology_id: TechnologyId
         return;
     };
     let faction_id = game.player_faction_id.clone();
-    let spec = technology_spec(technology_id);
-    match start_research(game, &faction_id, technology_id) {
+    let technology_name = game
+        .technology_catalog
+        .spec(&technology_id)
+        .map(|spec| spec.name.clone())
+        .unwrap_or_else(|| technology_id.clone());
+    match start_research(game, &faction_id, &technology_id) {
         Ok(outcome) if outcome.resumed => {
             ui_state.message = t.text_args(
                 "message-research-resumed",
-                &args([("name", spec.name.to_string())]),
+                &args([("name", technology_name)]),
             );
         }
         Ok(outcome) => {
             ui_state.message = t.text_args(
                 "message-research-started",
                 &args([
-                    ("name", spec.name.to_string()),
+                    ("name", technology_name),
                     ("gold", outcome.cost_paid.to_string()),
                 ]),
             );
@@ -433,17 +471,19 @@ fn technology_node_status(
     if faction_state.is_some_and(|state| state.completed.contains(&spec.id)) {
         return TechnologyNodeStatus::Completed;
     }
-    if faction_state.is_some_and(|state| state.active == Some(spec.id)) {
+    if faction_state.is_some_and(|state| state.active.as_deref() == Some(spec.id.as_str())) {
         return TechnologyNodeStatus::Active;
     }
     if faction_state.is_some_and(|state| state.funded.contains(&spec.id)) {
         return TechnologyNodeStatus::Funded;
     }
-    if !missing_prerequisite_names(faction_state, spec.id).is_empty() {
+    if missing_prerequisite_names(faction_state, &game.technology_catalog, &spec.id)
+        .is_ok_and(|missing| !missing.is_empty())
+    {
         return TechnologyNodeStatus::Locked;
     }
-    if faction_total_gold(game, &game.player_faction_id)
-        >= effective_technology_cost(game, &game.player_faction_id, spec.id)
+    if effective_technology_cost(game, &game.player_faction_id, &spec.id)
+        .is_ok_and(|cost| faction_total_gold(game, &game.player_faction_id) >= cost)
     {
         TechnologyNodeStatus::Available
     } else {
@@ -522,50 +562,68 @@ fn tree_line_color(status: TechnologyNodeStatus) -> egui::Color32 {
     }
 }
 
-fn technology_depth(spec: &TechnologySpec) -> usize {
-    spec.prerequisites
+fn technology_depth(spec: &TechnologySpec, catalog: &TechnologyCatalog) -> usize {
+    technology_depth_inner(spec, catalog, &mut BTreeSet::new())
+}
+
+fn technology_depth_inner(
+    spec: &TechnologySpec,
+    catalog: &TechnologyCatalog,
+    visited: &mut BTreeSet<TechnologyId>,
+) -> usize {
+    if !visited.insert(spec.id.clone()) {
+        return 0;
+    }
+    let depth = spec
+        .prerequisites
         .iter()
-        .map(|id| technology_depth(technology_spec(*id)) + 1)
+        .filter_map(|id| catalog.spec(id))
+        .map(|prerequisite| technology_depth_inner(prerequisite, catalog, visited) + 1)
         .max()
-        .unwrap_or_default()
+        .unwrap_or_default();
+    visited.remove(&spec.id);
+    depth
 }
 
 fn technology_icon(spec: &TechnologySpec) -> &'static str {
-    match spec.id {
-        TechnologyId::MilitiaDrill => egui_phosphor::regular::USERS,
-        TechnologyId::ArsenalLogistics => egui_phosphor::regular::STACK,
-        TechnologyId::ScoutRoads => egui_phosphor::regular::MAP_TRIFOLD,
-        TechnologyId::IronWeapons => egui_phosphor::regular::SWORD,
-        TechnologyId::StrictDiscipline => egui_phosphor::regular::FLAG,
-        TechnologyId::FortifiedGarrisons => egui_phosphor::regular::SHIELD,
-        TechnologyId::SupplyEscort => egui_phosphor::regular::BARN,
-        TechnologyId::CombinedArms => egui_phosphor::regular::ARROWS_OUT_CARDINAL,
-        TechnologyId::GateFireTactics => egui_phosphor::regular::FIRE,
-        TechnologyId::RotatingDefense => egui_phosphor::regular::ARROWS_CLOCKWISE,
-        TechnologyId::MilitaryGranaries => egui_phosphor::regular::WAREHOUSE,
-        TechnologyId::SiegeEngines => egui_phosphor::regular::HAMMER,
-        TechnologyId::OfficerMerit => egui_phosphor::regular::MEDAL,
-        TechnologyId::GrandCommandery => egui_phosphor::regular::CROWN,
-        TechnologyId::HouseholdRegisters => egui_phosphor::regular::IDENTIFICATION_CARD,
-        TechnologyId::IrrigationSurvey => egui_phosphor::regular::DROP,
-        TechnologyId::MarketRegisters => egui_phosphor::regular::COINS,
-        TechnologyId::GranarySystem => egui_phosphor::regular::BARN,
-        TechnologyId::PriceStabilization => egui_phosphor::regular::SCALES,
-        TechnologyId::ArtisanRegisters => egui_phosphor::regular::HAMMER,
-        TechnologyId::CanalRestoration => egui_phosphor::regular::WAVES,
-        TechnologyId::TradePasses => egui_phosphor::regular::BRIDGE,
-        TechnologyId::BureaucraticRecords => egui_phosphor::regular::SCROLL,
-        TechnologyId::EverNormalGranary => egui_phosphor::regular::WAREHOUSE,
-        TechnologyId::WorkshopGuilds => egui_phosphor::regular::GEAR,
-        TechnologyId::CommanderyReviews => egui_phosphor::regular::CLIPBOARD_TEXT,
-        TechnologyId::CanalTaxation => egui_phosphor::regular::BANK,
-        TechnologyId::MinistryOfFinance => egui_phosphor::regular::SEAL_CHECK,
+    match spec.icon_id.as_str() {
+        "users" => egui_phosphor::regular::USERS,
+        "stack" => egui_phosphor::regular::STACK,
+        "map_trifold" => egui_phosphor::regular::MAP_TRIFOLD,
+        "sword" => egui_phosphor::regular::SWORD,
+        "flag" => egui_phosphor::regular::FLAG,
+        "shield" => egui_phosphor::regular::SHIELD,
+        "barn" => egui_phosphor::regular::BARN,
+        "arrows_out_cardinal" => egui_phosphor::regular::ARROWS_OUT_CARDINAL,
+        "fire" => egui_phosphor::regular::FIRE,
+        "arrows_clockwise" => egui_phosphor::regular::ARROWS_CLOCKWISE,
+        "warehouse" => egui_phosphor::regular::WAREHOUSE,
+        "hammer" => egui_phosphor::regular::HAMMER,
+        "medal" => egui_phosphor::regular::MEDAL,
+        "crown" => egui_phosphor::regular::CROWN,
+        "identification_card" => egui_phosphor::regular::IDENTIFICATION_CARD,
+        "drop" => egui_phosphor::regular::DROP,
+        "coins" => egui_phosphor::regular::COINS,
+        "scales" => egui_phosphor::regular::SCALES,
+        "waves" => egui_phosphor::regular::WAVES,
+        "bridge" => egui_phosphor::regular::BRIDGE,
+        "scroll" => egui_phosphor::regular::SCROLL,
+        "gear" => egui_phosphor::regular::GEAR,
+        "clipboard_text" => egui_phosphor::regular::CLIPBOARD_TEXT,
+        "bank" => egui_phosphor::regular::BANK,
+        "seal_check" => egui_phosphor::regular::SEAL_CHECK,
+        _ => egui_phosphor::regular::CIRCLES_THREE_PLUS,
     }
 }
 
-fn prerequisite_names(spec: &TechnologySpec) -> Vec<&'static str> {
+fn prerequisite_names(spec: &TechnologySpec, catalog: &TechnologyCatalog) -> Vec<String> {
     spec.prerequisites
         .iter()
-        .map(|id| technology_spec(*id).name)
+        .map(|id| {
+            catalog
+                .spec(id)
+                .map(|spec| spec.name.clone())
+                .unwrap_or_else(|| id.clone())
+        })
         .collect()
 }

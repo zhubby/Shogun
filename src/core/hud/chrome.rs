@@ -118,6 +118,10 @@ pub(super) fn bottom_map_actions_hud(
                         ui_state.city_list_open = !ui_state.city_list_open;
                     }
 
+                    if ui.button(t.text("hud-factions")).clicked() {
+                        ui_state.faction_overview_open = !ui_state.faction_overview_open;
+                    }
+
                     if ui.button(t.text("hud-officers")).clicked() {
                         ui_state.officer_browser_open = !ui_state.officer_browser_open;
                     }

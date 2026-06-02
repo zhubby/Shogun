@@ -2,42 +2,38 @@
 
 科技系统为势力提供长期成长路径，分为军事和内政两个分支。
 
-## 科技结构
+## 科技目录
 
-```rust
-pub struct TechnologySpec {
-    pub id: TechnologyId,
-    pub branch: TechnologyBranch,    // Military 或 Domestic
-    pub name: &'static str,
-    pub turns: u8,                    // 研究所需月数
-    pub gold_cost: i32,               // 金钱消耗
-    pub prerequisites: &'static [TechnologyId],  // 前置科技
-    pub effect: &'static str,         // 效果描述
-}
-```
+科技静态数据来自 SQLite 历史资料库，不再硬编码在 Rust 常量中。`migrations/011_technology_catalog.sql` 定义：
+
+- `technologies`：科技 ID、分支、名称、研究月数、立项金钱、显示说明、图标键、显示顺序、AI 优先级。
+- `technology_prerequisites`：科技前置关系。
+- `technology_effects`：科技效果类型和数值。
+
+运行时由 `SqliteHistoricalCatalog::technology_catalog` 加载为 `TechnologyCatalog`，再注入 `GameState.technology_catalog`。存档只保存势力的动态研究状态，不保存静态科技目录。
 
 ## 科技列表
 
-共 27 项科技，分布在两个分支：
+共 28 项科技，分布在两个分支：
 
 ### 军事分支 (Military)
 
-民兵操练、军械后勤、斥候道路、铁制兵器、严明军纪、坚固驻防、粮草护送、协同作战、城门火计、轮防制度、军粮仓储、攻城器械
+乡勇操练、军械整备、斥候路网、铁制兵器、严整军纪、坚壁戍防、粮道护送、骑步协同、城门火攻、守备轮戍、军府仓储、攻城器械、将校考课、都督府制
 
 ### 内政分支 (Domestic)
 
-武将考绩、大郡制度、户籍登记、水利勘察、市场登记、仓储制度、平准法、工匠登记、运河修复、通关文牒、行政记录、常平仓、工坊行会、郡国评议、运河税制、度支尚书
+户籍清丈、水利勘测、市籍整理、仓廪制度、平准市易、工匠名籍、灌渠修复、商旅关津、官署文书、常平仓法、工坊行会、郡县考课、漕运税制、度支尚书
 
 ## 研究流程
 
 ```
 start_research(faction_id, technology_id)
   ├─ 检查前置科技
-  ├─ 检查金钱
+  ├─ 检查势力总金钱
+  ├─ 一次性扣除立项费用
   └─ 设置 active research
 
 advance_active_research()  (每月结算)
-  ├─ 扣除月度研究费用
   ├─ 增加进度
   └─ 完成 → 加入 completed 集合
 ```
@@ -46,10 +42,10 @@ advance_active_research()  (每月结算)
 
 ```rust
 pub struct FactionTechnologyState {
-    pub active: Option<TechnologyId>,    // 当前研究
+    pub active: Option<TechnologyId>,          // 当前研究，字符串科技 ID
     pub progress: BTreeMap<TechnologyId, u8>,  // 各科技进度
-    pub funded: BTreeSet<TechnologyId>,  // 已拨款
-    pub completed: BTreeSet<TechnologyId>,  // 已完成
+    pub funded: BTreeSet<TechnologyId>,        // 已付立项费用
+    pub completed: BTreeSet<TechnologyId>,     // 已完成
 }
 ```
 
@@ -62,7 +58,8 @@ pub struct FactionTechnologyState {
 - 后勤加成（行军时间减少）
 - 征兵折扣
 - 训练加成
+- 战损减免与伤兵转化加成
 
 AI 势力在每月结算开始时自动选择研究目标（`begin_ai_research`）。
 
-<!-- TODO: 补充每项科技的具体数值效果 -->
+科技效果由 `technology_effects.effect_kind` 映射到 `TechnologyBonuses` 字段；新增科技或调整数值应通过 SQLx 迁移修改资料库数据。

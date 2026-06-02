@@ -641,6 +641,14 @@ pub(super) fn close_top_panel(ui_state: &mut GameUiState) -> bool {
         ui_state.events_open = false;
         return true;
     }
+    if ui_state.faction_detail_id.take().is_some() {
+        return true;
+    }
+    if ui_state.faction_overview_open {
+        ui_state.faction_overview_open = false;
+        ui_state.faction_detail_id = None;
+        return true;
+    }
     if ui_state.technology_open {
         ui_state.technology_open = false;
         return true;

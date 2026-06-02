@@ -9,6 +9,7 @@
 | 层面 | 存储位置 | 内容 |
 |------|----------|------|
 | 静态资料 | `database.sqlite` | 城市资料、武将资料、势力、道路、剧本快照、生命事件 |
+| 静态规则资料 | `database.sqlite` | 科技目录、前置关系、科技效果数值 |
 | 动态局面 | 存档 JSON | 当前城池归属、资源、武将状态、命令、外交、报告 |
 | 地图边界 | `map_boundaries.json` | 州郡轮廓（美术资产，不参与规则） |
 
@@ -56,6 +57,7 @@ pub trait HistoricalCatalog:
     fn scenarios(&self) -> Result<Vec<HistoricalScenario>, HistoryDbError>;
     fn selectable_factions(&self, scenario_id: &str) -> Result<Vec<Faction>, HistoryDbError>;
     fn build_game(&self, scenario_id: &str, player_faction_id: &str) -> Result<GameState, HistoryDbError>;
+    fn technology_catalog(&self) -> Result<TechnologyCatalog, HistoryDbError>;
     fn life_events_until(&self, year: i32, month: u8) -> Result<Vec<LifeEvent>, HistoryDbError>;
 }
 ```
@@ -94,5 +96,6 @@ cities, factions, officers, officer_external_ids,
 officer_tag_definitions, officer_tag_aliases, officer_tags,
 officer_relationships, roads, scenarios,
 scenario_faction_states, scenario_city_states,
-officer_life_events, scenario_diplomacy
+officer_life_events, scenario_diplomacy,
+technologies, technology_prerequisites, technology_effects
 ```

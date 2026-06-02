@@ -19,7 +19,10 @@ use super::officer::{
     OfficerTagDefinition,
 };
 use super::personnel::normalize_personnel_state;
-use super::technology::FactionTechnologyState;
+use super::technology::{
+    FactionTechnologyState, TechnologyBranch, TechnologyCatalog, TechnologyEffect,
+    TechnologyEffectKind, TechnologySpec,
+};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
@@ -52,6 +55,9 @@ const REQUIRED_HISTORY_TABLES: &[&str] = &[
     "dynamic_event_choices",
     "dynamic_event_choice_requirements",
     "dynamic_event_choice_effects",
+    "technologies",
+    "technology_prerequisites",
+    "technology_effects",
 ];
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HistoricalScenario {
@@ -93,6 +99,7 @@ pub trait HistoricalCatalog:
         scenario_id: &str,
         player_faction_id: &str,
     ) -> Result<GameState, HistoryDbError>;
+    fn technology_catalog(&self) -> Result<TechnologyCatalog, HistoryDbError>;
     fn life_events_until(&self, year: i32, month: u8) -> Result<Vec<LifeEvent>, HistoryDbError>;
     fn dynamic_event_templates(&self) -> Result<Vec<DynamicEventTemplate>, HistoryDbError>;
 }
@@ -559,6 +566,94 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
         })
     }
 
+    fn technology_catalog(&self) -> Result<TechnologyCatalog, HistoryDbError> {
+        self.block_on(async {
+            let rows = sqlx::query(
+                "SELECT id, branch, name, turns, gold_cost, effect_summary, icon_id, sort_order, ai_priority
+                 FROM technologies
+                 ORDER BY sort_order",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
+
+            let mut specs = BTreeMap::new();
+            for row in rows {
+                let id: String = row.get("id");
+                let branch_value: String = row.get("branch");
+                let branch = TechnologyBranch::from_db(&branch_value).ok_or_else(|| {
+                    HistoryDbError::Invalid(format!(
+                        "科技 {id} 使用未知分支 {branch_value}"
+                    ))
+                })?;
+                specs.insert(
+                    id.clone(),
+                    TechnologySpec {
+                        id,
+                        branch,
+                        name: row.get("name"),
+                        turns: row.get::<i64, _>("turns") as u8,
+                        gold_cost: row.get::<i64, _>("gold_cost") as i32,
+                        prerequisites: Vec::new(),
+                        effect: row.get("effect_summary"),
+                        icon_id: row.get("icon_id"),
+                        sort_order: row.get::<i64, _>("sort_order") as i32,
+                        ai_priority: row.get::<i64, _>("ai_priority") as i32,
+                        effects: Vec::new(),
+                    },
+                );
+            }
+
+            let prerequisite_rows = sqlx::query(
+                "SELECT technology_id, prerequisite_id
+                 FROM technology_prerequisites
+                 ORDER BY technology_id, sort_order",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
+            for row in prerequisite_rows {
+                let technology_id: String = row.get("technology_id");
+                let prerequisite_id: String = row.get("prerequisite_id");
+                let Some(spec) = specs.get_mut(&technology_id) else {
+                    return Err(HistoryDbError::Invalid(format!(
+                        "科技前置引用未知科技 {technology_id}"
+                    )));
+                };
+                spec.prerequisites.push(prerequisite_id);
+            }
+
+            let effect_rows = sqlx::query(
+                "SELECT technology_id, effect_kind, amount
+                 FROM technology_effects
+                 ORDER BY technology_id, sort_order",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
+            for row in effect_rows {
+                let technology_id: String = row.get("technology_id");
+                let effect_kind_value: String = row.get("effect_kind");
+                let kind = TechnologyEffectKind::from_db(&effect_kind_value).ok_or_else(|| {
+                    HistoryDbError::Invalid(format!(
+                        "科技 {technology_id} 使用未知效果 {effect_kind_value}"
+                    ))
+                })?;
+                let Some(spec) = specs.get_mut(&technology_id) else {
+                    return Err(HistoryDbError::Invalid(format!(
+                        "科技效果引用未知科技 {technology_id}"
+                    )));
+                };
+                spec.effects.push(TechnologyEffect {
+                    kind,
+                    amount: row.get::<i64, _>("amount") as i32,
+                });
+            }
+
+            Ok(TechnologyCatalog::new(specs.into_values().collect()))
+        })
+    }
+
     fn build_game(
         &self,
         scenario_id: &str,
@@ -719,6 +814,7 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
             .keys()
             .map(|faction_id| (faction_id.clone(), FactionTechnologyState::default()))
             .collect();
+        let technology_catalog = self.technology_catalog()?;
 
         let mut state = GameState {
             version: SAVE_VERSION,
@@ -741,6 +837,7 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
             pending_commands: Vec::new(),
             army_movements: Vec::new(),
             technologies,
+            technology_catalog,
             events: Vec::new(),
             next_event_sequence: 0,
             dynamic_event_cooldowns: BTreeMap::new(),

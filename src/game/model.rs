@@ -2,11 +2,11 @@ use super::city::{City, FacilityKind, facility_kind_name};
 use super::events::GameEvent;
 use super::ids::{CityId, FactionId, OfficerId};
 use super::officer::{Officer, OfficerTagDefinition};
-use super::technology::FactionTechnologyState;
+use super::technology::{FactionTechnologyState, TechnologyCatalog};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-pub const SAVE_VERSION: u32 = 7;
+pub const SAVE_VERSION: u32 = 8;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GameState {
@@ -31,6 +31,8 @@ pub struct GameState {
     pub army_movements: Vec<ArmyMovement>,
     #[serde(default)]
     pub technologies: BTreeMap<FactionId, FactionTechnologyState>,
+    #[serde(skip, default)]
+    pub technology_catalog: TechnologyCatalog,
     #[serde(default)]
     pub events: Vec<GameEvent>,
     #[serde(default)]
