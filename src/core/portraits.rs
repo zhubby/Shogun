@@ -42,20 +42,11 @@ pub(super) enum OfficerPortraitTaskState {
     Failed(String),
 }
 
+#[derive(Default)]
 pub(super) struct OfficerPortraitStore {
     task_states: BTreeMap<OfficerId, OfficerPortraitTaskState>,
     textures: BTreeMap<OfficerId, OfficerPortraitTexture>,
     task_events: CoreAsyncEvents<OfficerPortraitTaskEvent>,
-}
-
-impl Default for OfficerPortraitStore {
-    fn default() -> Self {
-        Self {
-            task_states: BTreeMap::new(),
-            textures: BTreeMap::new(),
-            task_events: CoreAsyncEvents::default(),
-        }
-    }
 }
 
 impl OfficerPortraitStore {
@@ -127,14 +118,13 @@ impl OfficerPortraitStore {
             ));
             let result =
                 generate_officer_portrait(api_key, model_name, draft, path.clone(), &logger).await;
-            let event = match result {
+            match result {
                 Ok(()) => OfficerPortraitTaskEvent::Succeeded { officer_id, path },
                 Err(error) => {
                     logger.error(format!("生成失败: {error}"));
                     OfficerPortraitTaskEvent::Failed { officer_id, error }
                 }
-            };
-            event
+            }
         }));
     }
 

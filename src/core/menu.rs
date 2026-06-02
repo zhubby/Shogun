@@ -16,8 +16,8 @@ use crate::game::{
 use super::HUD_MARGIN;
 use super::actions::{enter_game, refresh_saves, start_history_game};
 use super::hud::{
-    OfficerBrowserTableOptions, officer_browser_filters, officer_browser_table,
-    officer_detail_modal_for_game,
+    OfficerBrowserTableOptions, OfficerPortraitModalContext, officer_browser_filters,
+    officer_browser_table, officer_detail_modal_for_game,
 };
 use super::i18n::{Translator, args};
 use super::labels::{confidence_label, officer_gender_label};
@@ -144,13 +144,15 @@ pub(super) fn main_menu(
             Some(game) => officer_detail_modal_for_game(
                 ctx,
                 officer_detail_id.as_deref(),
-                &mut ui_state.officer_portraits,
-                &api_key,
-                &model_name,
+                OfficerPortraitModalContext {
+                    store: &mut ui_state.officer_portraits,
+                    api_key: &api_key,
+                    model_name: &model_name,
+                    async_runtime,
+                },
                 &t,
                 screen,
                 game,
-                async_runtime,
             ),
             None => ui_state.officer_detail_id.is_some(),
         };
@@ -1025,7 +1027,7 @@ fn decode_png_rgba(image: &BevyImage, description: &str) -> Result<DecodedPng, S
         TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Uint => {
             data.clone()
         }
-        TextureFormat::Rgba16Unorm | TextureFormat::Rgba16Uint => rgba16_to_rgba8(&data)?,
+        TextureFormat::Rgba16Unorm | TextureFormat::Rgba16Uint => rgba16_to_rgba8(data)?,
         _ => {
             return Err(format!(
                 "unsupported {description} texture format: {format:?}"
@@ -1088,68 +1090,44 @@ fn remove_flat_logo_background(rgba: &mut [u8], width: usize, height: usize) {
 }
 
 fn estimate_edge_background_color(rgba: &[u8], width: usize, height: usize) -> [u8; 3] {
-    let mut red = 0_u64;
-    let mut green = 0_u64;
-    let mut blue = 0_u64;
-    let mut count = 0_u64;
+    let mut sample = RgbSample::default();
 
     for x in 0..width {
-        add_rgb_sample(
-            rgba, width, x, 0, &mut red, &mut green, &mut blue, &mut count,
-        );
-        add_rgb_sample(
-            rgba,
-            width,
-            x,
-            height - 1,
-            &mut red,
-            &mut green,
-            &mut blue,
-            &mut count,
-        );
+        sample.add(rgba, width, x, 0);
+        sample.add(rgba, width, x, height - 1);
     }
     for y in 1..height.saturating_sub(1) {
-        add_rgb_sample(
-            rgba, width, 0, y, &mut red, &mut green, &mut blue, &mut count,
-        );
-        add_rgb_sample(
-            rgba,
-            width,
-            width - 1,
-            y,
-            &mut red,
-            &mut green,
-            &mut blue,
-            &mut count,
-        );
+        sample.add(rgba, width, 0, y);
+        sample.add(rgba, width, width - 1, y);
     }
 
-    if count == 0 {
+    if sample.count == 0 {
         return [0, 0, 0];
     }
 
     [
-        (red / count) as u8,
-        (green / count) as u8,
-        (blue / count) as u8,
+        (sample.red / sample.count) as u8,
+        (sample.green / sample.count) as u8,
+        (sample.blue / sample.count) as u8,
     ]
 }
 
-fn add_rgb_sample(
-    rgba: &[u8],
-    width: usize,
-    x: usize,
-    y: usize,
-    red: &mut u64,
-    green: &mut u64,
-    blue: &mut u64,
-    count: &mut u64,
-) {
-    let offset = (y * width + x) * 4;
-    *red += rgba[offset] as u64;
-    *green += rgba[offset + 1] as u64;
-    *blue += rgba[offset + 2] as u64;
-    *count += 1;
+#[derive(Default)]
+struct RgbSample {
+    red: u64,
+    green: u64,
+    blue: u64,
+    count: u64,
+}
+
+impl RgbSample {
+    fn add(&mut self, rgba: &[u8], width: usize, x: usize, y: usize) {
+        let offset = (y * width + x) * 4;
+        self.red += rgba[offset] as u64;
+        self.green += rgba[offset + 1] as u64;
+        self.blue += rgba[offset + 2] as u64;
+        self.count += 1;
+    }
 }
 
 fn color_distance(a: [u8; 3], b: [u8; 3]) -> u8 {

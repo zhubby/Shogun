@@ -183,28 +183,19 @@ fn command_tab(
         );
 
         columns[1].set_width(370.0);
-        command_parameter_column(
-            &mut columns[1],
-            ui_state,
+        let command_context = CommandPanelContext {
             game,
             city,
             selected_officer,
-            selected_officer_id.as_ref(),
-            &available_officers,
+            selected_officer_id: selected_officer_id.as_ref(),
+            available_officers: &available_officers,
             pending_command,
             t,
-        );
+        };
 
-        command_preview_column(
-            &mut columns[2],
-            ui_state,
-            game,
-            city,
-            selected_officer,
-            selected_officer_id.as_ref(),
-            pending_command,
-            t,
-        );
+        command_parameter_column(&mut columns[1], ui_state, &command_context);
+
+        command_preview_column(&mut columns[2], ui_state, &command_context);
     });
 }
 
@@ -302,18 +293,31 @@ fn city_tab_label(tab: CityPanelTab, t: &Translator) -> String {
     }
 }
 
+struct CommandPanelContext<'a> {
+    game: &'a GameState,
+    city: &'a City,
+    selected_officer: Option<&'a Officer>,
+    selected_officer_id: Option<&'a OfficerId>,
+    available_officers: &'a [Officer],
+    pending_command: Option<&'a Command>,
+    t: &'a Translator,
+}
+
 fn command_parameter_column(
     ui: &mut egui::Ui,
     ui_state: &mut GameUiState,
-    game: &GameState,
-    city: &City,
-    selected_officer: Option<&Officer>,
-    selected_officer_id: Option<&OfficerId>,
-    available_officers: &[Officer],
-    pending_command: Option<&Command>,
-    t: &Translator,
+    context: &CommandPanelContext<'_>,
 ) {
     war_sub_panel_frame().show(ui, |ui| {
+        let CommandPanelContext {
+            game,
+            city,
+            selected_officer,
+            selected_officer_id,
+            available_officers,
+            pending_command,
+            t,
+        } = *context;
         section_title(
             ui,
             &command_action_label(ui_state.selected_command_action, t),
@@ -367,14 +371,18 @@ fn command_parameter_column(
 fn command_preview_column(
     ui: &mut egui::Ui,
     ui_state: &mut GameUiState,
-    game: &GameState,
-    city: &City,
-    selected_officer: Option<&Officer>,
-    selected_officer_id: Option<&OfficerId>,
-    pending_command: Option<&Command>,
-    t: &Translator,
+    context: &CommandPanelContext<'_>,
 ) {
     war_sub_panel_frame().show(ui, |ui| {
+        let CommandPanelContext {
+            game,
+            city,
+            selected_officer,
+            selected_officer_id,
+            pending_command,
+            t,
+            ..
+        } = *context;
         section_title(ui, &t.text("command-preview-title"));
         if ui_state.selected_command_action == CommandAction::RecruitOfficer {
             recruitment_preview_column(ui, ui_state, game, city, selected_officer, t);
@@ -1025,10 +1033,12 @@ fn expedition_parameter_controls(
             ui,
             &t.text("expedition-role-commander"),
             main,
-            city.troops,
-            &mut ui_state.expedition_main_kind,
-            &mut ui_state.expedition_main_troops,
-            true,
+            ExpeditionAssignmentControls {
+                available: city.troops,
+                kind: &mut ui_state.expedition_main_kind,
+                troops: &mut ui_state.expedition_main_troops,
+                required: true,
+            },
             t,
         );
     }
@@ -1070,10 +1080,12 @@ fn expedition_parameter_controls(
             ui,
             &t.text("expedition-role-deputy-one"),
             officer,
-            city.troops,
-            &mut ui_state.expedition_deputy_one_kind,
-            &mut ui_state.expedition_deputy_one_troops,
-            false,
+            ExpeditionAssignmentControls {
+                available: city.troops,
+                kind: &mut ui_state.expedition_deputy_one_kind,
+                troops: &mut ui_state.expedition_deputy_one_troops,
+                required: false,
+            },
             t,
         );
     } else {
@@ -1100,10 +1112,12 @@ fn expedition_parameter_controls(
             ui,
             &t.text("expedition-role-deputy-two"),
             officer,
-            city.troops,
-            &mut ui_state.expedition_deputy_two_kind,
-            &mut ui_state.expedition_deputy_two_troops,
-            false,
+            ExpeditionAssignmentControls {
+                available: city.troops,
+                kind: &mut ui_state.expedition_deputy_two_kind,
+                troops: &mut ui_state.expedition_deputy_two_troops,
+                required: false,
+            },
             t,
         );
     } else {
@@ -1144,16 +1158,26 @@ fn expedition_parameter_controls(
     ));
 }
 
+struct ExpeditionAssignmentControls<'a> {
+    available: TroopPool,
+    kind: &'a mut TroopKind,
+    troops: &'a mut u32,
+    required: bool,
+}
+
 fn expedition_assignment_controls(
     ui: &mut egui::Ui,
     label: &str,
     officer: &Officer,
-    available: TroopPool,
-    kind: &mut TroopKind,
-    troops: &mut u32,
-    required: bool,
+    assignment: ExpeditionAssignmentControls<'_>,
     t: &Translator,
 ) {
+    let ExpeditionAssignmentControls {
+        available,
+        kind,
+        troops,
+        required,
+    } = assignment;
     let capacity = command_capacity_for_officer(officer);
     ui.group(|ui| {
         ui.horizontal(|ui| {

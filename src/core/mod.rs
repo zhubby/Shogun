@@ -143,35 +143,6 @@ fn existing_directory(path: PathBuf) -> Option<PathBuf> {
     Some(path.canonicalize().unwrap_or(path))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn runtime_assets_dir_resolves_project_assets() {
-        assert!(runtime_assets_dir().join("icons/banner_logo.png").is_file());
-    }
-
-    #[test]
-    fn asset_dir_candidates_cover_packaged_layouts() {
-        let candidates = asset_dir_candidates_from(
-            Some(Path::new("/opt/Shogun.app/Contents/MacOS")),
-            Some(Path::new("/opt/shogun/share/shogun")),
-            Some(Path::new("/repo/Shogun")),
-        );
-
-        assert!(candidates.contains(&PathBuf::from(
-            "/opt/Shogun.app/Contents/MacOS/../Resources/assets"
-        )));
-        assert!(candidates.contains(&PathBuf::from("/opt/Shogun.app/Contents/MacOS/assets")));
-        assert!(candidates.contains(&PathBuf::from(
-            "/opt/Shogun.app/Contents/MacOS/../../share/shogun/assets"
-        )));
-        assert!(candidates.contains(&PathBuf::from("/opt/shogun/share/shogun/assets")));
-        assert!(candidates.contains(&PathBuf::from("/repo/Shogun/assets")));
-    }
-}
-
 fn setup_camera(mut commands: Commands) {
     commands.spawn(Camera2d);
 }
@@ -231,5 +202,34 @@ fn game_ui_system(
             }
             Err(_) => ui_state.message = t.text("message-main-window-missing"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_assets_dir_resolves_project_assets() {
+        assert!(runtime_assets_dir().join("icons/banner_logo.png").is_file());
+    }
+
+    #[test]
+    fn asset_dir_candidates_cover_packaged_layouts() {
+        let candidates = asset_dir_candidates_from(
+            Some(Path::new("/opt/Shogun.app/Contents/MacOS")),
+            Some(Path::new("/opt/shogun/share/shogun")),
+            Some(Path::new("/repo/Shogun")),
+        );
+
+        assert!(candidates.contains(&PathBuf::from(
+            "/opt/Shogun.app/Contents/MacOS/../Resources/assets"
+        )));
+        assert!(candidates.contains(&PathBuf::from("/opt/Shogun.app/Contents/MacOS/assets")));
+        assert!(candidates.contains(&PathBuf::from(
+            "/opt/Shogun.app/Contents/MacOS/../../share/shogun/assets"
+        )));
+        assert!(candidates.contains(&PathBuf::from("/opt/shogun/share/shogun/assets")));
+        assert!(candidates.contains(&PathBuf::from("/repo/Shogun/assets")));
     }
 }

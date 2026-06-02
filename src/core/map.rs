@@ -87,10 +87,12 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Trans
             &painter,
             pos,
             city,
-            color,
-            selected,
-            player_owned,
-            ui_state,
+            CityMarkerStyle {
+                color,
+                selected,
+                player_owned,
+                map_zoom: ui_state.map_zoom,
+            },
             t,
         );
     }
@@ -529,17 +531,27 @@ pub(super) fn city_matches_cell(cell: &TerritoryCell, city: &City) -> bool {
     profile.commandery == cell.name
 }
 
+pub(super) struct CityMarkerStyle {
+    color: egui::Color32,
+    selected: bool,
+    player_owned: bool,
+    map_zoom: f32,
+}
+
 pub(super) fn draw_city_marker(
     painter: &egui::Painter,
     pos: egui::Pos2,
     city: &City,
-    color: egui::Color32,
-    selected: bool,
-    player_owned: bool,
-    ui_state: &GameUiState,
+    style: CityMarkerStyle,
     t: &Translator,
 ) {
-    let scale = ui_state.map_zoom.sqrt().clamp(0.85, 1.35);
+    let CityMarkerStyle {
+        color,
+        selected,
+        player_owned,
+        map_zoom,
+    } = style;
+    let scale = map_zoom.sqrt().clamp(0.85, 1.35);
     let marker_scale = scale * city_marker_rank_scale(city);
     let marker_center = pos + egui::vec2(0.0, -5.0 * scale);
     let faction_fill = draw_city_marker_icon(

@@ -520,15 +520,19 @@ impl OfficerEditDraft {
     }
 
     pub(super) fn from_officer(officer: &Officer) -> Self {
-        officer.profile.as_ref().map_or_else(
-            || Self {
+        if let Some(profile) = officer.profile.as_ref() {
+            Self::from_profile(profile)
+        } else {
+            Self {
                 id: officer.id.clone(),
                 name: officer.name.clone(),
                 courtesy_name: String::new(),
                 native_place: String::new(),
-                birth_year: (officer.birth_year != 0)
-                    .then(|| officer.birth_year.to_string())
-                    .unwrap_or_default(),
+                birth_year: if officer.birth_year != 0 {
+                    officer.birth_year.to_string()
+                } else {
+                    String::new()
+                },
                 death_year: String::new(),
                 gender: officer.gender.clone(),
                 leadership: officer.stats.leadership,
@@ -540,9 +544,8 @@ impl OfficerEditDraft {
                 confidence: SourceConfidence::Medium,
                 biography: String::new(),
                 notes: String::new(),
-            },
-            Self::from_profile,
-        )
+            }
+        }
     }
 }
 

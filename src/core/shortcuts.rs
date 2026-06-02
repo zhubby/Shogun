@@ -1229,10 +1229,12 @@ mod tests {
 
     #[test]
     fn close_top_panel_prefers_foreground_layers() {
-        let mut ui_state = GameUiState::default();
-        ui_state.settings_open = true;
-        ui_state.officer_edit_open = true;
-        ui_state.officer_detail_id = Some("liu_bei".to_string());
+        let mut ui_state = GameUiState {
+            settings_open: true,
+            officer_edit_open: true,
+            officer_detail_id: Some("liu_bei".to_string()),
+            ..GameUiState::default()
+        };
 
         assert!(close_top_panel(&mut ui_state));
         assert!(!ui_state.settings_open);

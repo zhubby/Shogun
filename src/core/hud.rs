@@ -1589,13 +1589,15 @@ pub(super) fn officer_detail_modal(
         Some(game) => officer_detail_modal_for_game(
             ctx,
             officer_detail_id.as_deref(),
-            &mut ui_state.officer_portraits,
-            &api_key,
-            &model_name,
+            OfficerPortraitModalContext {
+                store: &mut ui_state.officer_portraits,
+                api_key: &api_key,
+                model_name: &model_name,
+                async_runtime,
+            },
             t,
             screen,
             game,
-            async_runtime,
         ),
         None => ui_state.officer_detail_id.is_some(),
     };
@@ -1604,16 +1606,20 @@ pub(super) fn officer_detail_modal(
     }
 }
 
+pub(super) struct OfficerPortraitModalContext<'a> {
+    pub(super) store: &'a mut OfficerPortraitStore,
+    pub(super) api_key: &'a str,
+    pub(super) model_name: &'a str,
+    pub(super) async_runtime: &'a CoreAsyncRuntime,
+}
+
 pub(super) fn officer_detail_modal_for_game(
     ctx: &egui::Context,
     officer_detail_id: Option<&str>,
-    officer_portraits: &mut OfficerPortraitStore,
-    portrait_api_key: &str,
-    portrait_model_name: &str,
+    mut portrait_context: OfficerPortraitModalContext<'_>,
     t: &Translator,
     screen: egui::Rect,
     game: &GameState,
-    async_runtime: &CoreAsyncRuntime,
 ) -> bool {
     let Some(officer_id) = officer_detail_id else {
         return false;
@@ -1657,12 +1663,9 @@ pub(super) fn officer_detail_modal_for_game(
                                 officer_detail_portrait_section(
                                     ctx,
                                     &mut columns[0],
-                                    officer_portraits,
                                     officer,
-                                    portrait_api_key,
-                                    portrait_model_name,
+                                    &mut portrait_context,
                                     t,
-                                    async_runtime,
                                 );
                                 columns[0].add_space(8.0);
                                 officer_detail_status_section(&mut columns[0], game, officer, t);
@@ -1731,21 +1734,18 @@ fn officer_detail_header(ui: &mut egui::Ui, game: &GameState, officer: &Officer,
 fn officer_detail_portrait_section(
     ctx: &egui::Context,
     ui: &mut egui::Ui,
-    officer_portraits: &mut OfficerPortraitStore,
     officer: &Officer,
-    portrait_api_key: &str,
-    portrait_model_name: &str,
+    portrait_context: &mut OfficerPortraitModalContext<'_>,
     t: &Translator,
-    async_runtime: &CoreAsyncRuntime,
 ) {
     let draft = OfficerEditDraft::from_officer(officer);
     let path = officer_portrait_path(&draft.id);
     let has_portrait = path.as_ref().is_ok_and(|path| path.is_file());
-    let task_state = officer_portraits.task_state(&draft.id);
+    let task_state = portrait_context.store.task_state(&draft.id);
     let generating = matches!(task_state, OfficerPortraitTaskState::Generating);
     let mut load_error = None;
     let texture = match &path {
-        Ok(path) => match officer_portraits.texture_for(ctx, &draft.id, path) {
+        Ok(path) => match portrait_context.store.texture_for(ctx, &draft.id, path) {
             Ok(texture) => texture,
             Err(error) => {
                 load_error = Some(error);
@@ -1762,8 +1762,7 @@ fn officer_detail_portrait_section(
         officer_detail_section_title(ui, &t.text("officer-portrait-title"));
         let preview_width = ui
             .available_width()
-            .min(OFFICER_DETAIL_PORTRAIT_WIDTH)
-            .max(0.0);
+            .clamp(0.0, OFFICER_DETAIL_PORTRAIT_WIDTH);
         let preview_height =
             preview_width * OFFICER_PORTRAIT_ASPECT_HEIGHT / OFFICER_PORTRAIT_ASPECT_WIDTH;
         let preview_size = egui::vec2(preview_width, preview_height);
@@ -1791,11 +1790,11 @@ fn officer_detail_portrait_section(
             )
             .clicked();
         if clicked {
-            officer_portraits.start_generation(
-                async_runtime,
+            portrait_context.store.start_generation(
+                portrait_context.async_runtime,
                 draft,
-                portrait_api_key.to_string(),
-                portrait_model_name.to_string(),
+                portrait_context.api_key.to_string(),
+                portrait_context.model_name.to_string(),
                 t.text("officer-portrait-api-key-required"),
             );
         }
