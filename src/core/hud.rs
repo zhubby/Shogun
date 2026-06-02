@@ -1,6 +1,6 @@
 use crate::game::*;
 use bevy_egui::egui;
-use egui_extras::{Column, TableBuilder};
+use egui_extras::{Column, Size, StripBuilder, TableBuilder};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::actions::{
@@ -24,12 +24,14 @@ use super::state::{
     Screen, ShrineTab,
 };
 use super::style::{
-    collapse_icon_button, modal_title_bar, war_bar_frame, war_border, war_danger, war_gold,
-    war_panel_frame, war_sub_panel_frame, war_success, war_text, war_text_muted, war_warning,
+    collapse_icon_button, modal_content_width, modal_title_bar, war_bar_frame, war_border,
+    war_danger, war_gold, war_panel_frame, war_sub_panel_frame, war_success, war_text,
+    war_text_muted, war_warning,
 };
 use super::{HUD_MARGIN, HUD_TOP_HEIGHT, HUD_TOP_OFFSET, MAP_ZOOM_STEP};
 
 const OFFICER_DETAIL_PORTRAIT_WIDTH: f32 = 224.0;
+pub(super) const OFFICER_BROWSER_MODAL_WIDTH: f32 = 1060.0;
 
 pub(super) fn in_game(
     ctx: &egui::Context,
@@ -135,8 +137,7 @@ pub(super) fn top_status_hud(
                             ]),
                         ));
                         ui.label(t.text_args("hud-player", &args([("faction", faction_name)])));
-                        ui.label(resources.label(t))
-                            .on_hover_text(resources.tooltip(t));
+                        resources.ui(ui, t);
                         if let Some(status) = status {
                             ui.colored_label(egui::Color32::from_rgb(200, 72, 52), status);
                         }
@@ -471,16 +472,57 @@ impl FactionResourceSummary {
         summary
     }
 
-    fn label(&self, t: &Translator) -> String {
-        t.text_args(
-            "hud-faction-resources",
-            &args([
-                ("gold", self.gold.to_string()),
-                ("food", self.food.to_string()),
-                ("materials", self.materials.to_string()),
-                ("troops", self.troops.to_string()),
-            ]),
-        )
+    fn ui(&self, ui: &mut egui::Ui, t: &Translator) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 5.0;
+            self.resource_badge(
+                ui,
+                egui_phosphor::regular::COINS,
+                self.gold.to_string(),
+                war_gold(),
+                &t.text("resource-gold"),
+            );
+            self.resource_badge(
+                ui,
+                egui_phosphor::regular::GRAINS,
+                self.food.to_string(),
+                war_success(),
+                &t.text("resource-food"),
+            );
+            self.resource_badge(
+                ui,
+                egui_phosphor::regular::STACK,
+                self.materials.to_string(),
+                egui::Color32::from_rgb(176, 153, 116),
+                &t.text("resource-materials"),
+            );
+            self.resource_badge(
+                ui,
+                egui_phosphor::regular::SWORD,
+                self.troops.to_string(),
+                egui::Color32::from_rgb(185, 128, 96),
+                &t.text("resource-troops"),
+            );
+        })
+        .response
+        .on_hover_text(self.tooltip(t));
+    }
+
+    fn resource_badge(
+        &self,
+        ui: &mut egui::Ui,
+        icon: &str,
+        value: String,
+        color: egui::Color32,
+        tooltip: &str,
+    ) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            ui.label(egui::RichText::new(icon).size(15.0).color(color));
+            ui.label(egui::RichText::new(value).color(war_text()));
+        })
+        .response
+        .on_hover_text(tooltip);
     }
 
     fn tooltip(&self, t: &Translator) -> String {
@@ -1435,7 +1477,7 @@ pub(super) fn officer_browser_hud(
         return;
     }
 
-    let width = (screen.width() * 0.82).clamp(720.0, 1080.0);
+    let width = modal_content_width(screen, OFFICER_BROWSER_MODAL_WIDTH);
     let height = (screen.height() * 0.76).clamp(420.0, 680.0);
     egui::Area::new(egui::Id::new("hud_officer_browser"))
         .order(egui::Order::Foreground)
@@ -1495,7 +1537,7 @@ pub(super) fn retainer_hud(
         return;
     }
 
-    let width = (screen.width() * 0.82).clamp(760.0, 1120.0);
+    let width = modal_content_width(screen, OFFICER_BROWSER_MODAL_WIDTH);
     let height = (screen.height() * 0.76).clamp(420.0, 680.0);
     egui::Area::new(egui::Id::new("hud_retainers"))
         .order(egui::Order::Foreground)
@@ -2767,85 +2809,111 @@ pub(super) fn city_list(
     rows.sort_by(|a, b| a.1.cmp(&b.1));
 
     let body_height = (height - 70.0).max(300.0);
-    let list_width = (width * 0.46).clamp(245.0, 360.0);
-    let preview_width = (width - list_width - 22.0).max(240.0);
+    let content_width = ui.available_width().min(width);
+    let panel_gap = 12.0;
+    let panel_inner_margin_x = 20.0;
+    let panel_inner_margin_y = 16.0;
+    let list_outer_width = (content_width * 0.42).clamp(260.0, 380.0).max(220.0);
+    let preview_outer_width = (content_width - list_outer_width - panel_gap).max(0.0);
+    let list_width = (list_outer_width - panel_inner_margin_x).max(220.0);
+    let preview_width = (preview_outer_width - panel_inner_margin_x).max(180.0);
+    let panel_inner_height = (body_height - panel_inner_margin_y).max(260.0);
 
-    ui.columns(2, |columns| {
-        columns[0].set_width(list_width);
-        war_sub_panel_frame().show(&mut columns[0], |ui| {
-            ui.set_width(list_width);
-            egui::ScrollArea::vertical()
-                .id_salt("city_list")
-                .max_height(body_height)
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    for (
-                        city_id,
-                        city_name,
-                        faction_name,
-                        gold,
-                        food,
-                        troops,
-                        color,
-                        player_owned,
-                    ) in rows
-                    {
-                        let selected =
-                            ui_state.selected_city_id.as_deref() == Some(city_id.as_str());
-                        let resources = t.text_args(
-                            "city-list-row-resources",
-                            &args([
-                                ("gold", gold.to_string()),
-                                ("food", food.to_string()),
-                                ("troops", troops.to_string()),
-                            ]),
-                        );
-                        let response = city_list_row(
-                            ui,
-                            selected,
-                            &city_name,
-                            &faction_name,
-                            &resources,
-                            color,
-                            player_owned,
-                        );
+    StripBuilder::new(ui)
+        .size(Size::exact(list_outer_width))
+        .size(Size::exact(panel_gap))
+        .size(Size::exact(preview_outer_width))
+        .cell_layout(egui::Layout::top_down(egui::Align::Min))
+        .clip(true)
+        .horizontal(|mut strip| {
+            strip.cell(|ui| {
+                ui.set_height(body_height);
+                war_sub_panel_frame().show(ui, |ui| {
+                    ui.set_width(list_width);
+                    egui::ScrollArea::vertical()
+                        .id_salt("city_list")
+                        .max_height(panel_inner_height)
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for (
+                                city_id,
+                                city_name,
+                                faction_name,
+                                gold,
+                                food,
+                                troops,
+                                color,
+                                player_owned,
+                            ) in rows
+                            {
+                                let selected =
+                                    ui_state.selected_city_id.as_deref() == Some(city_id.as_str());
+                                let resources = t.text_args(
+                                    "city-list-row-resources",
+                                    &args([
+                                        ("gold", gold.to_string()),
+                                        ("food", food.to_string()),
+                                        ("troops", troops.to_string()),
+                                    ]),
+                                );
+                                let response = city_list_row(
+                                    ui,
+                                    selected,
+                                    &city_name,
+                                    &faction_name,
+                                    &resources,
+                                    color,
+                                    player_owned,
+                                );
 
-                        if response.clicked() {
-                            ui_state.selected_city_id = Some(city_id.clone());
-                        }
-                        if response.double_clicked() {
-                            open_city(ui_state, city_id.clone());
+                                if response.clicked() {
+                                    ui_state.selected_city_id = Some(city_id.clone());
+                                }
+                                if response.double_clicked() {
+                                    open_city(ui_state, city_id.clone());
+                                    ui_state.city_list_open = false;
+                                }
+                            }
+                        });
+                });
+            });
+
+            let preview = ui_state.game.as_ref().and_then(|game| {
+                let city = game.cities.get(ui_state.selected_city_id.as_deref()?)?;
+                let faction_name = game
+                    .factions
+                    .get(&city.faction_id)
+                    .map(|faction| faction.name.clone())
+                    .unwrap_or_else(|| t.text("unknown"));
+                Some((city.id.clone(), city.clone(), faction_name))
+            });
+
+            strip.empty();
+
+            strip.cell(|ui| {
+                ui.set_height(body_height);
+                war_sub_panel_frame().show(ui, |ui| {
+                    ui.set_width(preview_width);
+                    ui.set_min_height(panel_inner_height);
+                    if let Some((city_id, city, faction_name)) = preview {
+                        city_summary_intel(ui, &city, &faction_name, t);
+                        ui.add_space(10.0);
+                        if ui
+                            .add_sized(
+                                [preview_width, 30.0],
+                                egui::Button::new(t.text("open-command-tent")),
+                            )
+                            .clicked()
+                        {
+                            open_city(ui_state, city_id);
                             ui_state.city_list_open = false;
                         }
+                    } else {
+                        ui.label(t.text("selected-city-none"));
                     }
                 });
+            });
         });
-
-        let preview = ui_state.game.as_ref().and_then(|game| {
-            let city = game.cities.get(ui_state.selected_city_id.as_deref()?)?;
-            let faction_name = game
-                .factions
-                .get(&city.faction_id)
-                .map(|faction| faction.name.clone())
-                .unwrap_or_else(|| t.text("unknown"));
-            Some((city.id.clone(), city.clone(), faction_name))
-        });
-
-        war_sub_panel_frame().show(&mut columns[1], |ui| {
-            ui.set_width(preview_width);
-            ui.set_min_height(body_height);
-            if let Some((city_id, city, faction_name)) = preview {
-                city_summary_intel(ui, &city, &faction_name, t);
-                ui.add_space(10.0);
-                if ui.button(t.text("open-command-tent")).clicked() {
-                    open_city(ui_state, city_id);
-                    ui_state.city_list_open = false;
-                }
-            } else {
-                ui.label(t.text("selected-city-none"));
-            }
-        });
-    });
 }
 
 fn city_list_row(
@@ -2933,12 +3001,31 @@ pub(super) fn officer_browser_filters(
     t: &Translator,
 ) {
     const FILTER_HEIGHT: f32 = 30.0;
+    ui.set_max_width(ui.available_width());
+    egui::ScrollArea::horizontal()
+        .id_salt((id_salt, "filter_scroll"))
+        .scroll_bar_visibility(egui::containers::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .max_height(FILTER_HEIGHT + 4.0)
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            officer_browser_filter_controls(ui, game, filters, id_salt, t, FILTER_HEIGHT);
+        });
+}
+
+fn officer_browser_filter_controls(
+    ui: &mut egui::Ui,
+    game: &GameState,
+    filters: &mut OfficerBrowserFilters,
+    id_salt: &'static str,
+    t: &Translator,
+    filter_height: f32,
+) {
     ui.horizontal(|ui| {
-        ui.spacing_mut().interact_size.y = FILTER_HEIGHT;
+        ui.spacing_mut().interact_size.y = filter_height;
         ui.spacing_mut().item_spacing.x = 12.0;
         ui.label(t.text("officer-filter-search"));
         ui.add_sized(
-            [260.0, FILTER_HEIGHT],
+            [260.0, filter_height],
             egui::TextEdit::singleline(&mut filters.search)
                 .hint_text(t.text("officer-filter-search-hint")),
         );
@@ -3060,9 +3147,14 @@ pub(super) fn officer_browser_filters(
 
         if ui
             .add_sized(
-                [86.0, FILTER_HEIGHT],
-                egui::Button::new(t.text("common-reset")),
+                [filter_height, filter_height],
+                egui::Button::new(
+                    egui::RichText::new(egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE)
+                        .size(17.0)
+                        .color(war_gold()),
+                ),
             )
+            .on_hover_text(t.text("common-reset"))
             .clicked()
         {
             filters.reset();
@@ -3097,19 +3189,19 @@ pub(super) fn officer_browser_table(
         .min_scrolled_height(table_height)
         .max_scroll_height(table_height)
         .auto_shrink([false, false])
-        .column(Column::exact(42.0))
-        .column(Column::initial(84.0).at_least(62.0).clip(true))
-        .column(Column::initial(52.0).at_least(42.0).clip(true))
-        .column(Column::initial(44.0).at_least(38.0).clip(true))
-        .column(Column::initial(86.0).at_least(64.0).clip(true))
-        .column(Column::initial(78.0).at_least(58.0).clip(true))
-        .column(Column::initial(88.0).at_least(64.0).clip(true))
-        .column(Column::initial(56.0).at_least(46.0).clip(true))
-        .column(Column::initial(66.0).at_least(52.0).clip(true))
-        .column(Column::initial(56.0).at_least(46.0).clip(true))
-        .columns(Column::initial(50.0).at_least(42.0).clip(true), 5)
+        .column(Column::exact(54.0))
+        .column(Column::remainder().at_least(96.0).clip(true))
+        .column(Column::exact(52.0))
+        .column(Column::exact(46.0))
+        .column(Column::remainder().at_least(96.0).clip(true))
+        .column(Column::initial(82.0).at_least(64.0).clip(true))
+        .column(Column::initial(88.0).at_least(68.0).clip(true))
+        .column(Column::exact(58.0))
+        .column(Column::initial(72.0).at_least(58.0).clip(true))
+        .column(Column::exact(58.0))
+        .columns(Column::exact(52.0), 5)
         .header(26.0, |mut header| {
-            officer_table_header_cell(&mut header, t.text("officer-column-tools"));
+            officer_table_header_cell_centered(&mut header, t.text("officer-column-tools"));
             officer_table_header_cell(&mut header, t.text("officer-column-name"));
             officer_table_header_cell(&mut header, t.text("officer-column-gender"));
             officer_table_header_cell(&mut header, t.text("officer-column-age"));
@@ -3128,7 +3220,7 @@ pub(super) fn officer_browser_table(
         .body(|mut body| {
             for row in rows {
                 let selected = options.selected_officer_id == Some(row.id.as_str());
-                body.row(28.0, |mut table_row| {
+                body.row(30.0, |mut table_row| {
                     table_row.set_selected(selected);
                     table_row.col(|ui| officer_row_tools(ui, &row, &mut table_response, t));
                     table_row.col(|ui| officer_row_cell(ui, &row.name));
@@ -3275,6 +3367,14 @@ fn officer_table_header_cell(row: &mut egui_extras::TableRow<'_, '_>, text: Stri
     });
 }
 
+fn officer_table_header_cell_centered(row: &mut egui_extras::TableRow<'_, '_>, text: String) {
+    row.col(|ui| {
+        ui.centered_and_justified(|ui| {
+            ui.strong(text);
+        });
+    });
+}
+
 fn officer_row_tools(
     ui: &mut egui::Ui,
     row: &OfficerBrowserRow,
@@ -3282,14 +3382,17 @@ fn officer_row_tools(
     t: &Translator,
 ) {
     let response = ui
-        .add_sized(
-            [28.0, 24.0],
-            egui::Button::new(
-                egui::RichText::new(egui_phosphor::regular::EYE)
-                    .size(16.0)
-                    .color(war_gold()),
-            ),
-        )
+        .centered_and_justified(|ui| {
+            ui.add_sized(
+                [32.0, 24.0],
+                egui::Button::new(
+                    egui::RichText::new(egui_phosphor::regular::EYE)
+                        .size(16.0)
+                        .color(war_gold()),
+                ),
+            )
+        })
+        .inner
         .on_hover_text(t.text("officer-action-view"));
     if response.clicked() {
         table_response.selected_officer_id = Some(row.id.clone());

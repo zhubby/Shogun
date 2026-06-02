@@ -1,0 +1,53 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  APP_NAME: Shogun
+  BIN_NAME: shogun
+  WINDOWS_TARGET: x86_64-pc-windows-msvc
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Build release
+        run: cargo build --release --target $env:WINDOWS_TARGET
+
+      - name: Package zip
+        shell: bash
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          STAGE="dist/windows/${BIN_NAME}-${VERSION}"
+          mkdir -p "${STAGE}"
+
+          cp "target/${WINDOWS_TARGET}/release/${BIN_NAME}.exe" "${STAGE}/${BIN_NAME}.exe"
+          cp -R assets "${STAGE}/assets"
+          cp "packaging/windows/${APP_NAME}.ico" "${STAGE}/${APP_NAME}.ico"
+
+          cd dist/windows
+          7z a "../${BIN_NAME}-${VERSION}-windows.zip" "${BIN_NAME}-${VERSION}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BIN_NAME }}-${{ steps.version.outputs.version }}-windows
+          path: dist/${{ env.BIN_NAME }}-${{ steps.version.outputs.version }}-windows.zip

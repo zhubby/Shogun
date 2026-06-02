@@ -1,0 +1,65 @@
+name: Build Linux
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  APP_NAME: Shogun
+  APP_ID: io.github.zhubby.Shogun
+  BIN_NAME: shogun
+  LINUX_TARGET: x86_64-unknown-linux-gnu
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2-dev libudev-dev pkg-config
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Read version
+        id: version
+        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Build release
+        run: cargo build --release --target "${LINUX_TARGET}"
+
+      - name: Package tarball
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          STAGE="dist/linux/${BIN_NAME}-${VERSION}"
+          mkdir -p "${STAGE}/bin" "${STAGE}/libexec/${BIN_NAME}" \
+                   "${STAGE}/share/applications" "${STAGE}/share/icons/hicolor" \
+                   "${STAGE}/share/${BIN_NAME}"
+
+          cp "target/${LINUX_TARGET}/release/${BIN_NAME}" "${STAGE}/libexec/${BIN_NAME}/${BIN_NAME}-bin"
+
+          printf '#!/bin/sh\nscript_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\nprefix="$(CDPATH= cd -- "$script_dir/.." && pwd)"\ncd "$prefix/share/${BIN_NAME}" || exit 1\nexec "$prefix/libexec/${BIN_NAME}/${BIN_NAME}-bin" "$@"\n' \
+            > "${STAGE}/bin/${BIN_NAME}"
+          chmod +x "${STAGE}/bin/${BIN_NAME}"
+
+          cp -R assets "${STAGE}/share/${BIN_NAME}/assets"
+          cp "packaging/linux/${APP_ID}.desktop" "${STAGE}/share/applications/${APP_ID}.desktop"
+          cp -R packaging/linux/hicolor/* "${STAGE}/share/icons/hicolor/"
+
+          tar -C dist/linux -czf "dist/${BIN_NAME}-${VERSION}-linux.tar.gz" "${BIN_NAME}-${VERSION}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.BIN_NAME }}-${{ steps.version.outputs.version }}-linux
+          path: dist/${{ env.BIN_NAME }}-${{ steps.version.outputs.version }}-linux.tar.gz

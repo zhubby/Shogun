@@ -1,0 +1,66 @@
+name: Build macOS
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  APP_NAME: Shogun
+  BIN_NAME: shogun
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Read version
+        id: version
+        run: echo "version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)" >> "$GITHUB_OUTPUT"
+
+      - name: Build release (universal binary)
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          cargo build --release --target x86_64-apple-darwin
+          mkdir -p target/universal/release
+          lipo -create -output target/universal/release/${BIN_NAME} \
+            target/aarch64-apple-darwin/release/${BIN_NAME} \
+            target/x86_64-apple-darwin/release/${BIN_NAME}
+
+      - name: Generate macOS icon
+        run: make icons-macos
+
+      - name: Package .app bundle
+        run: |
+          APP_BUNDLE="dist/macos/${APP_NAME}.app"
+          mkdir -p "${APP_BUNDLE}/Contents/MacOS" "${APP_BUNDLE}/Contents/Resources"
+
+          cp "target/universal/release/${BIN_NAME}" "${APP_BUNDLE}/Contents/MacOS/${BIN_NAME}-bin"
+
+          printf '#!/bin/sh\nscript_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"\ncd "$script_dir/../Resources" || exit 1\nexec "$script_dir/${BIN_NAME}-bin" "$@"\n' \
+            > "${APP_BUNDLE}/Contents/MacOS/${BIN_NAME}"
+          chmod +x "${APP_BUNDLE}/Contents/MacOS/${BIN_NAME}"
+
+          cp packaging/macos/Info.plist "${APP_BUNDLE}/Contents/Info.plist"
+          cp packaging/macos/${APP_NAME}.icns "${APP_BUNDLE}/Contents/Resources/${APP_NAME}.icns"
+          cp -R assets "${APP_BUNDLE}/Contents/Resources/assets"
+
+      - name: Create zip
+        run: |
+          cd dist/macos
+          zip -qry "../${APP_NAME}-${{ steps.version.outputs.version }}-macos.zip" "${APP_NAME}.app"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-macos
+          path: dist/${{ env.APP_NAME }}-${{ steps.version.outputs.version }}-macos.zip
