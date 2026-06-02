@@ -8,9 +8,9 @@ use bevy_egui::{EguiContexts, EguiTextureHandle, egui};
 
 use crate::build_info::menu_build_label;
 use crate::game::{
-    Controller, Faction, GameState, HistoricalCatalog, Officer, OfficerCatalog, OfficerGender,
-    OfficerProfile, OfficerProfileUpdate, OfficerStats, OfficerStatus, SourceConfidence,
-    SqliteHistoricalCatalog,
+    Controller, Faction, GameState, HistoricalCatalog, HistoricalScenario, Officer, OfficerCatalog,
+    OfficerGender, OfficerProfile, OfficerProfileUpdate, OfficerStats, OfficerStatus,
+    SourceConfidence, SqliteHistoricalCatalog,
 };
 
 use super::HUD_MARGIN;
@@ -34,7 +34,8 @@ use super::state::{
     refresh_history_factions, refresh_history_menu,
 };
 use super::style::{
-    modal_title_bar, war_gold, war_panel_frame, war_sub_panel_frame, war_text_muted, war_warning,
+    modal_title_bar, war_border, war_gold, war_panel_frame, war_sub_panel_frame, war_text,
+    war_text_muted, war_warning,
 };
 
 #[cfg(test)]
@@ -67,6 +68,9 @@ const MAIN_MENU_BUTTON_HEIGHT: f32 = 36.0;
 const MAIN_MENU_BUTTON_SPACING: f32 = 7.0;
 const MAIN_MENU_BGM_BUTTON_SIZE: f32 = 36.0;
 const MAIN_MENU_BGM_BUTTON_MARGIN: f32 = 12.0;
+const NEW_GAME_CONTENT_HEIGHT: f32 = 442.0;
+const NEW_GAME_COLUMN_GAP: f32 = 14.0;
+const NEW_GAME_START_BUTTON_HEIGHT: f32 = 38.0;
 const OFFICER_PORTRAIT_PANEL_WIDTH: f32 = 236.0;
 const OFFICER_PORTRAIT_GAP: f32 = 14.0;
 
@@ -442,78 +446,403 @@ fn close_main_menu_popups(ui_state: &mut GameUiState) {
 }
 
 pub(super) fn new_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
-    ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+    ui.set_width(ui.available_width());
+    new_game_header(ui, ui_state, t);
+    ui.add_space(12.0);
+
+    if ui_state.history_scenarios.is_empty() {
+        new_game_empty_catalog(ui, ui_state, t);
+        return;
+    }
+
+    ui.columns(2, |columns| {
+        columns[0].set_width((columns[0].available_width() - NEW_GAME_COLUMN_GAP * 0.5).max(0.0));
+        columns[1].set_width((columns[1].available_width() - NEW_GAME_COLUMN_GAP * 0.5).max(0.0));
+        new_game_scenario_column(&mut columns[0], ui_state, t);
+        new_game_faction_column(&mut columns[1], ui_state, t);
+    });
+
+    ui.add_space(12.0);
+    new_game_footer(ui, ui_state, t);
+}
+
+fn new_game_header(ui: &mut egui::Ui, ui_state: &GameUiState, t: &Translator) {
+    let scenario = selected_scenario(ui_state);
+    let faction = selected_faction(ui_state);
+    war_sub_panel_frame().show(ui, |ui| {
         ui.set_width(ui.available_width());
-        ui.heading(egui::RichText::new(t.text("new-game-title")).color(war_gold()));
-        ui.add_space(8.0);
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(t.text("new-game-scenario")).color(war_text_muted()));
+            ui.vertical(|ui| {
+                ui.label(
+                    egui::RichText::new(t.text("new-game-title"))
+                        .size(20.0)
+                        .color(war_gold())
+                        .strong(),
+                );
+                ui.add_space(3.0);
+                ui.label(
+                    egui::RichText::new(new_game_selection_summary(scenario, faction, t))
+                        .size(13.0)
+                        .color(war_text_muted()),
+                );
+            });
+        });
+    });
+}
+
+fn new_game_selection_summary(
+    scenario: Option<&HistoricalScenario>,
+    faction: Option<&Faction>,
+    t: &Translator,
+) -> String {
+    let scenario = scenario
+        .map(|scenario| {
+            t.text_args(
+                "new-game-scenario-line",
+                &args([
+                    ("name", scenario.name.clone()),
+                    ("year", scenario.year.to_string()),
+                    ("month", scenario.month.to_string()),
+                ]),
+            )
+        })
+        .unwrap_or_else(|| t.text("common-none-selected"));
+    let faction = faction
+        .map(|faction| faction.name.clone())
+        .unwrap_or_else(|| t.text("common-none-selected"));
+    format!("{scenario} / {faction}")
+}
+
+fn new_game_empty_catalog(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
+    let height = NEW_GAME_CONTENT_HEIGHT + NEW_GAME_START_BUTTON_HEIGHT + 12.0;
+    war_sub_panel_frame().show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.set_min_height(height);
+        ui.vertical_centered_justified(|ui| {
+            ui.add_space((height * 0.38).max(0.0));
+            ui.label(
+                egui::RichText::new(t.text("new-game-history-required"))
+                    .color(war_warning())
+                    .size(15.0),
+            );
+            ui.add_space(10.0);
             if ui.button(t.text("new-game-refresh-catalog")).clicked() {
                 refresh_history_menu(ui_state);
             }
         });
-        if ui_state.history_scenarios.is_empty() {
-            ui.label(egui::RichText::new(t.text("new-game-history-required")).color(war_warning()));
-            return;
-        }
+    });
+}
+
+fn new_game_scenario_column(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
+    war_sub_panel_frame().show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.set_min_height(NEW_GAME_CONTENT_HEIGHT);
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(t.text("new-game-scenario"))
+                    .color(war_gold())
+                    .strong(),
+            );
+            ui.add_space((ui.available_width() - 122.0).max(0.0));
+            if ui
+                .small_button(t.text("new-game-refresh-catalog"))
+                .on_hover_text(t.text("new-game-refresh-catalog"))
+                .clicked()
+            {
+                refresh_history_menu(ui_state);
+            }
+        });
+        ui.add_space(8.0);
 
         let mut scenario_changed = false;
         egui::ScrollArea::vertical()
             .id_salt("main_menu_scenarios")
-            .max_height(190.0)
+            .max_height(NEW_GAME_CONTENT_HEIGHT - 42.0)
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 for scenario in ui_state.history_scenarios.clone() {
-                    let label = t.text_args(
-                        "new-game-scenario-line",
-                        &args([
-                            ("name", scenario.name),
-                            ("year", scenario.year.to_string()),
-                            ("month", scenario.month.to_string()),
-                        ]),
-                    );
-                    if ui
-                        .radio_value(&mut ui_state.selected_scenario_id, scenario.id, label)
-                        .changed()
-                    {
+                    if scenario_choice_card(ui, ui_state, &scenario, t) {
                         scenario_changed = true;
                     }
+                    ui.add_space(7.0);
                 }
             });
         if scenario_changed {
             refresh_history_factions(ui_state);
         }
+    });
+}
 
+fn new_game_faction_column(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
+    war_sub_panel_frame().show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.set_min_height(NEW_GAME_CONTENT_HEIGHT);
+        ui.label(
+            egui::RichText::new(t.text("new-game-faction"))
+                .color(war_gold())
+                .strong(),
+        );
+        ui.add_space(8.0);
+
+        let faction = selected_faction(ui_state);
+        selected_faction_summary(ui, faction, t);
         ui.add_space(10.0);
-        ui.label(egui::RichText::new(t.text("new-game-faction")).color(war_text_muted()));
+
+        let selectable_factions = ui_state
+            .history_factions
+            .iter()
+            .filter(|faction| faction.selectable)
+            .cloned()
+            .collect::<Vec<_>>();
+        if selectable_factions.is_empty() {
+            ui.label(
+                egui::RichText::new(t.text("common-none-selected"))
+                    .color(war_warning())
+                    .size(15.0),
+            );
+            return;
+        }
+
         egui::ScrollArea::vertical()
             .id_salt("main_menu_factions")
-            .max_height(160.0)
+            .max_height(NEW_GAME_CONTENT_HEIGHT - 118.0)
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                for faction in ui_state
-                    .history_factions
-                    .iter()
-                    .filter(|faction| faction.selectable)
-                    .cloned()
-                    .collect::<Vec<_>>()
-                {
-                    ui.radio_value(&mut ui_state.selected_faction_id, faction.id, faction.name);
+                for faction in selectable_factions {
+                    faction_choice_card(ui, ui_state, faction, t);
+                    ui.add_space(7.0);
                 }
             });
-        ui.add_space(12.0);
-        if ui
-            .add_sized(
-                [ui.available_width(), 34.0],
-                egui::Button::new(t.text("new-game-start")),
-            )
-            .clicked()
-        {
-            start_history_game(ui_state);
-        }
     });
+}
+
+fn selected_faction_summary(ui: &mut egui::Ui, faction: Option<&Faction>, t: &Translator) {
+    let rect_height = 54.0;
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), rect_height),
+        egui::Sense::hover(),
+    );
+    let painter = ui.painter();
+    painter.rect_filled(
+        rect,
+        4.0,
+        egui::Color32::from_rgba_unmultiplied(22, 18, 13, 210),
+    );
+    painter.rect_stroke(
+        rect,
+        4.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(138, 101, 58, 92)),
+        egui::StrokeKind::Inside,
+    );
+
+    let marker_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + 12.0, rect.center().y - 7.0),
+        egui::vec2(14.0, 14.0),
+    );
+    let marker_color = faction
+        .map(faction_color)
+        .unwrap_or_else(|| egui::Color32::from_rgba_unmultiplied(118, 85, 48, 150));
+    painter.circle_filled(marker_rect.center(), 7.0, marker_color);
+    painter.circle_stroke(
+        marker_rect.center(),
+        7.0,
+        egui::Stroke::new(1.0, war_gold()),
+    );
+
+    painter.text(
+        egui::pos2(rect.left() + 34.0, rect.top() + 10.0),
+        egui::Align2::LEFT_TOP,
+        faction.map(|faction| faction.name.as_str()).unwrap_or(""),
+        egui::FontId::proportional(17.0),
+        war_text(),
+    );
+    if faction.is_none() {
+        painter.text(
+            egui::pos2(rect.left() + 34.0, rect.top() + 10.0),
+            egui::Align2::LEFT_TOP,
+            t.text("common-none-selected"),
+            egui::FontId::proportional(17.0),
+            war_text_muted(),
+        );
+    }
+    painter.text(
+        egui::pos2(rect.left() + 34.0, rect.top() + 33.0),
+        egui::Align2::LEFT_TOP,
+        t.text("new-game-faction"),
+        egui::FontId::proportional(12.0),
+        war_text_muted(),
+    );
+}
+
+fn new_game_footer(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
+    let can_start =
+        !ui_state.selected_scenario_id.is_empty() && !ui_state.selected_faction_id.is_empty();
+    let button = egui::Button::new(
+        egui::RichText::new(t.text("new-game-start"))
+            .size(16.0)
+            .strong(),
+    )
+    .fill(if can_start {
+        egui::Color32::from_rgb(77, 45, 28)
+    } else {
+        egui::Color32::from_rgb(45, 36, 27)
+    })
+    .stroke(egui::Stroke::new(1.0, war_border()));
+    if ui
+        .add_enabled_ui(can_start, |ui| {
+            ui.add_sized([ui.available_width(), NEW_GAME_START_BUTTON_HEIGHT], button)
+        })
+        .inner
+        .clicked()
+    {
+        start_history_game(ui_state);
+    }
+}
+
+fn scenario_choice_card(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    scenario: &HistoricalScenario,
+    t: &Translator,
+) -> bool {
+    let selected = ui_state.selected_scenario_id == scenario.id;
+    let response = selectable_card(
+        ui,
+        selected,
+        scenario.name.as_str(),
+        &t.text_args(
+            "new-game-scenario-date",
+            &args([
+                ("year", scenario.year.to_string()),
+                ("month", scenario.month.to_string()),
+            ]),
+        ),
+        None,
+        58.0,
+    )
+    .on_hover_text(t.text_args(
+        "new-game-scenario-line",
+        &args([
+            ("name", scenario.name.clone()),
+            ("year", scenario.year.to_string()),
+            ("month", scenario.month.to_string()),
+        ]),
+    ));
+    if response.clicked() && !selected {
+        ui_state.selected_scenario_id = scenario.id.clone();
+        return true;
+    }
+    false
+}
+
+fn faction_choice_card(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    faction: Faction,
+    t: &Translator,
+) -> egui::Response {
+    let selected = ui_state.selected_faction_id == faction.id;
+    let response = selectable_card(
+        ui,
+        selected,
+        faction.name.as_str(),
+        &t.text("new-game-selectable-faction"),
+        Some(faction_color(&faction)),
+        46.0,
+    );
+    if response.clicked() && !selected {
+        ui_state.selected_faction_id = faction.id;
+    }
+    response
+}
+
+fn selectable_card(
+    ui: &mut egui::Ui,
+    selected: bool,
+    title: &str,
+    subtitle: &str,
+    marker_color: Option<egui::Color32>,
+    height: f32,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::click(),
+    );
+    let hovered = response.hovered();
+    let fill = if selected {
+        egui::Color32::from_rgba_unmultiplied(80, 42, 28, 230)
+    } else if hovered {
+        egui::Color32::from_rgba_unmultiplied(52, 39, 26, 230)
+    } else {
+        egui::Color32::from_rgba_unmultiplied(24, 20, 15, 205)
+    };
+    let stroke_color = if selected || hovered {
+        war_gold()
+    } else {
+        egui::Color32::from_rgba_unmultiplied(138, 101, 58, 95)
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, 4.0, fill);
+    painter.rect_stroke(
+        rect,
+        4.0,
+        egui::Stroke::new(1.0, stroke_color),
+        egui::StrokeKind::Inside,
+    );
+
+    let marker_center = egui::pos2(rect.left() + 18.0, rect.center().y);
+    painter.circle_stroke(marker_center, 8.0, egui::Stroke::new(1.0, stroke_color));
+    if selected {
+        painter.circle_filled(marker_center, 4.5, war_gold());
+    } else if let Some(color) = marker_color {
+        painter.circle_filled(marker_center, 5.0, color);
+    }
+
+    painter.text(
+        egui::pos2(rect.left() + 34.0, rect.top() + 9.0),
+        egui::Align2::LEFT_TOP,
+        title,
+        egui::FontId::proportional(15.5),
+        if selected {
+            war_text()
+        } else {
+            war_text_muted()
+        },
+    );
+    painter.text(
+        egui::pos2(rect.left() + 34.0, rect.top() + height - 23.0),
+        egui::Align2::LEFT_TOP,
+        subtitle,
+        egui::FontId::proportional(12.0),
+        war_text_muted(),
+    );
+
+    response
+}
+
+fn selected_scenario(ui_state: &GameUiState) -> Option<&HistoricalScenario> {
+    ui_state
+        .history_scenarios
+        .iter()
+        .find(|scenario| scenario.id == ui_state.selected_scenario_id)
+}
+
+fn selected_faction(ui_state: &GameUiState) -> Option<&Faction> {
+    ui_state
+        .history_factions
+        .iter()
+        .find(|faction| faction.selectable && faction.id == ui_state.selected_faction_id)
+}
+
+fn faction_color(faction: &Faction) -> egui::Color32 {
+    let [red, green, blue] = faction.color;
+    egui::Color32::from_rgb(
+        (red.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (green.clamp(0.0, 1.0) * 255.0).round() as u8,
+        (blue.clamp(0.0, 1.0) * 255.0).round() as u8,
+    )
 }
 
 pub(super) fn load_game_menu(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
@@ -601,8 +930,8 @@ fn new_game_modal(ctx: &egui::Context, ui_state: &mut GameUiState, t: &Translato
     main_menu_scrim(ctx, ui_state);
 
     let screen = ctx.content_rect();
-    let width = (screen.width() * 0.48).clamp(440.0, 640.0);
-    let height = (screen.height() - HUD_MARGIN * 2.0).clamp(500.0, 680.0);
+    let width = (screen.width() * 0.66).clamp(760.0, 920.0);
+    let height = (screen.height() - HUD_MARGIN * 2.0).clamp(560.0, 680.0);
     egui::Area::new(egui::Id::new("main_menu_new_game_modal"))
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
@@ -613,7 +942,7 @@ fn new_game_modal(ctx: &egui::Context, ui_state: &mut GameUiState, t: &Translato
                 if modal_title_bar(ui, t, &t.text("main-menu-new-game")) {
                     ui_state.main_menu_new_game_open = false;
                 }
-                ui.separator();
+                ui.add_space(8.0);
                 new_game_menu(ui, ui_state, t);
             });
         });
