@@ -2238,6 +2238,116 @@ fn marriage_allows_multiple_spouses_and_rejects_invalid_pairs() {
 }
 
 #[test]
+fn divorce_removes_dynamic_marriage_without_removing_children() {
+    let mut game = sample_game();
+    let mut lady_gan = game.officers["liu_bei"].clone();
+    lady_gan.id = "lady_gan_test".to_string();
+    lady_gan.name = "甘夫人".to_string();
+    lady_gan.birth_year = 178;
+    lady_gan.gender = OfficerGender::Female;
+    lady_gan.city_id = Some("pingyuan".to_string());
+    game.officers.insert(lady_gan.id.clone(), lady_gan);
+    marry_officers(&mut game, "liu_bei", "liu_bei", "lady_gan_test").unwrap();
+    game.family_relationships.push(FamilyRelationship {
+        parent_id: "liu_bei".to_string(),
+        child_id: "zhao_yun".to_string(),
+    });
+    game.family_relationships.push(FamilyRelationship {
+        parent_id: "lady_gan_test".to_string(),
+        child_id: "zhao_yun".to_string(),
+    });
+
+    divorce_officers(&mut game, "liu_bei", "liu_bei", "lady_gan_test").unwrap();
+
+    assert!(game.marriages.is_empty());
+    assert!(child_ids_for_parent(&game, "liu_bei").contains(&"zhao_yun".to_string()));
+    assert!(child_ids_for_parent(&game, "lady_gan_test").contains(&"zhao_yun".to_string()));
+}
+
+#[test]
+fn divorce_removes_historical_spouse_relationships_from_profiles() {
+    let mut game = sample_game();
+    let liu_stats = game.officers["liu_bei"].stats;
+    game.officers
+        .get_mut("liu_bei")
+        .unwrap()
+        .profile
+        .as_mut()
+        .unwrap()
+        .relationships
+        .push(OfficerRelationship {
+            target_id: "lady_static".to_string(),
+            target_name: "静夫人".to_string(),
+            kind: OfficerRelationshipKind::Spouse,
+            confidence: SourceConfidence::High,
+            notes: "test".to_string(),
+            source: "test".to_string(),
+        });
+    let mut lady = game.officers["liu_bei"].clone();
+    lady.id = "lady_static".to_string();
+    lady.name = "静夫人".to_string();
+    lady.birth_year = 178;
+    lady.gender = OfficerGender::Female;
+    lady.profile = Some(OfficerProfile {
+        id: "lady_static".to_string(),
+        name: "静夫人".to_string(),
+        courtesy_name: None,
+        native_place: None,
+        birth_year: Some(178),
+        death_year: None,
+        gender: OfficerGender::Female,
+        stats: liu_stats,
+        tags: Vec::new(),
+        confidence: SourceConfidence::High,
+        biography: String::new(),
+        relationships: vec![OfficerRelationship {
+            target_id: "liu_bei".to_string(),
+            target_name: "刘备".to_string(),
+            kind: OfficerRelationshipKind::Spouse,
+            confidence: SourceConfidence::High,
+            notes: "test".to_string(),
+            source: "test".to_string(),
+        }],
+        notes: String::new(),
+    });
+    game.officers.insert(lady.id.clone(), lady);
+
+    assert!(
+        game.officers["liu_bei"]
+            .profile
+            .as_ref()
+            .unwrap()
+            .relationships
+            .iter()
+            .any(|relationship| relationship.target_id == "lady_static"
+                && relationship.kind == OfficerRelationshipKind::Spouse)
+    );
+
+    divorce_officers(&mut game, "liu_bei", "liu_bei", "lady_static").unwrap();
+
+    assert!(
+        !game.officers["liu_bei"]
+            .profile
+            .as_ref()
+            .unwrap()
+            .relationships
+            .iter()
+            .any(|relationship| relationship.target_id == "lady_static"
+                && relationship.kind == OfficerRelationshipKind::Spouse)
+    );
+    assert!(
+        !game.officers["lady_static"]
+            .profile
+            .as_ref()
+            .unwrap()
+            .relationships
+            .iter()
+            .any(|relationship| relationship.target_id == "liu_bei"
+                && relationship.kind == OfficerRelationshipKind::Spouse)
+    );
+}
+
+#[test]
 fn annual_birth_creates_minor_child_with_parent_relationships() {
     let mut game = sample_game();
     game.year = 200;
@@ -2298,6 +2408,36 @@ fn ruler_death_records_succession_decision_and_choice_updates_ruler() {
     resolve_event_decision(&mut game, &event_id, "zhang_fei").unwrap();
 
     assert_eq!(game.factions["liu_bei"].ruler_id, "zhang_fei");
+}
+
+#[test]
+fn abdication_updates_ruler_and_keeps_old_ruler_active() {
+    let mut game = sample_game();
+    let old_city = game.officers["liu_bei"].city_id.clone();
+
+    abdicate_ruler(&mut game, "liu_bei", "guan_yu").unwrap();
+
+    assert_eq!(game.factions["liu_bei"].ruler_id, "guan_yu");
+    assert_eq!(game.factions["liu_bei"].heir_id.as_deref(), Some("guan_yu"));
+    assert_eq!(game.officers["liu_bei"].status, OfficerStatus::Active);
+    assert_eq!(game.officers["liu_bei"].city_id, old_city);
+}
+
+#[test]
+fn abdication_rejects_invalid_successors() {
+    let mut game = sample_game();
+    let mut child = game.officers["zhao_yun"].clone();
+    child.id = "liu_child".to_string();
+    child.name = "刘安".to_string();
+    child.birth_year = game.year - 10;
+    child.status = OfficerStatus::Active;
+    game.officers.insert(child.id.clone(), child);
+    game.officers.get_mut("jian_yong").unwrap().status = OfficerStatus::Unavailable;
+
+    assert!(abdicate_ruler(&mut game, "liu_bei", "liu_bei").is_err());
+    assert!(abdicate_ruler(&mut game, "liu_bei", "cao_cao").is_err());
+    assert!(abdicate_ruler(&mut game, "liu_bei", "liu_child").is_err());
+    assert!(abdicate_ruler(&mut game, "liu_bei", "jian_yong").is_err());
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use crate::game::*;
 use bevy_egui::egui;
 use egui_extras::{Column, Size, StripBuilder, TableBuilder};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use super::actions::{
     clear_pending_commands, confirm_return_main_menu, enter_game, finish_current_turn, open_city,
@@ -2501,8 +2501,8 @@ pub(super) fn shrine_hud(
         return;
     }
 
-    let width = (screen.width() * 0.82).clamp(760.0, 1120.0);
-    let height = (screen.height() * 0.76).clamp(420.0, 680.0);
+    let width = (screen.width() * 0.84).clamp(800.0, 1180.0);
+    let height = (screen.height() * 0.78).clamp(460.0, 720.0);
     egui::Area::new(egui::Id::new("hud_shrine"))
         .order(egui::Order::Foreground)
         .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
@@ -2515,30 +2515,80 @@ pub(super) fn shrine_hud(
                 }
                 ui.separator();
                 ui.horizontal(|ui| {
-                    for (tab, label) in [
-                        (ShrineTab::Succession, t.text("shrine-tab-succession")),
-                        (ShrineTab::Marriage, t.text("shrine-tab-marriage")),
-                        (ShrineTab::Children, t.text("shrine-tab-children")),
+                    for (tab, icon, label) in [
+                        (
+                            ShrineTab::Kinship,
+                            egui_phosphor::regular::TREE_STRUCTURE,
+                            t.text("shrine-tab-kinship"),
+                        ),
+                        (
+                            ShrineTab::Marriage,
+                            egui_phosphor::regular::HEART,
+                            t.text("shrine-tab-marriage"),
+                        ),
+                        (
+                            ShrineTab::ChildrenHeir,
+                            egui_phosphor::regular::BABY,
+                            t.text("shrine-tab-children-heir"),
+                        ),
+                        (
+                            ShrineTab::Abdication,
+                            egui_phosphor::regular::SEAL,
+                            t.text("shrine-tab-abdication"),
+                        ),
                     ] {
-                        if ui
-                            .selectable_label(ui_state.shrine_tab == tab, label)
-                            .clicked()
+                        if shrine_tab_button(ui, ui_state.shrine_tab == tab, icon, label).clicked()
                         {
                             ui_state.shrine_tab = tab;
+                            ui_state.shrine_abdication_confirm = false;
                         }
                     }
                 });
                 ui.separator();
                 match ui_state.shrine_tab {
-                    ShrineTab::Succession => shrine_succession_panel(ui, ui_state, t),
+                    ShrineTab::Kinship => shrine_kinship_panel(ui, ui_state, t, height - 116.0),
                     ShrineTab::Marriage => shrine_marriage_panel(ui, ui_state, t, height - 112.0),
-                    ShrineTab::Children => shrine_children_panel(ui, ui_state, t, height - 112.0),
+                    ShrineTab::ChildrenHeir => {
+                        shrine_children_heir_panel(ui, ui_state, t, height - 112.0)
+                    }
+                    ShrineTab::Abdication => {
+                        shrine_abdication_panel(ui, ui_state, t, height - 112.0)
+                    }
                 }
             });
         });
 }
 
-fn shrine_succession_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
+fn shrine_tab_button(
+    ui: &mut egui::Ui,
+    selected: bool,
+    icon: &str,
+    label: String,
+) -> egui::Response {
+    let color = if selected { war_gold() } else { war_text() };
+    let fill = if selected {
+        egui::Color32::from_rgba_unmultiplied(84, 54, 30, 190)
+    } else {
+        egui::Color32::from_rgba_unmultiplied(38, 31, 23, 120)
+    };
+    ui.add_sized(
+        egui::vec2(142.0, 32.0),
+        egui::Button::new(
+            egui::RichText::new(format!("{icon} {label}"))
+                .size(15.0)
+                .color(color),
+        )
+        .selected(selected)
+        .fill(fill),
+    )
+}
+
+fn shrine_kinship_panel(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    max_height: f32,
+) {
     let Some(game) = ui_state.game.as_ref() else {
         ui.label(t.text("message-no-game-state"));
         return;
@@ -2548,70 +2598,37 @@ fn shrine_succession_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Tr
         ui.label(t.text("unknown-faction"));
         return;
     };
-    let ruler_name = game
-        .officers
-        .get(&faction.ruler_id)
-        .map(|officer| officer.name.clone())
-        .unwrap_or_else(|| faction.ruler_id.clone());
-    let heir_name = faction
-        .heir_id
-        .as_deref()
-        .and_then(|id| game.officers.get(id))
-        .map(|officer| officer.name.clone())
-        .unwrap_or_else(|| t.text("shrine-no-heir"));
-    ui.heading(egui::RichText::new(t.text("shrine-succession-heading")).color(war_gold()));
-    ui.label(t.text_args(
-        "shrine-current-ruler",
-        &args([("ruler", ruler_name), ("heir", heir_name)]),
-    ));
-    ui.add_space(8.0);
-
-    let candidates = succession_candidate_ids(game, &faction_id, None);
-    if candidates.is_empty() {
-        ui.colored_label(war_warning(), t.text("shrine-no-heir-candidates"));
+    let Some(graph) = shrine_kinship_graph(game, faction, t) else {
+        ui.colored_label(war_warning(), t.text("shrine-kinship-empty"));
         return;
-    }
+    };
 
-    egui::ScrollArea::vertical()
-        .id_salt("shrine_succession_candidates")
-        .max_height(420.0)
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            for candidate_id in candidates {
-                let Some(officer) = ui_state
-                    .game
-                    .as_ref()
-                    .and_then(|game| game.officers.get(&candidate_id))
-                else {
-                    continue;
-                };
-                let label = t.text_args(
-                    "shrine-heir-candidate",
-                    &args([
-                        ("name", officer.name.clone()),
-                        (
-                            "age",
-                            officer
-                                .age_at(ui_state.game.as_ref().unwrap().year)
-                                .to_string(),
-                        ),
-                        ("loyalty", officer.loyalty.to_string()),
-                    ]),
-                );
-                if ui.button(label).clicked()
-                    && let Some(game) = ui_state.game.as_mut()
-                {
-                    match set_default_heir(game, &faction_id, &candidate_id) {
-                        Ok(()) => {
-                            let name = game.officers[&candidate_id].name.clone();
-                            ui_state.message =
-                                t.text_args("message-heir-set", &args([("officer", name)]));
-                        }
-                        Err(error) => ui_state.message = error.to_string(),
-                    }
-                }
-            }
-        });
+    ui.horizontal_wrapped(|ui| {
+        ui.heading(egui::RichText::new(t.text("shrine-kinship-heading")).color(war_gold()));
+        ui.separator();
+        shrine_legend_item(
+            ui,
+            relationship_kind_color(RelationshipGraphKind::Spouse),
+            t.text("shrine-kinship-legend-spouse"),
+        );
+        shrine_legend_item(
+            ui,
+            relationship_kind_color(RelationshipGraphKind::Child),
+            t.text("shrine-kinship-legend-parent-child"),
+        );
+        shrine_legend_item(ui, war_text_muted(), t.text("shrine-kinship-legend-weak"));
+    });
+    ui.add_space(4.0);
+    shrine_kinship_graph_view(ui, &graph, t, max_height.max(320.0));
+    if graph.omitted_count > 0 {
+        ui.colored_label(
+            war_text_muted(),
+            t.text_args(
+                "shrine-kinship-omitted",
+                &args([("count", graph.omitted_count.to_string())]),
+            ),
+        );
+    }
 }
 
 fn shrine_marriage_panel(
@@ -2625,35 +2642,93 @@ fn shrine_marriage_panel(
         return;
     };
     let faction_id = game.player_faction_id.clone();
-    let marriages = game.marriages.clone();
-    ui.heading(egui::RichText::new(t.text("shrine-marriage-heading")).color(war_gold()));
+    let marriage_entries = shrine_marriage_entries(game, &faction_id);
+    let mut marriage_first = ui_state.shrine_marriage_first.clone();
+    let mut marriage_second = ui_state.shrine_marriage_second.clone();
+    let mut pending_divorce = ui_state.shrine_pending_divorce.clone();
     let mut marry_request = None;
-    ui.horizontal_wrapped(|ui| {
-        officer_combo_for_marriage(
-            ui,
-            game,
-            &faction_id,
-            &mut ui_state.shrine_marriage_first,
-            "shrine_marriage_first",
-            t.text("shrine-marriage-first"),
-        );
-        officer_combo_for_marriage(
-            ui,
-            game,
-            &faction_id,
-            &mut ui_state.shrine_marriage_second,
-            "shrine_marriage_second",
-            t.text("shrine-marriage-second"),
-        );
-        if ui.button(t.text("shrine-marry")).clicked()
-            && let (Some(first_id), Some(second_id)) = (
-                ui_state.shrine_marriage_first.clone(),
-                ui_state.shrine_marriage_second.clone(),
-            )
-        {
-            marry_request = Some((first_id, second_id));
-        }
-    });
+    let mut divorce_request = None;
+
+    StripBuilder::new(ui)
+        .size(Size::relative(0.36))
+        .size(Size::remainder())
+        .horizontal(|mut strip| {
+            strip.cell(|ui| {
+                war_sub_panel_frame().show(ui, |ui| {
+                    ui.heading(
+                        egui::RichText::new(format!(
+                            "{} {}",
+                            egui_phosphor::regular::HEART,
+                            t.text("shrine-marriage-create-heading")
+                        ))
+                        .color(war_gold()),
+                    );
+                    ui.label(t.text("shrine-marriage-create-note"));
+                    ui.add_space(8.0);
+                    officer_combo_for_marriage(
+                        ui,
+                        game,
+                        &faction_id,
+                        &mut marriage_first,
+                        "shrine_marriage_first",
+                        t.text("shrine-marriage-first"),
+                    );
+                    officer_combo_for_marriage(
+                        ui,
+                        game,
+                        &faction_id,
+                        &mut marriage_second,
+                        "shrine_marriage_second",
+                        t.text("shrine-marriage-second"),
+                    );
+                    ui.add_space(6.0);
+                    if ui
+                        .add_sized(
+                            egui::vec2(ui.available_width(), 32.0),
+                            egui::Button::new(format!(
+                                "{} {}",
+                                egui_phosphor::regular::HANDSHAKE,
+                                t.text("shrine-marry")
+                            )),
+                        )
+                        .clicked()
+                        && let (Some(first_id), Some(second_id)) =
+                            (marriage_first.clone(), marriage_second.clone())
+                    {
+                        marry_request = Some((first_id, second_id));
+                    }
+                });
+            });
+            strip.cell(|ui| {
+                ui.heading(
+                    egui::RichText::new(t.text("shrine-marriage-list-heading")).color(war_gold()),
+                );
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("shrine_marriages")
+                    .max_height(max_height.max(260.0))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if marriage_entries.is_empty() {
+                            ui.colored_label(war_text_muted(), t.text("shrine-marriage-empty"));
+                        }
+                        for entry in &marriage_entries {
+                            shrine_marriage_row(
+                                ui,
+                                t,
+                                entry,
+                                &mut pending_divorce,
+                                &mut divorce_request,
+                            );
+                        }
+                    });
+            });
+        });
+
+    ui_state.shrine_marriage_first = marriage_first;
+    ui_state.shrine_marriage_second = marriage_second;
+    ui_state.shrine_pending_divorce = pending_divorce;
+
     if let Some((first_id, second_id)) = marry_request
         && let Some(game) = ui_state.game.as_mut()
     {
@@ -2669,40 +2744,22 @@ fn shrine_marriage_panel(
             Err(error) => ui_state.message = error.to_string(),
         }
     }
-    ui.separator();
-    egui::ScrollArea::vertical()
-        .id_salt("shrine_marriages")
-        .max_height(max_height.max(260.0))
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            if marriages.is_empty() {
-                ui.label(t.text("shrine-marriage-empty"));
+    if let Some((first_id, second_id)) = divorce_request
+        && let Some(game) = ui_state.game.as_mut()
+    {
+        let first = officer_display_name(game, &first_id);
+        let second = officer_display_name(game, &second_id);
+        match divorce_officers(game, &faction_id, &first_id, &second_id) {
+            Ok(()) => {
+                ui_state.shrine_pending_divorce = None;
+                ui_state.message = t.text_args(
+                    "message-marriage-divorced",
+                    &args([("first", first), ("second", second)]),
+                );
             }
-            let Some(game) = ui_state.game.as_ref() else {
-                return;
-            };
-            for marriage in &marriages {
-                let husband = game
-                    .officers
-                    .get(&marriage.husband_id)
-                    .map(|officer| officer.name.clone())
-                    .unwrap_or_else(|| marriage.husband_id.clone());
-                let wife = game
-                    .officers
-                    .get(&marriage.wife_id)
-                    .map(|officer| officer.name.clone())
-                    .unwrap_or_else(|| marriage.wife_id.clone());
-                ui.label(t.text_args(
-                    "shrine-marriage-row",
-                    &args([
-                        ("husband", husband),
-                        ("wife", wife),
-                        ("year", marriage.year.to_string()),
-                        ("month", marriage.month.to_string()),
-                    ]),
-                ));
-            }
-        });
+            Err(error) => ui_state.message = error.to_string(),
+        }
+    }
 }
 
 fn officer_combo_for_marriage(
@@ -2731,7 +2788,7 @@ fn officer_combo_for_marriage(
         });
 }
 
-fn shrine_children_panel(
+fn shrine_children_heir_panel(
     ui: &mut egui::Ui,
     ui_state: &mut GameUiState,
     t: &Translator,
@@ -2741,44 +2798,1102 @@ fn shrine_children_panel(
         ui.label(t.text("message-no-game-state"));
         return;
     };
-    ui.heading(egui::RichText::new(t.text("shrine-children-heading")).color(war_gold()));
-    let child_ids = game
-        .family_relationships
-        .iter()
-        .map(|relationship| relationship.child_id.clone())
+    let faction_id = game.player_faction_id.clone();
+    let Some(faction) = game.factions.get(&faction_id) else {
+        ui.label(t.text("unknown-faction"));
+        return;
+    };
+    let child_ids = child_ids_for_parent(game, &faction.ruler_id);
+    let candidates = succession_candidate_ids(game, &faction_id, None);
+    let mut set_heir_request = None;
+
+    StripBuilder::new(ui)
+        .size(Size::relative(0.52))
+        .size(Size::remainder())
+        .horizontal(|mut strip| {
+            strip.cell(|ui| {
+                ui.heading(
+                    egui::RichText::new(t.text("shrine-children-heading")).color(war_gold()),
+                );
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("shrine_children_heir_children")
+                    .max_height(max_height.max(260.0))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if child_ids.is_empty() {
+                            ui.colored_label(war_text_muted(), t.text("shrine-children-empty"));
+                        }
+                        for child_id in &child_ids {
+                            let Some(child) = game.officers.get(child_id) else {
+                                continue;
+                            };
+                            shrine_child_card(ui, game, faction, child, t);
+                        }
+                    });
+            });
+            strip.cell(|ui| {
+                ui.heading(
+                    egui::RichText::new(t.text("shrine-succession-heading")).color(war_gold()),
+                );
+                ui.label(
+                    t.text_args(
+                        "shrine-current-ruler",
+                        &args([
+                            ("ruler", officer_display_name(game, &faction.ruler_id)),
+                            (
+                                "heir",
+                                faction
+                                    .heir_id
+                                    .as_deref()
+                                    .map(|id| officer_display_name(game, id))
+                                    .unwrap_or_else(|| t.text("shrine-no-heir")),
+                            ),
+                        ]),
+                    ),
+                );
+                ui.add_space(6.0);
+                egui::ScrollArea::vertical()
+                    .id_salt("shrine_succession_candidates")
+                    .max_height((max_height - 42.0).max(240.0))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if candidates.is_empty() {
+                            ui.colored_label(war_warning(), t.text("shrine-no-heir-candidates"));
+                        }
+                        for candidate_id in &candidates {
+                            let Some(officer) = game.officers.get(candidate_id) else {
+                                continue;
+                            };
+                            shrine_heir_candidate_row(
+                                ui,
+                                game,
+                                faction,
+                                officer,
+                                t,
+                                &mut set_heir_request,
+                            );
+                        }
+                    });
+            });
+        });
+
+    if let Some(candidate_id) = set_heir_request
+        && let Some(game) = ui_state.game.as_mut()
+    {
+        match set_default_heir(game, &faction_id, &candidate_id) {
+            Ok(()) => {
+                let name = game.officers[&candidate_id].name.clone();
+                ui_state.message = t.text_args("message-heir-set", &args([("officer", name)]));
+            }
+            Err(error) => ui_state.message = error.to_string(),
+        }
+    }
+}
+
+fn shrine_abdication_panel(
+    ui: &mut egui::Ui,
+    ui_state: &mut GameUiState,
+    t: &Translator,
+    max_height: f32,
+) {
+    let Some(game) = ui_state.game.as_ref() else {
+        ui.label(t.text("message-no-game-state"));
+        return;
+    };
+    let faction_id = game.player_faction_id.clone();
+    let Some(faction) = game.factions.get(&faction_id) else {
+        ui.label(t.text("unknown-faction"));
+        return;
+    };
+    let candidates = succession_candidate_ids(game, &faction_id, Some(&faction.ruler_id));
+    let selected_invalid = match &ui_state.shrine_abdication_successor {
+        Some(selected_id) => !candidates
+            .iter()
+            .any(|candidate_id| candidate_id == selected_id),
+        None => true,
+    };
+    if selected_invalid {
+        ui_state.shrine_abdication_successor = candidates.first().cloned();
+        ui_state.shrine_abdication_confirm = false;
+    }
+
+    let selected_id = ui_state.shrine_abdication_successor.clone();
+    let mut abdication_request = None;
+    StripBuilder::new(ui)
+        .size(Size::relative(0.42))
+        .size(Size::remainder())
+        .horizontal(|mut strip| {
+            strip.cell(|ui| {
+                war_sub_panel_frame().show(ui, |ui| {
+                    ui.heading(
+                        egui::RichText::new(t.text("shrine-abdication-heading")).color(war_gold()),
+                    );
+                    ui.label(t.text("shrine-abdication-note"));
+                    ui.add_space(8.0);
+                    ui.label(t.text_args(
+                        "shrine-abdication-current",
+                        &args([("ruler", officer_display_name(game, &faction.ruler_id))]),
+                    ));
+                    egui::ComboBox::from_id_salt("shrine_abdication_successor")
+                        .selected_text(
+                            selected_id
+                                .as_deref()
+                                .map(|id| officer_display_name(game, id))
+                                .unwrap_or_else(|| t.text("common-none-selected")),
+                        )
+                        .show_ui(ui, |ui| {
+                            for candidate_id in &candidates {
+                                ui.selectable_value(
+                                    &mut ui_state.shrine_abdication_successor,
+                                    Some(candidate_id.clone()),
+                                    officer_display_name(game, candidate_id),
+                                );
+                            }
+                        });
+                    ui.add_space(10.0);
+                    if let Some(successor_id) = &ui_state.shrine_abdication_successor {
+                        ui.label(t.text_args(
+                            "shrine-abdication-preview",
+                            &args([
+                                ("old", officer_display_name(game, &faction.ruler_id)),
+                                ("new", officer_display_name(game, successor_id)),
+                            ]),
+                        ));
+                    }
+                    if candidates.is_empty() {
+                        ui.colored_label(war_warning(), t.text("shrine-abdication-no-candidates"));
+                    } else if ui_state.shrine_abdication_confirm {
+                        ui.colored_label(war_danger(), t.text("shrine-abdication-confirm-warning"));
+                        ui.horizontal(|ui| {
+                            if ui.button(t.text("common-cancel")).clicked() {
+                                ui_state.shrine_abdication_confirm = false;
+                            }
+                            if ui
+                                .add(
+                                    egui::Button::new(t.text("common-confirm")).fill(
+                                        egui::Color32::from_rgba_unmultiplied(122, 45, 34, 220),
+                                    ),
+                                )
+                                .clicked()
+                                && let Some(successor_id) =
+                                    ui_state.shrine_abdication_successor.clone()
+                            {
+                                abdication_request = Some(successor_id);
+                            }
+                        });
+                    } else if ui
+                        .add_sized(
+                            egui::vec2(ui.available_width(), 32.0),
+                            egui::Button::new(format!(
+                                "{} {}",
+                                egui_phosphor::regular::SEAL,
+                                t.text("shrine-abdication-open-confirm")
+                            )),
+                        )
+                        .clicked()
+                    {
+                        ui_state.shrine_abdication_confirm = true;
+                    }
+                });
+            });
+            strip.cell(|ui| {
+                ui.heading(
+                    egui::RichText::new(t.text("shrine-abdication-candidates")).color(war_gold()),
+                );
+                egui::ScrollArea::vertical()
+                    .id_salt("shrine_abdication_candidates")
+                    .max_height(max_height.max(260.0))
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for candidate_id in &candidates {
+                            let Some(officer) = game.officers.get(candidate_id) else {
+                                continue;
+                            };
+                            let selected = ui_state.shrine_abdication_successor.as_deref()
+                                == Some(candidate_id.as_str());
+                            if shrine_selectable_officer_card(ui, game, officer, t, selected)
+                                .clicked()
+                            {
+                                ui_state.shrine_abdication_successor = Some(candidate_id.clone());
+                                ui_state.shrine_abdication_confirm = false;
+                            }
+                        }
+                    });
+            });
+        });
+
+    if let Some(successor_id) = abdication_request
+        && let Some(game) = ui_state.game.as_mut()
+    {
+        let old_ruler = game
+            .factions
+            .get(&faction_id)
+            .map(|faction| officer_display_name(game, &faction.ruler_id))
+            .unwrap_or_else(|| t.text("unknown"));
+        let successor = officer_display_name(game, &successor_id);
+        match abdicate_ruler(game, &faction_id, &successor_id) {
+            Ok(()) => {
+                ui_state.shrine_abdication_confirm = false;
+                ui_state.shrine_tab = ShrineTab::Kinship;
+                ui_state.message = t.text_args(
+                    "message-ruler-abdicated",
+                    &args([("old", old_ruler), ("new", successor)]),
+                );
+            }
+            Err(error) => ui_state.message = error.to_string(),
+        }
+    }
+}
+
+fn shrine_legend_item(ui: &mut egui::Ui, color: egui::Color32, label: String) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 10.0), egui::Sense::hover());
+    ui.painter().line_segment(
+        [rect.left_center(), rect.right_center()],
+        egui::Stroke::new(2.0, color),
+    );
+    ui.label(egui::RichText::new(label).color(war_text_muted()));
+}
+
+const SHRINE_MAX_KINSHIP_NODES: usize = 64;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ShrineKinshipGraph {
+    nodes: Vec<ShrineKinshipNode>,
+    edges: Vec<ShrineKinshipEdge>,
+    omitted_count: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ShrineKinshipNode {
+    id: OfficerId,
+    name: String,
+    generation: i32,
+    tooltip: String,
+    role: ShrineKinshipNodeRole,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShrineKinshipNodeRole {
+    Ruler,
+    Heir,
+    Officer,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ShrineKinshipEdge {
+    from_id: OfficerId,
+    to_id: OfficerId,
+    kind: ShrineKinshipEdgeKind,
+    source: ShrineRelationshipSource,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum ShrineKinshipEdgeKind {
+    Spouse,
+    ParentChild,
+    WeakParentChild,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShrineRelationshipSource {
+    Dynamic,
+    Historical,
+    Mixed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ShrineMarriageEntry {
+    husband_id: OfficerId,
+    wife_id: OfficerId,
+    husband_name: String,
+    wife_name: String,
+    date: Option<(i32, u8)>,
+    source: ShrineRelationshipSource,
+}
+
+fn shrine_kinship_graph(
+    game: &GameState,
+    faction: &Faction,
+    t: &Translator,
+) -> Option<ShrineKinshipGraph> {
+    if !game.officers.contains_key(&faction.ruler_id) {
+        return None;
+    }
+    let all_edges = shrine_all_kinship_edges(game);
+    let connected_order = shrine_connected_kinship_order(&faction.ruler_id, &all_edges);
+    let omitted_count = connected_order
+        .len()
+        .saturating_sub(SHRINE_MAX_KINSHIP_NODES);
+    let selected_ids = connected_order
+        .into_iter()
+        .take(SHRINE_MAX_KINSHIP_NODES)
         .collect::<BTreeSet<_>>();
-    if child_ids.is_empty() {
-        ui.label(t.text("shrine-children-empty"));
+    let edges = all_edges
+        .into_iter()
+        .filter(|edge| selected_ids.contains(&edge.from_id) && selected_ids.contains(&edge.to_id))
+        .collect::<Vec<_>>();
+    let generations = shrine_kinship_generations(&faction.ruler_id, &selected_ids, &edges);
+    let nodes = selected_ids
+        .into_iter()
+        .filter_map(|officer_id| {
+            let officer = game.officers.get(&officer_id)?;
+            Some(ShrineKinshipNode {
+                id: officer.id.clone(),
+                name: officer.name.clone(),
+                generation: *generations.get(&officer.id).unwrap_or(&0),
+                tooltip: shrine_officer_tooltip(game, faction, officer, t),
+                role: if faction.ruler_id == officer.id {
+                    ShrineKinshipNodeRole::Ruler
+                } else if faction.heir_id.as_deref() == Some(officer.id.as_str()) {
+                    ShrineKinshipNodeRole::Heir
+                } else {
+                    ShrineKinshipNodeRole::Officer
+                },
+            })
+        })
+        .collect();
+    Some(ShrineKinshipGraph {
+        nodes,
+        edges,
+        omitted_count,
+    })
+}
+
+fn shrine_all_kinship_edges(game: &GameState) -> Vec<ShrineKinshipEdge> {
+    let mut edges =
+        BTreeMap::<(ShrineKinshipEdgeKind, OfficerId, OfficerId), ShrineRelationshipSource>::new();
+
+    for marriage in &game.marriages {
+        let (first, second) = sorted_pair(&marriage.husband_id, &marriage.wife_id);
+        shrine_insert_edge_source(
+            &mut edges,
+            ShrineKinshipEdgeKind::Spouse,
+            first,
+            second,
+            ShrineRelationshipSource::Dynamic,
+        );
+    }
+    for relationship in &game.family_relationships {
+        if game.officers.contains_key(&relationship.parent_id)
+            && game.officers.contains_key(&relationship.child_id)
+        {
+            shrine_insert_edge_source(
+                &mut edges,
+                ShrineKinshipEdgeKind::ParentChild,
+                relationship.parent_id.clone(),
+                relationship.child_id.clone(),
+                ShrineRelationshipSource::Dynamic,
+            );
+        }
+    }
+    for officer in game.officers.values() {
+        let Some(profile) = &officer.profile else {
+            continue;
+        };
+        for relationship in &profile.relationships {
+            if !game.officers.contains_key(&relationship.target_id) {
+                continue;
+            }
+            match relationship.kind {
+                OfficerRelationshipKind::Spouse => {
+                    let (first, second) = sorted_pair(&officer.id, &relationship.target_id);
+                    shrine_insert_edge_source(
+                        &mut edges,
+                        ShrineKinshipEdgeKind::Spouse,
+                        first,
+                        second,
+                        ShrineRelationshipSource::Historical,
+                    );
+                }
+                OfficerRelationshipKind::ParentChild
+                | OfficerRelationshipKind::AdoptiveParentChild => {
+                    if let Some((parent_id, child_id)) = historical_parent_child_direction(
+                        game,
+                        &officer.id,
+                        &relationship.target_id,
+                    ) {
+                        shrine_insert_edge_source(
+                            &mut edges,
+                            ShrineKinshipEdgeKind::ParentChild,
+                            parent_id,
+                            child_id,
+                            ShrineRelationshipSource::Historical,
+                        );
+                    } else {
+                        let (first, second) = sorted_pair(&officer.id, &relationship.target_id);
+                        shrine_insert_edge_source(
+                            &mut edges,
+                            ShrineKinshipEdgeKind::WeakParentChild,
+                            first,
+                            second,
+                            ShrineRelationshipSource::Historical,
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    edges
+        .into_iter()
+        .map(|((kind, from_id, to_id), source)| ShrineKinshipEdge {
+            from_id,
+            to_id,
+            kind,
+            source,
+        })
+        .collect()
+}
+
+fn shrine_insert_edge_source(
+    edges: &mut BTreeMap<(ShrineKinshipEdgeKind, OfficerId, OfficerId), ShrineRelationshipSource>,
+    kind: ShrineKinshipEdgeKind,
+    from_id: OfficerId,
+    to_id: OfficerId,
+    source: ShrineRelationshipSource,
+) {
+    edges
+        .entry((kind, from_id, to_id))
+        .and_modify(|existing| *existing = merge_relationship_source(*existing, source))
+        .or_insert(source);
+}
+
+fn merge_relationship_source(
+    first: ShrineRelationshipSource,
+    second: ShrineRelationshipSource,
+) -> ShrineRelationshipSource {
+    if first == second {
+        first
+    } else {
+        ShrineRelationshipSource::Mixed
+    }
+}
+
+fn shrine_connected_kinship_order(ruler_id: &str, edges: &[ShrineKinshipEdge]) -> Vec<OfficerId> {
+    let mut adjacency = BTreeMap::<OfficerId, BTreeSet<OfficerId>>::new();
+    for edge in edges {
+        adjacency
+            .entry(edge.from_id.clone())
+            .or_default()
+            .insert(edge.to_id.clone());
+        adjacency
+            .entry(edge.to_id.clone())
+            .or_default()
+            .insert(edge.from_id.clone());
+    }
+
+    let mut queue = VecDeque::from([ruler_id.to_string()]);
+    let mut seen = BTreeSet::new();
+    let mut order = Vec::new();
+    while let Some(officer_id) = queue.pop_front() {
+        if !seen.insert(officer_id.clone()) {
+            continue;
+        }
+        order.push(officer_id.clone());
+        if let Some(neighbors) = adjacency.get(&officer_id) {
+            for neighbor_id in neighbors {
+                if !seen.contains(neighbor_id) {
+                    queue.push_back(neighbor_id.clone());
+                }
+            }
+        }
+    }
+    order
+}
+
+fn shrine_kinship_generations(
+    ruler_id: &str,
+    selected_ids: &BTreeSet<OfficerId>,
+    edges: &[ShrineKinshipEdge],
+) -> BTreeMap<OfficerId, i32> {
+    let mut generations = BTreeMap::from([(ruler_id.to_string(), 0)]);
+    for _ in 0..selected_ids.len().max(1) {
+        let mut changed = false;
+        for edge in edges {
+            match edge.kind {
+                ShrineKinshipEdgeKind::Spouse => {
+                    changed |=
+                        shrine_copy_generation(&mut generations, &edge.from_id, &edge.to_id, 0);
+                    changed |=
+                        shrine_copy_generation(&mut generations, &edge.to_id, &edge.from_id, 0);
+                }
+                ShrineKinshipEdgeKind::ParentChild => {
+                    changed |=
+                        shrine_copy_generation(&mut generations, &edge.from_id, &edge.to_id, 1);
+                    changed |=
+                        shrine_copy_generation(&mut generations, &edge.to_id, &edge.from_id, -1);
+                }
+                ShrineKinshipEdgeKind::WeakParentChild => {}
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    for selected_id in selected_ids {
+        generations.entry(selected_id.clone()).or_insert(0);
+    }
+    generations
+}
+
+fn shrine_copy_generation(
+    generations: &mut BTreeMap<OfficerId, i32>,
+    known_id: &str,
+    unknown_id: &str,
+    delta: i32,
+) -> bool {
+    let Some(known_generation) = generations.get(known_id).copied() else {
+        return false;
+    };
+    if generations.contains_key(unknown_id) {
+        return false;
+    }
+    generations.insert(unknown_id.to_string(), known_generation + delta);
+    true
+}
+
+fn historical_parent_child_direction(
+    game: &GameState,
+    first_id: &str,
+    second_id: &str,
+) -> Option<(OfficerId, OfficerId)> {
+    let first = game.officers.get(first_id)?;
+    let second = game.officers.get(second_id)?;
+    let first_age = first.age_at(game.year);
+    let second_age = second.age_at(game.year);
+    if first_age > second_age {
+        Some((first.id.clone(), second.id.clone()))
+    } else if second_age > first_age {
+        Some((second.id.clone(), first.id.clone()))
+    } else {
+        None
+    }
+}
+
+fn shrine_kinship_graph_view(
+    ui: &mut egui::Ui,
+    graph: &ShrineKinshipGraph,
+    t: &Translator,
+    max_height: f32,
+) {
+    let desired_size = egui::vec2(ui.available_width().max(560.0), max_height.max(320.0));
+    let (rect, _) = ui.allocate_exact_size(desired_size, egui::Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(
+        rect,
+        5.0,
+        egui::Color32::from_rgba_unmultiplied(18, 15, 11, 160),
+    );
+    painter.rect_stroke(
+        rect.shrink(1.0),
+        5.0,
+        egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgba_unmultiplied(138, 101, 58, 110),
+        ),
+        egui::StrokeKind::Inside,
+    );
+
+    if graph.nodes.is_empty() {
+        painter.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            t.text("shrine-kinship-empty"),
+            egui::FontId::proportional(14.0),
+            war_text_muted(),
+        );
         return;
     }
-    egui::ScrollArea::vertical()
-        .id_salt("shrine_children")
-        .max_height(max_height.max(260.0))
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            for child_id in child_ids {
-                let Some(child) = game.officers.get(&child_id) else {
-                    continue;
-                };
-                let parents = game
-                    .family_relationships
-                    .iter()
-                    .filter(|relationship| relationship.child_id == child_id)
-                    .filter_map(|relationship| game.officers.get(&relationship.parent_id))
-                    .map(|officer| officer.name.clone())
-                    .collect::<Vec<_>>()
-                    .join("、");
-                ui.label(t.text_args(
-                    "shrine-child-row",
-                    &args([
-                        ("name", child.name.clone()),
-                        ("age", child.age_at(game.year).to_string()),
-                        ("status", officer_status_label(&child.status, t)),
-                        ("parents", parents),
-                    ]),
-                ));
-            }
+
+    let mut by_generation = BTreeMap::<i32, Vec<&ShrineKinshipNode>>::new();
+    for node in &graph.nodes {
+        by_generation.entry(node.generation).or_default().push(node);
+    }
+    for nodes in by_generation.values_mut() {
+        nodes.sort_by(|a, b| a.id.cmp(&b.id));
+    }
+    let max_nodes_in_row = by_generation
+        .values()
+        .map(|nodes| nodes.len())
+        .max()
+        .unwrap_or(1);
+    let node_size = egui::vec2(
+        ((rect.width() - 48.0) / max_nodes_in_row as f32 - 10.0).clamp(74.0, 116.0),
+        54.0,
+    );
+    let graph_rect = rect.shrink2(egui::vec2(22.0, 20.0));
+    let row_count = by_generation.len().max(1);
+    let mut positions = BTreeMap::<OfficerId, egui::Pos2>::new();
+    for (row_index, (_generation, nodes)) in by_generation.iter().enumerate() {
+        let y =
+            graph_rect.top() + graph_rect.height() * (row_index as f32 + 0.5) / row_count as f32;
+        let count = nodes.len().max(1);
+        for (column_index, node) in nodes.iter().enumerate() {
+            let x =
+                graph_rect.left() + graph_rect.width() * (column_index as f32 + 0.5) / count as f32;
+            positions.insert(node.id.clone(), egui::pos2(x, y));
+        }
+    }
+
+    for edge in &graph.edges {
+        let (Some(from), Some(to)) = (positions.get(&edge.from_id), positions.get(&edge.to_id))
+        else {
+            continue;
+        };
+        let color = shrine_kinship_edge_color(edge.kind);
+        let stroke_width = if edge.kind == ShrineKinshipEdgeKind::WeakParentChild {
+            1.0
+        } else {
+            2.0
+        };
+        painter.line_segment([*from, *to], egui::Stroke::new(stroke_width, color));
+        let label = match edge.kind {
+            ShrineKinshipEdgeKind::Spouse => egui_phosphor::regular::HEART,
+            ShrineKinshipEdgeKind::ParentChild => egui_phosphor::regular::TREE_STRUCTURE,
+            ShrineKinshipEdgeKind::WeakParentChild => egui_phosphor::regular::CIRCLE_NOTCH,
+        };
+        painter.text(
+            from.lerp(*to, 0.5),
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::proportional(14.0),
+            color,
+        );
+    }
+
+    for node in &graph.nodes {
+        if let Some(position) = positions.get(&node.id) {
+            draw_shrine_kinship_node(ui, &painter, *position, node_size, node);
+        }
+    }
+}
+
+fn shrine_kinship_edge_color(kind: ShrineKinshipEdgeKind) -> egui::Color32 {
+    match kind {
+        ShrineKinshipEdgeKind::Spouse => relationship_kind_color(RelationshipGraphKind::Spouse),
+        ShrineKinshipEdgeKind::ParentChild => relationship_kind_color(RelationshipGraphKind::Child),
+        ShrineKinshipEdgeKind::WeakParentChild => war_text_muted(),
+    }
+}
+
+fn draw_shrine_kinship_node(
+    ui: &mut egui::Ui,
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    size: egui::Vec2,
+    node: &ShrineKinshipNode,
+) {
+    let rect = egui::Rect::from_center_size(center, size);
+    let response = ui.interact(
+        rect,
+        egui::Id::new(("shrine_kinship_node", node.id.clone())),
+        egui::Sense::hover(),
+    );
+    if response.hovered() {
+        response.on_hover_text(node.tooltip.clone());
+    }
+    let (icon, stroke_color) = match node.role {
+        ShrineKinshipNodeRole::Ruler => (egui_phosphor::regular::CROWN, war_gold()),
+        ShrineKinshipNodeRole::Heir => (egui_phosphor::regular::SEAL_CHECK, war_success()),
+        ShrineKinshipNodeRole::Officer => (egui_phosphor::regular::USER, war_border()),
+    };
+    painter.rect_filled(
+        rect,
+        5.0,
+        egui::Color32::from_rgba_unmultiplied(35, 29, 22, 235),
+    );
+    painter.rect_stroke(
+        rect,
+        5.0,
+        egui::Stroke::new(1.4, stroke_color),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        egui::pos2(rect.center().x, rect.top() + 13.0),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(15.0),
+        stroke_color,
+    );
+    painter.text(
+        egui::pos2(rect.center().x, rect.bottom() - 18.0),
+        egui::Align2::CENTER_CENTER,
+        compact_node_label(&node.name),
+        egui::FontId::proportional(13.0),
+        war_text(),
+    );
+}
+
+fn shrine_officer_tooltip(
+    game: &GameState,
+    faction: &Faction,
+    officer: &Officer,
+    t: &Translator,
+) -> String {
+    let role = if faction.ruler_id == officer.id {
+        t.text("shrine-role-ruler")
+    } else if faction.heir_id.as_deref() == Some(officer.id.as_str()) {
+        t.text("shrine-role-heir")
+    } else {
+        t.text("shrine-role-officer")
+    };
+    t.text_args(
+        "shrine-officer-tooltip",
+        &args([
+            ("name", officer.name.clone()),
+            ("role", role),
+            ("age", officer.age_at(game.year).to_string()),
+            ("status", officer_status_label(&officer.status, t)),
+            ("loyalty", officer.loyalty.to_string()),
+        ]),
+    )
+}
+
+fn shrine_marriage_entries(game: &GameState, faction_id: &str) -> Vec<ShrineMarriageEntry> {
+    let mut entries = BTreeMap::<(OfficerId, OfficerId), ShrineMarriageEntry>::new();
+    for marriage in &game.marriages {
+        if !marriage_relevant_to_faction(game, faction_id, &marriage.husband_id, &marriage.wife_id)
+        {
+            continue;
+        }
+        let key = marriage_pair_ids(game, &marriage.husband_id, &marriage.wife_id);
+        entries
+            .entry(key.clone())
+            .and_modify(|entry| {
+                entry.source =
+                    merge_relationship_source(entry.source, ShrineRelationshipSource::Dynamic);
+                entry.date.get_or_insert((marriage.year, marriage.month));
+            })
+            .or_insert_with(|| ShrineMarriageEntry {
+                husband_id: key.0.clone(),
+                wife_id: key.1.clone(),
+                husband_name: officer_display_name(game, &key.0),
+                wife_name: officer_display_name(game, &key.1),
+                date: Some((marriage.year, marriage.month)),
+                source: ShrineRelationshipSource::Dynamic,
+            });
+    }
+    for officer in game.officers.values() {
+        let Some(profile) = &officer.profile else {
+            continue;
+        };
+        for relationship in profile.relationships.iter().filter(|relationship| {
+            relationship.kind == OfficerRelationshipKind::Spouse
+                && game.officers.contains_key(&relationship.target_id)
+                && marriage_relevant_to_faction(
+                    game,
+                    faction_id,
+                    &officer.id,
+                    &relationship.target_id,
+                )
+        }) {
+            let key = marriage_pair_ids(game, &officer.id, &relationship.target_id);
+            entries
+                .entry(key.clone())
+                .and_modify(|entry| {
+                    entry.source = merge_relationship_source(
+                        entry.source,
+                        ShrineRelationshipSource::Historical,
+                    );
+                })
+                .or_insert_with(|| ShrineMarriageEntry {
+                    husband_id: key.0.clone(),
+                    wife_id: key.1.clone(),
+                    husband_name: officer_display_name(game, &key.0),
+                    wife_name: officer_display_name(game, &key.1),
+                    date: None,
+                    source: ShrineRelationshipSource::Historical,
+                });
+        }
+    }
+    entries.into_values().collect()
+}
+
+fn marriage_relevant_to_faction(
+    game: &GameState,
+    faction_id: &str,
+    first_id: &str,
+    second_id: &str,
+) -> bool {
+    game.officers
+        .get(first_id)
+        .is_some_and(|officer| officer.faction_id == faction_id)
+        || game
+            .officers
+            .get(second_id)
+            .is_some_and(|officer| officer.faction_id == faction_id)
+}
+
+fn marriage_pair_ids(game: &GameState, first_id: &str, second_id: &str) -> (OfficerId, OfficerId) {
+    let first = game.officers.get(first_id);
+    let second = game.officers.get(second_id);
+    match (
+        first.map(|officer| officer.gender.clone()),
+        second.map(|officer| officer.gender.clone()),
+    ) {
+        (Some(OfficerGender::Male), Some(OfficerGender::Female)) => {
+            (first_id.to_string(), second_id.to_string())
+        }
+        (Some(OfficerGender::Female), Some(OfficerGender::Male)) => {
+            (second_id.to_string(), first_id.to_string())
+        }
+        _ => sorted_pair(first_id, second_id),
+    }
+}
+
+fn sorted_pair(first_id: &str, second_id: &str) -> (OfficerId, OfficerId) {
+    if first_id <= second_id {
+        (first_id.to_string(), second_id.to_string())
+    } else {
+        (second_id.to_string(), first_id.to_string())
+    }
+}
+
+fn shrine_marriage_row(
+    ui: &mut egui::Ui,
+    t: &Translator,
+    entry: &ShrineMarriageEntry,
+    pending_divorce: &mut Option<(OfficerId, OfficerId)>,
+    divorce_request: &mut Option<(OfficerId, OfficerId)>,
+) {
+    war_sub_panel_frame().show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(egui_phosphor::regular::HEART)
+                    .color(relationship_kind_color(RelationshipGraphKind::Spouse)),
+            );
+            ui.vertical(|ui| {
+                ui.label(
+                    egui::RichText::new(format!("{} - {}", entry.husband_name, entry.wife_name))
+                        .strong(),
+                );
+                let date = entry
+                    .date
+                    .map(|(year, month)| {
+                        t.text_args(
+                            "shrine-marriage-date",
+                            &args([("year", year.to_string()), ("month", month.to_string())]),
+                        )
+                    })
+                    .unwrap_or_else(|| t.text("shrine-marriage-date-historical"));
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} | {}",
+                        shrine_relationship_source_label(t, entry.source),
+                        date
+                    ))
+                    .color(war_text_muted()),
+                );
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let pair = (entry.husband_id.clone(), entry.wife_id.clone());
+                if pending_divorce.as_ref() == Some(&pair) {
+                    if square_icon_button(
+                        ui,
+                        egui_phosphor::regular::CHECK,
+                        t.text("common-confirm"),
+                        egui::vec2(30.0, 30.0),
+                    )
+                    .clicked()
+                    {
+                        *divorce_request = Some(pair);
+                    }
+                    if square_icon_button(
+                        ui,
+                        egui_phosphor::regular::X,
+                        t.text("common-cancel"),
+                        egui::vec2(30.0, 30.0),
+                    )
+                    .clicked()
+                    {
+                        *pending_divorce = None;
+                    }
+                    ui.colored_label(war_danger(), t.text("shrine-marriage-confirm-divorce"));
+                } else if square_icon_button(
+                    ui,
+                    egui_phosphor::regular::HEART_BREAK,
+                    t.text("shrine-divorce"),
+                    egui::vec2(30.0, 30.0),
+                )
+                .clicked()
+                {
+                    *pending_divorce = Some(pair);
+                }
+            });
         });
+    });
+}
+
+fn shrine_relationship_source_label(t: &Translator, source: ShrineRelationshipSource) -> String {
+    match source {
+        ShrineRelationshipSource::Dynamic => t.text("shrine-source-dynamic"),
+        ShrineRelationshipSource::Historical => t.text("shrine-source-historical"),
+        ShrineRelationshipSource::Mixed => t.text("shrine-source-mixed"),
+    }
+}
+
+fn shrine_child_card(
+    ui: &mut egui::Ui,
+    game: &GameState,
+    faction: &Faction,
+    child: &Officer,
+    t: &Translator,
+) {
+    war_sub_panel_frame().show(ui, |ui| {
+        ui.horizontal(|ui| {
+            let is_heir = faction.heir_id.as_deref() == Some(child.id.as_str());
+            ui.label(
+                egui::RichText::new(if is_heir {
+                    egui_phosphor::regular::CROWN
+                } else {
+                    egui_phosphor::regular::BABY
+                })
+                .color(if is_heir { war_gold() } else { war_success() }),
+            );
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(&child.name).strong());
+                ui.label(
+                    egui::RichText::new(t.text_args(
+                        "shrine-child-row",
+                        &args([
+                            ("name", child.name.clone()),
+                            ("age", child.age_at(game.year).to_string()),
+                            ("status", officer_status_label(&child.status, t)),
+                            ("parents", shrine_parent_names(game, &child.id, t)),
+                        ]),
+                    ))
+                    .color(war_text_muted()),
+                );
+            });
+        });
+    });
+}
+
+fn shrine_heir_candidate_row(
+    ui: &mut egui::Ui,
+    game: &GameState,
+    faction: &Faction,
+    officer: &Officer,
+    t: &Translator,
+    set_heir_request: &mut Option<OfficerId>,
+) {
+    war_sub_panel_frame().show(ui, |ui| {
+        ui.horizontal(|ui| {
+            let selected = faction.heir_id.as_deref() == Some(officer.id.as_str());
+            ui.label(
+                egui::RichText::new(if selected {
+                    egui_phosphor::regular::CROWN
+                } else {
+                    egui_phosphor::regular::USER_CIRCLE
+                })
+                .color(if selected {
+                    war_gold()
+                } else {
+                    war_text_muted()
+                }),
+            );
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(&officer.name).strong());
+                ui.label(
+                    egui::RichText::new(t.text_args(
+                        "shrine-heir-candidate",
+                        &args([
+                            ("name", officer.name.clone()),
+                            ("age", officer.age_at(game.year).to_string()),
+                            ("loyalty", officer.loyalty.to_string()),
+                        ]),
+                    ))
+                    .color(war_text_muted()),
+                );
+            });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if square_icon_button(
+                    ui,
+                    egui_phosphor::regular::CROWN,
+                    t.text("shrine-set-heir"),
+                    egui::vec2(30.0, 30.0),
+                )
+                .clicked()
+                {
+                    *set_heir_request = Some(officer.id.clone());
+                }
+            });
+        });
+    });
+}
+
+fn shrine_selectable_officer_card(
+    ui: &mut egui::Ui,
+    game: &GameState,
+    officer: &Officer,
+    t: &Translator,
+    selected: bool,
+) -> egui::Response {
+    let label = format!(
+        "{}  {}",
+        if selected {
+            egui_phosphor::regular::SEAL_CHECK
+        } else {
+            egui_phosphor::regular::USER
+        },
+        t.text_args(
+            "shrine-officer-summary",
+            &args([
+                ("name", officer.name.clone()),
+                ("age", officer.age_at(game.year).to_string()),
+                ("status", officer_status_label(&officer.status, t)),
+                ("loyalty", officer.loyalty.to_string()),
+            ]),
+        )
+    );
+    ui.add_sized(
+        egui::vec2(ui.available_width(), 36.0),
+        egui::Button::new(egui::RichText::new(label).color(if selected {
+            war_gold()
+        } else {
+            war_text()
+        }))
+        .selected(selected),
+    )
+}
+
+fn shrine_parent_names(game: &GameState, child_id: &str, t: &Translator) -> String {
+    let mut parent_ids = BTreeSet::new();
+    for relationship in &game.family_relationships {
+        if relationship.child_id == child_id {
+            parent_ids.insert(relationship.parent_id.clone());
+        }
+    }
+    for officer in game.officers.values() {
+        let Some(profile) = &officer.profile else {
+            continue;
+        };
+        for relationship in &profile.relationships {
+            if !matches!(
+                relationship.kind,
+                OfficerRelationshipKind::ParentChild | OfficerRelationshipKind::AdoptiveParentChild
+            ) {
+                continue;
+            }
+            if let Some((parent_id, historical_child_id)) =
+                historical_parent_child_direction(game, &officer.id, &relationship.target_id)
+                && historical_child_id == child_id
+            {
+                parent_ids.insert(parent_id);
+            }
+        }
+    }
+    let names = parent_ids
+        .iter()
+        .map(|parent_id| officer_display_name(game, parent_id))
+        .collect::<Vec<_>>();
+    if names.is_empty() {
+        t.text("common-none-selected")
+    } else {
+        names.join("、")
+    }
 }
 
 pub(super) fn selected_city_summary(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator) {
@@ -4049,7 +5164,8 @@ mod tests {
     use crate::core::settings::{GameSettings, GameSettingsStore, LoadedGameSettings};
     use crate::core::state::{GameUiState, OfficerGenderFilter, OfficerStatusFilter};
     use crate::game::{
-        FamilyRelationship, Marriage, OfficerGender, OfficerStatus, SqliteHistoricalCatalog,
+        FamilyRelationship, Marriage, OfficerGender, OfficerProfile, OfficerRelationship,
+        OfficerRelationshipKind, OfficerStatus, SourceConfidence, SqliteHistoricalCatalog,
     };
 
     fn ui_state_with_game() -> GameUiState {
@@ -4071,6 +5187,93 @@ mod tests {
 
     fn zh() -> Translator {
         Translator::new(UiLanguage::SimplifiedChinese)
+    }
+
+    fn add_static_spouse_and_child(game: &mut GameState) {
+        let stats = game.officers["liu_bei"].stats;
+        let mut spouse = game.officers["liu_bei"].clone();
+        spouse.id = "lady_static".to_string();
+        spouse.name = "静夫人".to_string();
+        spouse.birth_year = game.year - 30;
+        spouse.gender = OfficerGender::Female;
+        spouse.profile = Some(OfficerProfile {
+            id: spouse.id.clone(),
+            name: spouse.name.clone(),
+            courtesy_name: None,
+            native_place: None,
+            birth_year: Some(spouse.birth_year),
+            death_year: None,
+            gender: OfficerGender::Female,
+            stats,
+            tags: Vec::new(),
+            confidence: SourceConfidence::High,
+            biography: String::new(),
+            relationships: vec![OfficerRelationship {
+                target_id: "liu_bei".to_string(),
+                target_name: "刘备".to_string(),
+                kind: OfficerRelationshipKind::Spouse,
+                confidence: SourceConfidence::High,
+                notes: "test".to_string(),
+                source: "test".to_string(),
+            }],
+            notes: String::new(),
+        });
+
+        let mut child = game.officers["liu_bei"].clone();
+        child.id = "liu_static_child".to_string();
+        child.name = "刘承".to_string();
+        child.birth_year = game.year - 10;
+        child.gender = OfficerGender::Male;
+        child.status = OfficerStatus::Minor;
+        child.profile = Some(OfficerProfile {
+            id: child.id.clone(),
+            name: child.name.clone(),
+            courtesy_name: None,
+            native_place: None,
+            birth_year: Some(child.birth_year),
+            death_year: None,
+            gender: OfficerGender::Male,
+            stats,
+            tags: Vec::new(),
+            confidence: SourceConfidence::High,
+            biography: String::new(),
+            relationships: vec![OfficerRelationship {
+                target_id: "liu_bei".to_string(),
+                target_name: "刘备".to_string(),
+                kind: OfficerRelationshipKind::ParentChild,
+                confidence: SourceConfidence::High,
+                notes: "test".to_string(),
+                source: "test".to_string(),
+            }],
+            notes: String::new(),
+        });
+
+        let liu_profile = game
+            .officers
+            .get_mut("liu_bei")
+            .unwrap()
+            .profile
+            .as_mut()
+            .unwrap();
+        liu_profile.relationships.push(OfficerRelationship {
+            target_id: "lady_static".to_string(),
+            target_name: "静夫人".to_string(),
+            kind: OfficerRelationshipKind::Spouse,
+            confidence: SourceConfidence::High,
+            notes: "test".to_string(),
+            source: "test".to_string(),
+        });
+        liu_profile.relationships.push(OfficerRelationship {
+            target_id: "liu_static_child".to_string(),
+            target_name: "刘承".to_string(),
+            kind: OfficerRelationshipKind::ParentChild,
+            confidence: SourceConfidence::High,
+            notes: "test".to_string(),
+            source: "test".to_string(),
+        });
+
+        game.officers.insert(spouse.id.clone(), spouse);
+        game.officers.insert(child.id.clone(), child);
     }
 
     #[test]
@@ -4375,6 +5578,95 @@ mod tests {
         );
         assert!(rows.iter().all(|row| row.id != "cao_cao"));
         assert!(rows.iter().all(|row| row.id != "jian_yong"));
+    }
+
+    #[test]
+    fn shrine_kinship_graph_merges_historical_and_dynamic_family_links() {
+        let mut state = ui_state_with_game();
+        {
+            let game = state.game.as_mut().unwrap();
+            add_static_spouse_and_child(game);
+            game.marriages.push(Marriage::new(
+                "liu_bei".to_string(),
+                "zhang_fei".to_string(),
+                200,
+                1,
+            ));
+            game.family_relationships.push(FamilyRelationship {
+                parent_id: "liu_bei".to_string(),
+                child_id: "zhao_yun".to_string(),
+            });
+        }
+        let game = state.game.as_ref().unwrap();
+        let graph = shrine_kinship_graph(game, &game.factions["liu_bei"], &zh()).unwrap();
+
+        assert!(graph.nodes.iter().any(|node| node.id == "lady_static"));
+        assert!(graph.nodes.iter().any(|node| node.id == "liu_static_child"));
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|edge| edge.kind == ShrineKinshipEdgeKind::Spouse
+                    && edge.source == ShrineRelationshipSource::Historical
+                    && edge.from_id == "lady_static"
+                    && edge.to_id == "liu_bei")
+        );
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|edge| edge.kind == ShrineKinshipEdgeKind::Spouse
+                    && edge.source == ShrineRelationshipSource::Dynamic
+                    && edge.from_id == "liu_bei"
+                    && edge.to_id == "zhang_fei")
+        );
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|edge| edge.kind == ShrineKinshipEdgeKind::ParentChild
+                    && edge.from_id == "liu_bei"
+                    && edge.to_id == "liu_static_child")
+        );
+        assert!(
+            graph
+                .edges
+                .iter()
+                .any(|edge| edge.kind == ShrineKinshipEdgeKind::ParentChild
+                    && edge.source == ShrineRelationshipSource::Dynamic
+                    && edge.from_id == "liu_bei"
+                    && edge.to_id == "zhao_yun")
+        );
+    }
+
+    #[test]
+    fn shrine_kinship_graph_deduplicates_bidirectional_historical_relationships() {
+        let mut state = ui_state_with_game();
+        add_static_spouse_and_child(state.game.as_mut().unwrap());
+        let game = state.game.as_ref().unwrap();
+        let graph = shrine_kinship_graph(game, &game.factions["liu_bei"], &zh()).unwrap();
+
+        let spouse_edges = graph
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.kind == ShrineKinshipEdgeKind::Spouse
+                    && edge.from_id == "lady_static"
+                    && edge.to_id == "liu_bei"
+            })
+            .count();
+        let parent_child_edges = graph
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.kind == ShrineKinshipEdgeKind::ParentChild
+                    && edge.from_id == "liu_bei"
+                    && edge.to_id == "liu_static_child"
+            })
+            .count();
+
+        assert_eq!(spouse_edges, 1);
+        assert_eq!(parent_child_edges, 1);
     }
 
     #[test]

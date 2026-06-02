@@ -184,6 +184,39 @@ pub fn marry_officers(
     Ok(marriage)
 }
 
+pub fn divorce_officers(
+    state: &mut GameState,
+    faction_id: &str,
+    first_id: &str,
+    second_id: &str,
+) -> Result<(), PersonnelError> {
+    if faction_id != state.player_faction_id {
+        return Err(PersonnelError::Invalid(
+            "首版只能管理玩家势力婚姻".to_string(),
+        ));
+    }
+    if first_id == second_id {
+        return Err(PersonnelError::Invalid("不能解除自己的婚姻".to_string()));
+    }
+    officer_for_personnel(state, first_id)?;
+    officer_for_personnel(state, second_id)?;
+
+    let dynamic_before = state.marriages.len();
+    state
+        .marriages
+        .retain(|marriage| !(marriage.involves(first_id) && marriage.involves(second_id)));
+    let removed_dynamic = dynamic_before != state.marriages.len();
+    let removed_first_static = remove_static_spouse_relationship(state, first_id, second_id);
+    let removed_second_static = remove_static_spouse_relationship(state, second_id, first_id);
+    let removed_static = removed_first_static || removed_second_static;
+
+    if !removed_dynamic && !removed_static {
+        return Err(PersonnelError::Invalid("这对武将没有婚姻关系".to_string()));
+    }
+
+    Ok(())
+}
+
 pub fn set_default_heir(
     state: &mut GameState,
     faction_id: &str,
@@ -195,6 +228,38 @@ pub fn set_default_heir(
         .get_mut(faction_id)
         .ok_or_else(|| PersonnelError::FactionNotFound(faction_id.to_string()))?;
     faction.heir_id = Some(officer_id.to_string());
+    Ok(())
+}
+
+pub fn abdicate_ruler(
+    state: &mut GameState,
+    faction_id: &str,
+    successor_id: &str,
+) -> Result<(), PersonnelError> {
+    if faction_id != state.player_faction_id {
+        return Err(PersonnelError::Invalid(
+            "首版只能管理玩家势力退位".to_string(),
+        ));
+    }
+    let current_ruler_id = state
+        .factions
+        .get(faction_id)
+        .ok_or_else(|| PersonnelError::FactionNotFound(faction_id.to_string()))?
+        .ruler_id
+        .clone();
+    if current_ruler_id == successor_id {
+        return Err(PersonnelError::Invalid(
+            "当前主君不能退位给自己".to_string(),
+        ));
+    }
+    validate_heir_candidate(state, faction_id, successor_id)?;
+
+    let faction = state
+        .factions
+        .get_mut(faction_id)
+        .ok_or_else(|| PersonnelError::FactionNotFound(faction_id.to_string()))?;
+    faction.ruler_id = successor_id.to_string();
+    faction.heir_id = Some(successor_id.to_string());
     Ok(())
 }
 
@@ -546,6 +611,26 @@ fn validate_marriage_officer(
         )));
     }
     Ok(())
+}
+
+fn remove_static_spouse_relationship(
+    state: &mut GameState,
+    source_id: &str,
+    target_id: &str,
+) -> bool {
+    let Some(profile) = state
+        .officers
+        .get_mut(source_id)
+        .and_then(|officer| officer.profile.as_mut())
+    else {
+        return false;
+    };
+    let before = profile.relationships.len();
+    profile.relationships.retain(|relationship| {
+        !(relationship.target_id == target_id
+            && relationship.kind == OfficerRelationshipKind::Spouse)
+    });
+    before != profile.relationships.len()
 }
 
 fn validate_heir_candidate(
