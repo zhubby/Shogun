@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 #[test]
 fn boundary_asset_loads_with_non_empty_provinces_and_commanderies() {
     let catalog = MapBoundaryCatalog::from_path(MAP_BOUNDARY_ASSET_PATH).unwrap();
-    let boundaries: Vec<_> = catalog.boundaries_for_year(190).collect();
+    let boundaries: Vec<_> = catalog.boundaries_for_year(180).collect();
 
     let province_count = boundaries
         .iter()
@@ -19,7 +19,7 @@ fn boundary_asset_loads_with_non_empty_provinces_and_commanderies() {
     assert_eq!(commandery_count, 67);
     assert!(boundaries.iter().all(|boundary| boundary.points.len() >= 3));
 
-    let cells = catalog.territory_cells_for_year(190);
+    let cells = catalog.territory_cells_for_year(180);
     assert_eq!(cells.len(), commandery_count);
     assert!(cells.iter().all(|cell| cell.points.len() >= 3));
 }
@@ -49,7 +49,7 @@ fn xuchang_and_yingchuan_use_separate_map_boundaries() {
 fn historical_scenario_cities_have_boundary_coverage() {
     let catalog = MapBoundaryCatalog::from_path(MAP_BOUNDARY_ASSET_PATH).unwrap();
     let historical = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
-    let game = historical.build_game("ad190", "cao_cao").unwrap();
+    let game = historical.build_game("ad180", "yellow_turban").unwrap();
 
     let provinces: BTreeSet<_> = catalog
         .boundaries_for_year(game.year)
