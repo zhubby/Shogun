@@ -37,11 +37,16 @@ pub(super) fn enter_game(ui_state: &mut GameUiState, game: GameState, message: S
     ui_state.expedition_deputy_one = None;
     ui_state.expedition_deputy_two = None;
     ui_state.selected_diplomacy_target = None;
+    ui_state.selected_diplomacy_source_city = None;
+    ui_state.selected_diplomacy_receive_city = None;
+    ui_state.diplomacy_offer = ResourceBundle::default();
+    ui_state.diplomacy_request = ResourceBundle::default();
     ui_state.selected_city_tab = CityPanelTab::Overview;
     ui_state.selected_command_category = CommandCategory::Domestic;
     ui_state.selected_command_action = CommandAction::Develop;
     ui_state.city_drawer_open = false;
     ui_state.city_list_open = false;
+    ui_state.diplomacy_open = false;
     ui_state.technology_open = false;
     ui_state.events_open = false;
     ui_state.return_main_menu_confirm_open = false;
@@ -116,6 +121,7 @@ fn close_in_game_panels(ui_state: &mut GameUiState) {
     ui_state.shortcut_capture_action = None;
     ui_state.city_drawer_open = false;
     ui_state.city_list_open = false;
+    ui_state.diplomacy_open = false;
     ui_state.officer_browser_open = false;
     ui_state.officer_detail_id = None;
     ui_state.retainers_open = false;

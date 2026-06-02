@@ -19,6 +19,12 @@ pub(super) fn top_status_hud(
     screen: egui::Rect,
 ) {
     let width = (screen.width() - HUD_MARGIN * 2.0).max(320.0);
+    let title = ui_state
+        .game
+        .as_ref()
+        .map(GameState::scenario_title)
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| t.text("app-title"));
     let summary = ui_state.game.as_ref().map(|game| {
         let faction_name = game
             .factions
@@ -36,7 +42,6 @@ pub(super) fn top_status_hud(
             }
         };
         (
-            game.scenario_name.clone(),
             game.year,
             game.month,
             game.turn,
@@ -57,19 +62,16 @@ pub(super) fn top_status_hud(
                 ui.set_width(width);
                 ui.horizontal(|ui| {
                     ui.label(
-                        egui::RichText::new(t.text("app-title"))
+                        egui::RichText::new(title)
                             .size(24.0)
                             .color(war_gold())
                             .strong(),
                     );
                     ui.separator();
-                    if let Some((scenario, year, month, turn, faction_name, resources, status)) =
-                        summary
-                    {
+                    if let Some((year, month, turn, faction_name, resources, status)) = summary {
                         ui.label(t.text_args(
                             "hud-date-turn",
                             &args([
-                                ("scenario", scenario),
                                 ("year", year.to_string()),
                                 ("month", month.to_string()),
                                 ("turn", turn.to_string()),
@@ -120,6 +122,17 @@ pub(super) fn bottom_map_actions_hud(
 
                     if ui.button(t.text("hud-factions")).clicked() {
                         ui_state.faction_overview_open = !ui_state.faction_overview_open;
+                    }
+
+                    if ui
+                        .button(format!(
+                            "{} {}",
+                            egui_phosphor::regular::HANDSHAKE,
+                            t.text("hud-diplomacy")
+                        ))
+                        .clicked()
+                    {
+                        ui_state.diplomacy_open = !ui_state.diplomacy_open;
                     }
 
                     if ui.button(t.text("hud-officers")).clicked() {

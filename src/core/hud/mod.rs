@@ -1,5 +1,6 @@
 mod chrome;
 mod city_list;
+mod diplomacy;
 mod events;
 mod faction_overview;
 mod map_overlays;
@@ -56,6 +57,7 @@ pub(super) fn in_game_hud(
     city_list::city_drawer_hud(ctx, ui_state, t, screen);
     save_report::report_hud(ctx, ui_state, t, screen);
     chrome::bottom_map_actions_hud(ctx, ui_state, t);
+    diplomacy::diplomacy_hud(ctx, ui_state, t, screen);
     faction_overview::faction_overview_hud(ctx, ui_state, t, screen);
     officer_browser::officer_browser_hud(ctx, ui_state, t, screen);
     officer_browser::retainer_hud(ctx, ui_state, t, screen);

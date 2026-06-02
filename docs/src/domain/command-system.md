@@ -25,7 +25,6 @@ pub struct Command {
 | `AppointGovernor { target }` | 任命太守 | 城池命令 |
 | `Transfer { target, troops, officers }` | 调动到友城 | 城池命令 |
 | `Expedition { target, assignments }` | 出征敌城 | 城池命令 |
-| `Diplomacy { target, proposal }` | 外交行动 | 城池命令 |
 
 ## 命令不变量
 
@@ -33,6 +32,8 @@ pub struct Command {
 
 1. **每城一令** — 一个城池每月只能提交一条命令
 2. **每武将一行动** — 一个武将每月只能参与一条命令
+
+外交提案不属于 `Command`，不占用这两个约束。旧存档中的 `CommandKind::Diplomacy` 仍可结算用于兼容，但新 UI 通过 `pending_diplomacy` 提交势力级外交。
 
 这些约束通过 `CommandReservations` 在验证阶段检查：
 
@@ -60,6 +61,7 @@ queue_player_command()          ◀── 玩家路径
 
 resolve_command_batch()         ◀── 回合结算
   ├─ begin_ai_research()
+  ├─ resolve_diplomacy_orders() 外交提案
   ├─ 遍历命令：
   │   ├─ validate_command() → Ok → apply_command()
   │   └─ validate_command() → Err → 记录警告
@@ -82,5 +84,6 @@ resolve_command_batch()         ◀── 回合结算
 
 - 开发：城池必须有可用武将
 - 征兵：城池必须有武将、足够金钱、不超人口上限
-- 调动/出征：目标必须相邻、目标不是己方（出征）或必须是己方（调动）
-- 外交：目标势力必须存在、不能对自己外交、不能违反停战
+- 调动/出征：目标必须有可通行路线、目标不是己方（出征）或必须是己方（调动）
+- 出征：目标势力不能处于有效停战，除非本月已有对该势力的待处理宣战提案
+- 外交：通过独立 `DiplomacyOrder` 验证，目标势力必须存在且存活，资源条款必须可支付

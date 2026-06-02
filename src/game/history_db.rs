@@ -11,7 +11,7 @@ use super::events::{
 use super::ids::{CityId, FactionId, OfficerId, ScenarioId, WILD_FACTION_ID};
 use super::model::{
     Controller, DiplomaticRelation, Faction, GameState, GameStatus, MapPosition, Road,
-    SAVE_VERSION, TroopPool, deterministic_index_seed, diplomacy_key,
+    SAVE_VERSION, TroopPool, deterministic_index_seed, diplomacy_key, scenario_full_name,
 };
 use super::officer::{
     Officer, OfficerCatalog, OfficerGender, OfficerProfile, OfficerProfileUpdate,
@@ -63,8 +63,15 @@ const REQUIRED_HISTORY_TABLES: &[&str] = &[
 pub struct HistoricalScenario {
     pub id: ScenarioId,
     pub name: String,
+    pub era_name: String,
     pub year: i32,
     pub month: u8,
+}
+
+impl HistoricalScenario {
+    pub fn full_name(&self) -> String {
+        scenario_full_name(&self.era_name, &self.name)
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -521,16 +528,18 @@ impl OfficerCatalog for SqliteHistoricalCatalog {
 impl HistoricalCatalog for SqliteHistoricalCatalog {
     fn scenarios(&self) -> Result<Vec<HistoricalScenario>, HistoryDbError> {
         self.block_on(async {
-            let rows =
-                sqlx::query("SELECT id, name, year, month FROM scenarios ORDER BY year, month")
-                    .fetch_all(&self.pool)
-                    .await
-                    .map_err(HistoryDbError::Sqlx)?;
+            let rows = sqlx::query(
+                "SELECT id, name, era_name, year, month FROM scenarios ORDER BY year, month",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
             Ok(rows
                 .into_iter()
                 .map(|row| HistoricalScenario {
                     id: row.get("id"),
                     name: row.get("name"),
+                    era_name: row.get("era_name"),
                     year: row.get("year"),
                     month: row.get::<i64, _>("month") as u8,
                 })
@@ -785,6 +794,7 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
                 truce_until_turn: row
                     .get::<Option<i64>, _>("truce_until_turn")
                     .map(|value| value as u32),
+                passage_rights: BTreeMap::new(),
             };
             diplomacy.insert(
                 diplomacy_key(&relation.faction_a, &relation.faction_b),
@@ -820,6 +830,7 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
             version: SAVE_VERSION,
             scenario_id: scenario.id,
             scenario_name: scenario.name,
+            scenario_era_name: scenario.era_name,
             year: scenario.year,
             month: scenario.month,
             turn: 1,
@@ -834,6 +845,7 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
                 .collect::<BTreeMap<_, _>>(),
             roads,
             diplomacy,
+            pending_diplomacy: Vec::new(),
             pending_commands: Vec::new(),
             army_movements: Vec::new(),
             technologies,

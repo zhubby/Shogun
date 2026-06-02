@@ -6,7 +6,8 @@ use std::cmp::Ordering;
 use super::super::HUD_MARGIN;
 use super::super::i18n::{Translator, args};
 use super::super::labels::{
-    development_focus_label, diplomacy_label, facility_kind_label, troop_kind_label,
+    development_focus_label, diplomacy_action_label, diplomacy_label, facility_kind_label,
+    troop_kind_label,
 };
 use super::super::map::faction_color;
 use super::super::state::{FactionOverviewSort, FactionOverviewSortColumn, GameUiState};
@@ -593,6 +594,8 @@ fn faction_diplomacy_section(ui: &mut egui::Ui, snapshot: &FactionDetailSnapshot
                         );
                         ui.separator();
                         ui.label(&relation.truce_label);
+                        ui.separator();
+                        ui.label(&relation.passage_label);
                     });
                 }
             });
@@ -607,6 +610,14 @@ fn faction_actions_section(ui: &mut egui::Ui, snapshot: &FactionDetailSnapshot, 
             any = true;
             ui.label(egui::RichText::new(t.text("faction-detail-pending-commands")).strong());
             for action in &snapshot.pending_commands {
+                ui.colored_label(war_text_muted(), action);
+            }
+            ui.add_space(4.0);
+        }
+        if !snapshot.pending_diplomacy.is_empty() {
+            any = true;
+            ui.label(egui::RichText::new(t.text("faction-detail-pending-diplomacy")).strong());
+            for action in &snapshot.pending_diplomacy {
                 ui.colored_label(war_text_muted(), action);
             }
             ui.add_space(4.0);
@@ -770,6 +781,7 @@ pub(in crate::core::hud) struct FactionDetailSnapshot {
     diplomacy: Vec<FactionDetailDiplomacy>,
     technology: FactionDetailTechnology,
     pending_commands: Vec<String>,
+    pending_diplomacy: Vec<String>,
     army_movements: Vec<String>,
     recruitments: Vec<String>,
 }
@@ -821,6 +833,7 @@ struct FactionDetailDiplomacy {
     faction_name: String,
     score: i16,
     truce_label: String,
+    passage_label: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -864,6 +877,7 @@ pub(in crate::core::hud) fn faction_detail_snapshot(
         diplomacy: faction_detail_diplomacy(game, faction_id, t),
         technology: faction_detail_technology(game, faction_id, t),
         pending_commands: faction_pending_commands(game, faction_id, t),
+        pending_diplomacy: faction_pending_diplomacy(game, faction_id, t),
         army_movements: faction_army_movements(game, faction_id, t),
         recruitments: faction_recruitments(game, faction_id, t),
     })
@@ -1039,10 +1053,21 @@ fn faction_detail_diplomacy(
                     )
                 })
                 .unwrap_or_else(|| t.text("faction-detail-no-truce"));
+            let passage_label = relation
+                .and_then(|relation| relation.passage_rights.get(faction_id).copied())
+                .filter(|until| *until >= game.turn)
+                .map(|until| {
+                    t.text_args(
+                        "diplomacy-passage-until",
+                        &args([("turn", until.to_string())]),
+                    )
+                })
+                .unwrap_or_else(|| t.text("diplomacy-no-passage"));
             FactionDetailDiplomacy {
                 faction_name: other.name.clone(),
                 score,
                 truce_label,
+                passage_label,
             }
         })
         .collect();
@@ -1116,6 +1141,38 @@ fn faction_pending_commands(game: &GameState, faction_id: &str, t: &Translator) 
             format!("{city}: {}", command_summary(game, command, t))
         })
         .collect()
+}
+
+fn faction_pending_diplomacy(game: &GameState, faction_id: &str, t: &Translator) -> Vec<String> {
+    game.pending_diplomacy
+        .iter()
+        .filter(|order| order.issuer_faction_id == faction_id)
+        .map(|order| {
+            t.text_args(
+                "diplomacy-order-summary",
+                &args([
+                    ("target", faction_name(game, &order.target_faction_id)),
+                    ("action", diplomacy_action_label(t, order.kind)),
+                    ("offer", diplomacy_bundle_summary(&order.offer, t)),
+                    ("request", diplomacy_bundle_summary(&order.request, t)),
+                ]),
+            )
+        })
+        .collect()
+}
+
+fn diplomacy_bundle_summary(bundle: &ResourceBundle, t: &Translator) -> String {
+    if bundle.is_empty() {
+        return t.text("common-none-selected");
+    }
+    t.text_args(
+        "diplomacy-bundle-summary",
+        &args([
+            ("gold", bundle.gold.to_string()),
+            ("food", bundle.food.to_string()),
+            ("materials", bundle.materials.to_string()),
+        ]),
+    )
 }
 
 fn faction_army_movements(game: &GameState, faction_id: &str, t: &Translator) -> Vec<String> {
@@ -1555,6 +1612,7 @@ mod tests {
             let relation = game.relation_mut(&faction_id, &other_faction_id);
             relation.score = 42;
             relation.truce_until_turn = Some(turn + 3);
+            relation.passage_rights.insert(faction_id.clone(), turn + 4);
         }
         game.technologies.insert(
             faction_id.clone(),
@@ -1576,6 +1634,20 @@ mod tests {
             city_id: "xuchang".to_string(),
             officer_id: Some("cao_cao".to_string()),
             kind: CommandKind::Train,
+        });
+        game.pending_diplomacy.push(DiplomacyOrder {
+            issuer_faction_id: faction_id.clone(),
+            target_faction_id: other_faction_id.clone(),
+            kind: DiplomacyActionKind::PassageRight,
+            source_city_id: "pingyuan".to_string(),
+            receive_city_id: "xiapi".to_string(),
+            offer: ResourceBundle {
+                gold: 100,
+                food: 0,
+                materials: 0,
+            },
+            request: ResourceBundle::default(),
+            submitted_turn: game.turn,
         });
         game.army_movements.push(ArmyMovement {
             kind: ArmyMovementKind::Transfer,
@@ -1607,17 +1679,17 @@ mod tests {
 
         let snapshot = faction_detail_snapshot(game, &faction_id, &t).unwrap();
 
-        assert!(
-            snapshot.diplomacy.iter().any(
-                |row| row.score == 42 && row.truce_label.contains(&(game.turn + 3).to_string())
-            )
-        );
+        assert!(snapshot.diplomacy.iter().any(|row| row.score == 42
+            && row.truce_label.contains(&(game.turn + 3).to_string())
+            && row.passage_label.contains(&(game.turn + 4).to_string())));
         assert_eq!(snapshot.technology.active_label, "乡勇操练");
         assert_eq!(snapshot.technology.funded_count, 1);
         assert_eq!(snapshot.technology.completed_count, 1);
         assert_eq!(snapshot.technology.completed_names, vec!["户籍清丈"]);
         assert_eq!(snapshot.pending_commands.len(), 1);
         assert!(snapshot.pending_commands[0].contains("训练"));
+        assert_eq!(snapshot.pending_diplomacy.len(), 1);
+        assert!(snapshot.pending_diplomacy[0].contains("借道"));
         assert_eq!(snapshot.army_movements.len(), 1);
         assert!(snapshot.army_movements[0].contains("刘备"));
         assert_eq!(snapshot.recruitments.len(), 1);

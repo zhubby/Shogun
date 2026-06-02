@@ -219,6 +219,41 @@ fn infantry(amount: u32) -> TroopPool {
     TroopPool::new(amount, 0, 0)
 }
 
+fn bundle(gold: i32, food: i32, materials: i32) -> ResourceBundle {
+    ResourceBundle {
+        gold,
+        food,
+        materials,
+    }
+}
+
+fn diplomacy_order(target_faction_id: &str, kind: DiplomacyActionKind) -> DiplomacyOrder {
+    DiplomacyOrder {
+        issuer_faction_id: "liu_bei".to_string(),
+        target_faction_id: target_faction_id.to_string(),
+        kind,
+        source_city_id: "pingyuan".to_string(),
+        receive_city_id: "xiapi".to_string(),
+        offer: ResourceBundle::default(),
+        request: ResourceBundle::default(),
+        submitted_turn: 0,
+    }
+}
+
+fn faction_resource_totals(game: &GameState, faction_id: &str) -> ResourceBundle {
+    let mut totals = ResourceBundle::default();
+    for city in game
+        .cities
+        .values()
+        .filter(|city| city.faction_id == faction_id)
+    {
+        totals.gold += city.gold;
+        totals.food += city.food;
+        totals.materials += city.materials;
+    }
+    totals
+}
+
 fn expedition(target_city_id: &str, officer_id: &str, kind: TroopKind, troops: u32) -> CommandKind {
     CommandKind::Expedition {
         target_city_id: target_city_id.to_string(),
@@ -320,6 +355,263 @@ fn cannot_attack_non_adjacent_city() {
     );
 
     assert!(result.is_err());
+}
+
+#[test]
+fn diplomacy_queue_does_not_reserve_city_or_officer_action() {
+    let mut game = sample_game();
+    let mut order = diplomacy_order("cao_cao", DiplomacyActionKind::ImproveRelations);
+    order.offer = bundle(100, 0, 0);
+
+    queue_player_diplomacy(&mut game, order).unwrap();
+    queue_player_command(
+        &mut game,
+        command(
+            "pingyuan",
+            "liu_bei",
+            CommandKind::Develop {
+                focus: DevelopmentFocus::Commerce,
+            },
+        ),
+    )
+    .unwrap();
+
+    assert_eq!(game.pending_diplomacy.len(), 1);
+    assert_eq!(game.pending_commands.len(), 1);
+    assert_eq!(game.pending_commands[0].city_id, "pingyuan");
+}
+
+#[test]
+fn duplicate_diplomacy_target_is_rejected_for_the_month() {
+    let mut game = sample_game();
+    let order = diplomacy_order("cao_cao", DiplomacyActionKind::Truce);
+
+    queue_player_diplomacy(&mut game, order.clone()).unwrap();
+    let result = queue_player_diplomacy(&mut game, order);
+
+    assert!(result.unwrap_err().to_string().contains("本月已向该势力"));
+}
+
+#[test]
+fn resource_exchange_transfers_from_selected_cities() {
+    let mut game = sample_game();
+    game.relation_mut("liu_bei", "cao_cao").score = 20;
+    let mut order = diplomacy_order("cao_cao", DiplomacyActionKind::ResourceExchange);
+    order.offer = bundle(0, 0, 50);
+    order.request = bundle(0, 200, 0);
+    let mut baseline = game.clone();
+
+    resolve_command_batch(&mut baseline, Vec::new());
+    queue_player_diplomacy(&mut game, order).unwrap();
+    resolve_command_batch(&mut game, Vec::new());
+
+    assert_eq!(
+        game.cities["pingyuan"].materials,
+        baseline.cities["pingyuan"].materials - 50
+    );
+    assert_eq!(
+        game.cities["xiapi"].food,
+        baseline.cities["xiapi"].food + 200
+    );
+    assert_eq!(
+        faction_resource_totals(&game, "cao_cao").materials,
+        faction_resource_totals(&baseline, "cao_cao").materials + 50
+    );
+    assert_eq!(
+        faction_resource_totals(&game, "cao_cao").food,
+        faction_resource_totals(&baseline, "cao_cao").food - 200
+    );
+    assert_eq!(game.relation("liu_bei", "cao_cao").unwrap().score, 21);
+}
+
+#[test]
+fn diplomacy_actions_apply_relation_treaty_and_passage_rules() {
+    let mut improve = sample_game();
+    improve.relation_mut("liu_bei", "cao_cao").score = 0;
+    let mut improve_order = diplomacy_order("cao_cao", DiplomacyActionKind::ImproveRelations);
+    improve_order.offer = bundle(200, 0, 0);
+    queue_player_diplomacy(&mut improve, improve_order).unwrap();
+    resolve_command_batch(&mut improve, Vec::new());
+    assert_eq!(improve.relation("liu_bei", "cao_cao").unwrap().score, 9);
+
+    let mut truce = sample_game();
+    truce.relation_mut("liu_bei", "cao_cao").score = -40;
+    let truce_start = truce.turn;
+    queue_player_diplomacy(
+        &mut truce,
+        diplomacy_order("cao_cao", DiplomacyActionKind::Truce),
+    )
+    .unwrap();
+    resolve_command_batch(&mut truce, Vec::new());
+    let relation = truce.relation("liu_bei", "cao_cao").unwrap();
+    assert_eq!(relation.truce_until_turn, Some(truce_start + 6));
+    assert_eq!(relation.score, -35);
+
+    let mut peace = sample_game();
+    peace.relation_mut("liu_bei", "cao_cao").score = -20;
+    let peace_start = peace.turn;
+    queue_player_diplomacy(
+        &mut peace,
+        diplomacy_order("cao_cao", DiplomacyActionKind::RequestPeace),
+    )
+    .unwrap();
+    resolve_command_batch(&mut peace, Vec::new());
+    let relation = peace.relation("liu_bei", "cao_cao").unwrap();
+    assert_eq!(relation.truce_until_turn, Some(peace_start + 12));
+    assert_eq!(relation.score, 0);
+
+    let mut passage = sample_game();
+    passage.relation_mut("liu_bei", "cao_cao").score = 10;
+    let passage_start = passage.turn;
+    queue_player_diplomacy(
+        &mut passage,
+        diplomacy_order("cao_cao", DiplomacyActionKind::PassageRight),
+    )
+    .unwrap();
+    resolve_command_batch(&mut passage, Vec::new());
+    let relation = passage.relation("liu_bei", "cao_cao").unwrap();
+    assert_eq!(
+        relation.passage_rights.get("liu_bei"),
+        Some(&(passage_start + 12))
+    );
+    assert_eq!(relation.score, 13);
+
+    let mut war = sample_game();
+    {
+        let turn = war.turn;
+        let relation = war.relation_mut("liu_bei", "cao_cao");
+        relation.score = 30;
+        relation.truce_until_turn = Some(turn + 6);
+        relation
+            .passage_rights
+            .insert("liu_bei".to_string(), turn + 6);
+    }
+    queue_player_diplomacy(
+        &mut war,
+        diplomacy_order("cao_cao", DiplomacyActionKind::DeclareWar),
+    )
+    .unwrap();
+    resolve_command_batch(&mut war, Vec::new());
+    let relation = war.relation("liu_bei", "cao_cao").unwrap();
+    assert_eq!(relation.score, -80);
+    assert_eq!(relation.truce_until_turn, None);
+    assert!(relation.passage_rights.is_empty());
+}
+
+#[test]
+fn rejected_diplomacy_does_not_transfer_resources() {
+    let mut game = sample_game();
+    game.relation_mut("liu_bei", "cao_cao").score = -50;
+    let mut order = diplomacy_order("cao_cao", DiplomacyActionKind::PassageRight);
+    order.offer = bundle(100, 0, 0);
+    let mut baseline = game.clone();
+
+    resolve_command_batch(&mut baseline, Vec::new());
+    queue_player_diplomacy(&mut game, order).unwrap();
+    let report = resolve_command_batch(&mut game, Vec::new());
+    let messages = report_messages(&report);
+
+    assert!(messages.contains("拒绝"));
+    assert_eq!(
+        game.cities["pingyuan"].gold,
+        baseline.cities["pingyuan"].gold
+    );
+    assert_eq!(
+        faction_resource_totals(&game, "cao_cao").gold,
+        faction_resource_totals(&baseline, "cao_cao").gold
+    );
+    assert_eq!(game.relation("liu_bei", "cao_cao").unwrap().score, -52);
+}
+
+#[test]
+fn diplomacy_validates_resource_and_target_failures() {
+    let mut game = sample_game();
+    let mut self_order = diplomacy_order("liu_bei", DiplomacyActionKind::Truce);
+    assert!(queue_player_diplomacy(&mut game, self_order.clone()).is_err());
+
+    self_order.target_faction_id = "cao_cao".to_string();
+    self_order.offer = bundle(game.cities["pingyuan"].gold + 1, 0, 0);
+    assert!(queue_player_diplomacy(&mut game, self_order.clone()).is_err());
+
+    for city in game
+        .cities
+        .values_mut()
+        .filter(|city| city.faction_id == "cao_cao")
+    {
+        city.gold = 0;
+    }
+    self_order.offer = ResourceBundle::default();
+    self_order.request = bundle(1, 0, 0);
+    assert!(queue_player_diplomacy(&mut game, self_order).is_err());
+}
+
+#[test]
+fn diplomacy_resolves_before_city_commands() {
+    let mut truce_game = sample_game();
+    truce_game.relation_mut("liu_bei", "cao_cao").score = -40;
+    queue_player_command(
+        &mut truce_game,
+        command(
+            "xiapi",
+            "zhang_fei",
+            expedition("xuchang", "zhang_fei", TroopKind::Infantry, 500),
+        ),
+    )
+    .unwrap();
+    queue_player_diplomacy(
+        &mut truce_game,
+        diplomacy_order("cao_cao", DiplomacyActionKind::Truce),
+    )
+    .unwrap();
+    let commands = truce_game.pending_commands.clone();
+    let report = resolve_command_batch(&mut truce_game, commands);
+    let messages = report_messages(&report);
+    assert!(messages.contains("停战期内不能出征"));
+    assert!(truce_game.army_movements.is_empty());
+
+    let mut war_game = sample_game();
+    {
+        let turn = war_game.turn;
+        war_game.relation_mut("liu_bei", "cao_cao").truce_until_turn = Some(turn + 6);
+    }
+    queue_player_diplomacy(
+        &mut war_game,
+        diplomacy_order("cao_cao", DiplomacyActionKind::DeclareWar),
+    )
+    .unwrap();
+    queue_player_command(
+        &mut war_game,
+        command(
+            "xiapi",
+            "zhang_fei",
+            expedition("xuchang", "zhang_fei", TroopKind::Infantry, 500),
+        ),
+    )
+    .unwrap();
+    let commands = war_game.pending_commands.clone();
+    resolve_command_batch(&mut war_game, commands);
+    assert_eq!(war_game.army_movements.len(), 1);
+}
+
+#[test]
+fn passage_right_allows_routes_through_third_party_cities() {
+    let mut blocked = sample_game();
+    add_test_road(&mut blocked, "xuchang", "jianye");
+    let command_to_jianye = command(
+        "xiapi",
+        "zhang_fei",
+        expedition("jianye", "zhang_fei", TroopKind::Infantry, 500),
+    );
+    assert!(validate_command_for_state(&blocked, &command_to_jianye).is_err());
+
+    let mut allowed = blocked.clone();
+    let turn = allowed.turn;
+    allowed
+        .relation_mut("liu_bei", "cao_cao")
+        .passage_rights
+        .insert("liu_bei".to_string(), turn + 12);
+    assert!(validate_command_for_state(&allowed, &command_to_jianye).is_ok());
+    assert!(route_distance_li_for_faction(&allowed, "liu_bei", "xiapi", "jianye", true).is_some());
 }
 
 #[test]
@@ -447,6 +739,27 @@ fn development_changes_city_values() {
     resolve_command_batch(&mut game, commands);
 
     assert!(game.cities["pingyuan"].agriculture > before);
+}
+
+#[test]
+fn rejected_development_report_uses_chinese_focus_label() {
+    let mut game = sample_game();
+    game.cities.get_mut("pingyuan").unwrap().gold = 79;
+
+    let report = resolve_command_batch(
+        &mut game,
+        vec![command(
+            "pingyuan",
+            "liu_bei",
+            CommandKind::Develop {
+                focus: DevelopmentFocus::Commerce,
+            },
+        )],
+    );
+    let messages = report_messages(&report);
+
+    assert!(messages.contains("命令被拒绝: 开发 商业 (开发需要至少 80 金)"));
+    assert!(!messages.contains("Commerce"));
 }
 
 #[test]
@@ -1164,10 +1477,25 @@ fn recruit_consumes_resources_and_adds_troops() {
     .unwrap();
 
     let commands = game.pending_commands.clone();
-    resolve_command_batch(&mut game, commands);
+    let report = resolve_command_batch(&mut game, commands);
+    let messages = report_messages(&report);
 
     assert!(game.cities["xiapi"].troops.total() > before_troops.total());
     assert!(game.cities["xiapi"].gold < before_gold);
+    assert!(messages.contains("征募 步兵 500"));
+    assert!(!messages.contains("Infantry"));
+    assert_eq!(
+        command(
+            "xiapi",
+            "zhang_fei",
+            CommandKind::Recruit {
+                kind: TroopKind::Infantry,
+                amount: 800,
+            },
+        )
+        .summary(),
+        "征兵 步兵 800"
+    );
 }
 
 fn add_wild_officer(game: &mut GameState, officer_id: &str, city_id: &str, charm: u8) {
@@ -2193,6 +2521,57 @@ fn old_save_json_missing_technologies_still_deserializes() {
     let loaded: GameState = serde_json::from_value(game_json).unwrap();
 
     assert!(loaded.technologies.is_empty());
+}
+
+#[test]
+fn old_save_json_missing_diplomacy_extensions_still_deserializes() {
+    let mut game = sample_game();
+    game.pending_diplomacy
+        .push(diplomacy_order("cao_cao", DiplomacyActionKind::Truce));
+    let turn = game.turn;
+    game.relation_mut("liu_bei", "cao_cao")
+        .passage_rights
+        .insert("liu_bei".to_string(), turn + 12);
+    let mut game_json = serde_json::to_value(game).unwrap();
+    game_json
+        .as_object_mut()
+        .unwrap()
+        .remove("pending_diplomacy");
+    let diplomacy = game_json
+        .get_mut("diplomacy")
+        .and_then(serde_json::Value::as_object_mut)
+        .unwrap();
+    for relation in diplomacy.values_mut() {
+        relation.as_object_mut().unwrap().remove("passage_rights");
+    }
+
+    let loaded: GameState = serde_json::from_value(game_json).unwrap();
+
+    assert!(loaded.pending_diplomacy.is_empty());
+    assert!(
+        loaded
+            .relation("liu_bei", "cao_cao")
+            .unwrap()
+            .passage_rights
+            .is_empty()
+    );
+}
+
+#[test]
+fn old_save_json_missing_scenario_era_name_still_deserializes() {
+    let mut game_json = serde_json::to_value(sample_game()).unwrap();
+    let object = game_json.as_object_mut().unwrap();
+    object.insert(
+        "scenario_name".to_string(),
+        serde_json::Value::String("建安五年 官渡前夜".to_string()),
+    );
+    object.remove("scenario_era_name");
+
+    let loaded: GameState = serde_json::from_value(game_json).unwrap();
+
+    assert!(loaded.scenario_era_name.is_empty());
+    assert_eq!(loaded.scenario_title(), "官渡前夜");
+    assert_eq!(loaded.scenario_full_name(), "建安五年 官渡前夜");
 }
 
 #[test]

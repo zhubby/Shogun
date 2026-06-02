@@ -19,6 +19,17 @@ pub(super) fn diplomacy_label(t: &Translator, proposal: &DiplomacyProposal) -> S
     }
 }
 
+pub(super) fn diplomacy_action_label(t: &Translator, action: DiplomacyActionKind) -> String {
+    match action {
+        DiplomacyActionKind::ImproveRelations => t.text("diplomacy-action-improve-relations"),
+        DiplomacyActionKind::RequestPeace => t.text("diplomacy-action-request-peace"),
+        DiplomacyActionKind::Truce => t.text("diplomacy-action-truce"),
+        DiplomacyActionKind::DeclareWar => t.text("diplomacy-action-declare-war"),
+        DiplomacyActionKind::PassageRight => t.text("diplomacy-action-passage-right"),
+        DiplomacyActionKind::ResourceExchange => t.text("diplomacy-action-resource-exchange"),
+    }
+}
+
 pub(super) fn facility_kind_label(t: &Translator, kind: FacilityKind) -> String {
     match kind {
         FacilityKind::Farmland => t.text("facility-farmland"),
@@ -105,6 +116,14 @@ mod tests {
         assert_eq!(
             diplomacy_label(&en, &DiplomacyProposal::DeclareWar),
             "Declare War"
+        );
+        assert_eq!(
+            diplomacy_action_label(&zh, DiplomacyActionKind::PassageRight),
+            "借道"
+        );
+        assert_eq!(
+            diplomacy_action_label(&en, DiplomacyActionKind::PassageRight),
+            "Passage"
         );
         assert_eq!(confidence_label(&zh, &SourceConfidence::High), "高");
         assert_eq!(confidence_label(&en, &SourceConfidence::High), "High");

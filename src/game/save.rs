@@ -189,6 +189,7 @@ fn save_meta(slot_id: &str, display_name: &str, state: &GameState) -> SaveSlotMe
         display_name: display_name.to_string(),
         scenario_id: state.scenario_id.clone(),
         scenario_name: state.scenario_name.clone(),
+        scenario_era_name: state.scenario_era_name.clone(),
         player_faction_id: state.player_faction_id.clone(),
         turn: state.turn,
         year: state.year,
@@ -239,6 +240,8 @@ pub struct SaveSlotMeta {
     pub display_name: String,
     pub scenario_id: String,
     pub scenario_name: String,
+    #[serde(default)]
+    pub scenario_era_name: String,
     pub player_faction_id: FactionId,
     pub turn: u32,
     pub year: i32,

@@ -500,7 +500,7 @@ fn new_game_selection_summary(
             t.text_args(
                 "new-game-scenario-line",
                 &args([
-                    ("name", scenario.name.clone()),
+                    ("name", scenario.full_name()),
                     ("year", scenario.year.to_string()),
                     ("month", scenario.month.to_string()),
                 ]),
@@ -725,7 +725,7 @@ fn scenario_choice_card(
     .on_hover_text(t.text_args(
         "new-game-scenario-line",
         &args([
-            ("name", scenario.name.clone()),
+            ("name", scenario.full_name()),
             ("year", scenario.year.to_string()),
             ("month", scenario.month.to_string()),
         ]),

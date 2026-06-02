@@ -13,6 +13,8 @@ pub struct GameState {
     pub version: u32,
     pub scenario_id: String,
     pub scenario_name: String,
+    #[serde(default)]
+    pub scenario_era_name: String,
     pub year: i32,
     pub month: u8,
     pub turn: u32,
@@ -26,6 +28,8 @@ pub struct GameState {
     pub officer_tag_aliases: BTreeMap<String, String>,
     pub roads: Vec<Road>,
     pub diplomacy: BTreeMap<String, DiplomaticRelation>,
+    #[serde(default)]
+    pub pending_diplomacy: Vec<DiplomacyOrder>,
     pub pending_commands: Vec<Command>,
     #[serde(default)]
     pub army_movements: Vec<ArmyMovement>,
@@ -57,6 +61,22 @@ pub struct GameState {
 }
 
 impl GameState {
+    pub fn scenario_title(&self) -> String {
+        if self.scenario_era_name.trim().is_empty() {
+            scenario_title_from_legacy_name(&self.scenario_name)
+        } else {
+            self.scenario_name.trim().to_string()
+        }
+    }
+
+    pub fn scenario_full_name(&self) -> String {
+        if self.scenario_era_name.trim().is_empty() {
+            self.scenario_name.trim().to_string()
+        } else {
+            scenario_full_name(&self.scenario_era_name, &self.scenario_name)
+        }
+    }
+
     pub fn cities_for_faction(&self, faction_id: &str) -> Vec<&City> {
         self.cities
             .values()
@@ -153,6 +173,28 @@ impl GameState {
             };
         }
     }
+}
+
+pub fn scenario_full_name(era_name: &str, name: &str) -> String {
+    let era_name = era_name.trim();
+    let name = name.trim();
+    if era_name.is_empty() {
+        name.to_string()
+    } else if name.is_empty() {
+        era_name.to_string()
+    } else {
+        format!("{era_name} {name}")
+    }
+}
+
+fn scenario_title_from_legacy_name(name: &str) -> String {
+    let trimmed = name.trim();
+    if let Some((era, title)) = trimmed.split_once(' ') {
+        if era.ends_with('年') && !title.trim().is_empty() {
+            return title.trim().to_string();
+        }
+    }
+    trimmed.to_string()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -271,6 +313,14 @@ pub enum TroopKind {
 
 impl TroopKind {
     pub const ALL: [TroopKind; 3] = [TroopKind::Infantry, TroopKind::Cavalry, TroopKind::Archers];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            TroopKind::Infantry => "步兵",
+            TroopKind::Cavalry => "骑兵",
+            TroopKind::Archers => "弓兵",
+        }
+    }
 
     pub fn counters(self) -> Self {
         match self {
@@ -497,6 +547,8 @@ pub struct DiplomaticRelation {
     pub faction_b: FactionId,
     pub score: i16,
     pub truce_until_turn: Option<u32>,
+    #[serde(default)]
+    pub passage_rights: BTreeMap<FactionId, u32>,
 }
 
 impl DiplomaticRelation {
@@ -506,11 +558,90 @@ impl DiplomaticRelation {
             faction_b,
             score: 0,
             truce_until_turn: None,
+            passage_rights: BTreeMap::new(),
         }
     }
 
     pub fn has_active_truce(&self, turn: u32) -> bool {
         self.truce_until_turn.is_some_and(|until| until >= turn)
+    }
+
+    pub fn has_passage_right(&self, faction_id: &str, turn: u32) -> bool {
+        self.passage_rights
+            .get(faction_id)
+            .is_some_and(|until| *until >= turn)
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResourceBundle {
+    #[serde(default)]
+    pub gold: i32,
+    #[serde(default)]
+    pub food: i32,
+    #[serde(default)]
+    pub materials: i32,
+}
+
+impl ResourceBundle {
+    pub fn is_empty(&self) -> bool {
+        self.gold <= 0 && self.food <= 0 && self.materials <= 0
+    }
+
+    pub fn value(&self) -> i32 {
+        self.gold.max(0) + self.food.max(0) / 2 + self.materials.max(0) * 2
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DiplomacyActionKind {
+    ImproveRelations,
+    RequestPeace,
+    Truce,
+    DeclareWar,
+    PassageRight,
+    ResourceExchange,
+}
+
+impl DiplomacyActionKind {
+    pub const ALL: [Self; 6] = [
+        Self::ImproveRelations,
+        Self::RequestPeace,
+        Self::Truce,
+        Self::DeclareWar,
+        Self::PassageRight,
+        Self::ResourceExchange,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ImproveRelations => "修好",
+            Self::RequestPeace => "求和",
+            Self::Truce => "停战",
+            Self::DeclareWar => "宣战",
+            Self::PassageRight => "借道",
+            Self::ResourceExchange => "互市",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DiplomacyOrder {
+    pub issuer_faction_id: FactionId,
+    pub target_faction_id: FactionId,
+    pub kind: DiplomacyActionKind,
+    pub source_city_id: CityId,
+    pub receive_city_id: CityId,
+    #[serde(default)]
+    pub offer: ResourceBundle,
+    #[serde(default)]
+    pub request: ResourceBundle,
+    pub submitted_turn: u32,
+}
+
+impl DiplomacyOrder {
+    pub fn summary(&self) -> String {
+        format!("合纵 {} {}", self.target_faction_id, self.kind.label())
     }
 }
 
@@ -525,12 +656,12 @@ pub struct Command {
 impl Command {
     pub fn summary(&self) -> String {
         match &self.kind {
-            CommandKind::Develop { focus } => format!("开发 {focus:?}"),
+            CommandKind::Develop { focus } => format!("开发 {}", focus.label()),
             CommandKind::UpgradeCityCore => "升级城镇核心".to_string(),
             CommandKind::BuildFacility { kind } => {
                 format!("建设设施 {}", facility_kind_name(*kind))
             }
-            CommandKind::Recruit { kind, amount } => format!("征兵 {kind:?} {amount}"),
+            CommandKind::Recruit { kind, amount } => format!("征兵 {} {amount}", kind.label()),
             CommandKind::Train => "训练".to_string(),
             CommandKind::AppointGovernor { target_officer_id } => {
                 format!("任命太守 {target_officer_id}")
@@ -622,6 +753,17 @@ pub enum DevelopmentFocus {
     Commerce,
     Defense,
     Order,
+}
+
+impl DevelopmentFocus {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Agriculture => "农业",
+            Self::Commerce => "商业",
+            Self::Defense => "防御",
+            Self::Order => "治安",
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

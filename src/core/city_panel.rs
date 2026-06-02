@@ -363,7 +363,6 @@ fn command_parameter_column(
                 available_officers,
                 t,
             ),
-            CommandAction::Diplomacy => diplomacy_parameter_controls(ui, ui_state, game, t),
         }
     });
 }
@@ -512,10 +511,9 @@ const DOMESTIC_ACTIONS: [CommandAction; 5] = [
     CommandAction::Train,
 ];
 const MILITARY_ACTIONS: [CommandAction; 2] = [CommandAction::Transfer, CommandAction::Expedition];
-const DIPLOMACY_ACTIONS: [CommandAction; 3] = [
+const DIPLOMACY_ACTIONS: [CommandAction; 2] = [
     CommandAction::AppointGovernor,
     CommandAction::RecruitOfficer,
-    CommandAction::Diplomacy,
 ];
 
 fn ensure_command_action(ui_state: &mut GameUiState) {
@@ -550,7 +548,6 @@ fn command_action_label(action: CommandAction, t: &Translator) -> String {
         CommandAction::AppointGovernor => t.text("command-appoint-governor"),
         CommandAction::Transfer => t.text("command-transfer"),
         CommandAction::Expedition => t.text("command-expedition"),
-        CommandAction::Diplomacy => t.text("command-diplomacy"),
     }
 }
 
@@ -565,7 +562,6 @@ fn command_action_hint(action: CommandAction, t: &Translator) -> String {
         CommandAction::AppointGovernor => t.text("command-appoint-governor-hint"),
         CommandAction::Transfer => t.text("command-transfer-hint"),
         CommandAction::Expedition => t.text("command-expedition-hint"),
-        CommandAction::Diplomacy => t.text("command-diplomacy-hint"),
     }
 }
 
@@ -1272,52 +1268,6 @@ fn officer_option_combo(
         });
 }
 
-fn diplomacy_parameter_controls(
-    ui: &mut egui::Ui,
-    ui_state: &mut GameUiState,
-    game: &GameState,
-    t: &Translator,
-) {
-    let targets: Vec<_> = game
-        .factions
-        .values()
-        .filter(|faction| faction.id != game.player_faction_id && game.faction_alive(&faction.id))
-        .cloned()
-        .collect();
-    if targets.is_empty() {
-        ui.colored_label(war_text_muted(), t.text("command-diplomacy-no-targets"));
-        return;
-    }
-    let selected = ui_state
-        .selected_diplomacy_target
-        .get_or_insert_with(|| targets[0].id.clone());
-    if !targets.iter().any(|target| target.id == *selected) {
-        *selected = targets[0].id.clone();
-    }
-    egui::ComboBox::from_id_salt("command_diplomacy_target")
-        .selected_text(faction_name(game, selected))
-        .show_ui(ui, |ui| {
-            for target in &targets {
-                ui.selectable_value(selected, target.id.clone(), &target.name);
-            }
-        });
-    egui::ComboBox::from_id_salt("command_diplomacy_proposal")
-        .selected_text(diplomacy_label(t, &ui_state.selected_diplomacy_proposal))
-        .show_ui(ui, |ui| {
-            for proposal in [
-                DiplomacyProposal::ImproveRelations,
-                DiplomacyProposal::Truce,
-                DiplomacyProposal::DeclareWar,
-            ] {
-                ui.selectable_value(
-                    &mut ui_state.selected_diplomacy_proposal,
-                    proposal.clone(),
-                    diplomacy_label(t, &proposal),
-                );
-            }
-        });
-}
-
 fn adjacent_cities(game: &GameState, city: &City, own: bool) -> Vec<City> {
     let mut targets: Vec<_> = game
         .cities
@@ -1328,7 +1278,9 @@ fn adjacent_cities(game: &GameState, city: &City, own: bool) -> Vec<City> {
             } else {
                 target.faction_id != game.player_faction_id
             };
-            ownership_matches && game.are_adjacent(&city.id, &target.id)
+            ownership_matches
+                && route_distance_li_for_faction(game, &city.faction_id, &city.id, &target.id, !own)
+                    .is_some()
         })
         .cloned()
         .collect();
@@ -1390,14 +1342,33 @@ fn travel_summary(
     t: &Translator,
 ) -> String {
     match (
-        game.road_distance_li(from_city_id, target_city_id),
-        game.road_distance_li(from_city_id, target_city_id)
-            .map(|distance| {
-                let Some(from_city) = game.cities.get(from_city_id) else {
-                    return travel_months_for_distance(distance);
-                };
-                travel_months_for_faction(game, &from_city.faction_id, distance)
-            }),
+        game.cities.get(from_city_id).and_then(|from_city| {
+            let target_may_be_hostile = game
+                .cities
+                .get(target_city_id)
+                .is_some_and(|target_city| target_city.faction_id != from_city.faction_id);
+            route_distance_li_for_faction(
+                game,
+                &from_city.faction_id,
+                from_city_id,
+                target_city_id,
+                target_may_be_hostile,
+            )
+        }),
+        game.cities.get(from_city_id).and_then(|from_city| {
+            let target_may_be_hostile = game
+                .cities
+                .get(target_city_id)
+                .is_some_and(|target_city| target_city.faction_id != from_city.faction_id);
+            route_distance_li_for_faction(
+                game,
+                &from_city.faction_id,
+                from_city_id,
+                target_city_id,
+                target_may_be_hostile,
+            )
+            .map(|distance| travel_months_for_faction(game, &from_city.faction_id, distance))
+        }),
     ) {
         (Some(distance), Some(months)) => t.text_args(
             "travel-summary",
@@ -1443,10 +1414,6 @@ fn build_candidate_command(
             target_city_id: ui_state.selected_expedition_target.clone()?,
             assignments: expedition_assignments_from_ui(ui_state, &officer_id),
             food_supply: ui_state.expedition_food_supply,
-        },
-        CommandAction::Diplomacy => CommandKind::Diplomacy {
-            target_faction_id: ui_state.selected_diplomacy_target.clone()?,
-            proposal: ui_state.selected_diplomacy_proposal.clone(),
         },
     };
     Some(Command {

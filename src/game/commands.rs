@@ -54,6 +54,23 @@ pub fn queue_player_command(state: &mut GameState, command: Command) -> Result<(
     Ok(())
 }
 
+pub fn queue_player_diplomacy(
+    state: &mut GameState,
+    mut order: DiplomacyOrder,
+) -> Result<(), CommandError> {
+    ensure_faction_technology_states(state);
+    if state.status != GameStatus::Running {
+        return Err(CommandError::Invalid("游戏已经结束".to_string()));
+    }
+    if order.issuer_faction_id != state.player_faction_id {
+        return Err(CommandError::Invalid("玩家只能提交己方外交".to_string()));
+    }
+    order.submitted_turn = state.turn;
+    validate_diplomacy_order(state, &order)?;
+    state.pending_diplomacy.push(order);
+    Ok(())
+}
+
 pub fn resolve_command_batch(state: &mut GameState, commands: Vec<Command>) -> TurnReport {
     resolve_command_batch_inner(state, commands, None, &RuleBasedChildGenerator)
 }
@@ -108,6 +125,7 @@ fn resolve_command_batch_inner(
     let mut report = TurnReport::new(state);
     let mut reservations = CommandReservations::default();
     reserve_officer_recruitments(state, &mut reservations);
+    resolve_diplomacy_orders(state, &mut report);
     let command_count = commands.len();
     let mut executed_commands = 0;
     let mut rejected_commands = 0;
@@ -218,6 +236,132 @@ pub fn validate_command_for_state(
     let mut reservations = CommandReservations::default();
     reserve_officer_recruitments(state, &mut reservations);
     validate_command(state, command, &mut reservations)
+}
+
+pub fn validate_diplomacy_order(
+    state: &GameState,
+    order: &DiplomacyOrder,
+) -> Result<(), CommandError> {
+    validate_diplomacy_order_base(state, order)?;
+    if state.pending_diplomacy.iter().any(|pending| {
+        pending.issuer_faction_id == order.issuer_faction_id
+            && pending.target_faction_id == order.target_faction_id
+    }) {
+        return Err(CommandError::Invalid(
+            "本月已向该势力提交外交提案".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+pub fn diplomacy_net_value(order: &DiplomacyOrder) -> i32 {
+    order.offer.value() - order.request.value()
+}
+
+pub fn diplomacy_acceptance_score(state: &GameState, order: &DiplomacyOrder) -> i32 {
+    let relation_score = state
+        .relation(&order.issuer_faction_id, &order.target_faction_id)
+        .map(|relation| i32::from(relation.score))
+        .unwrap_or_default();
+    relation_score + diplomacy_net_value(order) / 100
+}
+
+pub fn diplomacy_order_would_succeed(
+    state: &GameState,
+    order: &DiplomacyOrder,
+) -> Result<bool, CommandError> {
+    validate_diplomacy_order_base(state, order)?;
+    Ok(match order.kind {
+        DiplomacyActionKind::ImproveRelations | DiplomacyActionKind::DeclareWar => true,
+        DiplomacyActionKind::ResourceExchange => diplomacy_acceptance_score(state, order) >= 0,
+        DiplomacyActionKind::Truce => diplomacy_acceptance_score(state, order) >= -40,
+        DiplomacyActionKind::RequestPeace => diplomacy_acceptance_score(state, order) >= -20,
+        DiplomacyActionKind::PassageRight => diplomacy_acceptance_score(state, order) >= 10,
+    })
+}
+
+fn validate_diplomacy_order_base(
+    state: &GameState,
+    order: &DiplomacyOrder,
+) -> Result<(), CommandError> {
+    if !state.factions.contains_key(&order.issuer_faction_id) {
+        return Err(CommandError::Invalid("发起势力不存在".to_string()));
+    }
+    if order.target_faction_id == order.issuer_faction_id {
+        return Err(CommandError::Invalid("不能对自己外交".to_string()));
+    }
+    if !state.factions.contains_key(&order.target_faction_id) {
+        return Err(CommandError::Invalid("目标势力不存在".to_string()));
+    }
+    if !state.faction_alive(&order.issuer_faction_id) {
+        return Err(CommandError::Invalid("发起势力已无城池".to_string()));
+    }
+    if !state.faction_alive(&order.target_faction_id) {
+        return Err(CommandError::Invalid("目标势力已灭亡".to_string()));
+    }
+    validate_resource_bundle(&order.offer, "给出资源")?;
+    validate_resource_bundle(&order.request, "要求资源")?;
+    if order.kind == DiplomacyActionKind::ImproveRelations && !order.request.is_empty() {
+        return Err(CommandError::Invalid("修好不能要求对方资源".to_string()));
+    }
+    if order.kind == DiplomacyActionKind::DeclareWar
+        && (!order.offer.is_empty() || !order.request.is_empty())
+    {
+        return Err(CommandError::Invalid("宣战不能附带资源条款".to_string()));
+    }
+    let source = state
+        .cities
+        .get(&order.source_city_id)
+        .ok_or_else(|| CommandError::Invalid(format!("交付城 {} 不存在", order.source_city_id)))?;
+    if source.faction_id != order.issuer_faction_id {
+        return Err(CommandError::Invalid(format!(
+            "{} 不是己方交付城",
+            source.name
+        )));
+    }
+    let receive = state
+        .cities
+        .get(&order.receive_city_id)
+        .ok_or_else(|| CommandError::Invalid(format!("接收城 {} 不存在", order.receive_city_id)))?;
+    if receive.faction_id != order.issuer_faction_id {
+        return Err(CommandError::Invalid(format!(
+            "{} 不是己方接收城",
+            receive.name
+        )));
+    }
+    ensure_city_can_pay_bundle(source, &order.offer, "外交给出资源")?;
+    if !faction_can_pay_bundle(state, &order.target_faction_id, &order.request) {
+        return Err(CommandError::Invalid("目标势力资源不足".to_string()));
+    }
+    Ok(())
+}
+
+fn validate_resource_bundle(bundle: &ResourceBundle, label: &str) -> Result<(), CommandError> {
+    if bundle.gold < 0 || bundle.food < 0 || bundle.materials < 0 {
+        return Err(CommandError::Invalid(format!("{label}不能为负")));
+    }
+    Ok(())
+}
+
+fn ensure_city_can_pay_bundle(
+    city: &City,
+    bundle: &ResourceBundle,
+    action: &str,
+) -> Result<(), CommandError> {
+    if city.gold < bundle.gold || city.food < bundle.food || city.materials < bundle.materials {
+        return Err(CommandError::Invalid(format!(
+            "{action}需要 {} 金、{} 粮、{} 建材",
+            bundle.gold, bundle.food, bundle.materials
+        )));
+    }
+    Ok(())
+}
+
+fn faction_can_pay_bundle(state: &GameState, faction_id: &str, bundle: &ResourceBundle) -> bool {
+    faction_resource_total(state, faction_id, DiplomacyResource::Gold) >= bundle.gold
+        && faction_resource_total(state, faction_id, DiplomacyResource::Food) >= bundle.food
+        && faction_resource_total(state, faction_id, DiplomacyResource::Materials)
+            >= bundle.materials
 }
 
 pub fn appoint_official_post(
@@ -527,8 +671,18 @@ fn validate_command(
             if target.faction_id != command.issuer_faction_id {
                 return Err(CommandError::Invalid("只能向己方城池调动".to_string()));
             }
-            if !state.are_adjacent(&command.city_id, target_city_id) {
-                return Err(CommandError::Invalid("调动目标必须邻接".to_string()));
+            if route_distance_li_for_faction(
+                state,
+                &command.issuer_faction_id,
+                &command.city_id,
+                target_city_id,
+                false,
+            )
+            .is_none()
+            {
+                return Err(CommandError::Invalid(
+                    "调动目标必须有可通行路线".to_string(),
+                ));
             }
             if troops.is_empty() && officer_ids.is_empty() {
                 return Err(CommandError::Invalid("调动必须包含兵力或武将".to_string()));
@@ -564,12 +718,23 @@ fn validate_command(
             if target.faction_id == command.issuer_faction_id {
                 return Err(CommandError::Invalid("不能攻击己方城池".to_string()));
             }
-            if !state.are_adjacent(&command.city_id, target_city_id) {
-                return Err(CommandError::Invalid("出征目标必须邻接".to_string()));
+            if route_distance_li_for_faction(
+                state,
+                &command.issuer_faction_id,
+                &command.city_id,
+                target_city_id,
+                true,
+            )
+            .is_none()
+            {
+                return Err(CommandError::Invalid(
+                    "出征目标必须有可通行路线".to_string(),
+                ));
             }
             if state
                 .relation(&command.issuer_faction_id, &target.faction_id)
                 .is_some_and(|relation| relation.has_active_truce(state.turn))
+                && !has_pending_declaration(state, &command.issuer_faction_id, &target.faction_id)
             {
                 return Err(CommandError::Invalid("停战期内不能出征".to_string()));
             }
@@ -596,6 +761,18 @@ fn validate_command(
     }
     reservations.city_ids.insert(command.city_id.clone());
     Ok(())
+}
+
+fn has_pending_declaration(
+    state: &GameState,
+    issuer_faction_id: &str,
+    target_faction_id: &str,
+) -> bool {
+    state.pending_diplomacy.iter().any(|order| {
+        order.issuer_faction_id == issuer_faction_id
+            && order.target_faction_id == target_faction_id
+            && order.kind == DiplomacyActionKind::DeclareWar
+    })
 }
 
 fn reserve_command(
@@ -951,8 +1128,11 @@ fn apply_recruit(
     city.order = city.order.saturating_sub(2);
     city.clamp_fields();
     report.info(format!(
-        "{} 在 {} 征募 {:?} {}",
-        officer.name, city.name, kind, amount
+        "{} 在 {} 征募 {} {}",
+        officer.name,
+        city.name,
+        kind.label(),
+        amount
     ));
 }
 
@@ -998,9 +1178,14 @@ fn apply_transfer(
 ) {
     let source_name = state.cities[&command.city_id].name.clone();
     let target_name = state.cities[target_city_id].name.clone();
-    let distance_li = state
-        .road_distance_li(&command.city_id, target_city_id)
-        .unwrap_or_default();
+    let distance_li = route_distance_li_for_faction(
+        state,
+        &command.issuer_faction_id,
+        &command.city_id,
+        target_city_id,
+        false,
+    )
+    .unwrap_or_default();
     let travel_months = travel_months_for_faction(state, &command.issuer_faction_id, distance_li);
     let source_training = state.cities[&command.city_id].training;
     let moving_officers = movement_officer_ids(command.officer_id.as_ref().unwrap(), officer_ids);
@@ -1058,9 +1243,14 @@ fn apply_expedition(
     let attacker_name = attacker.name.clone();
     let source_city = state.cities[&command.city_id].clone();
     let target_city = state.cities[target_city_id].clone();
-    let distance_li = state
-        .road_distance_li(&command.city_id, target_city_id)
-        .unwrap_or_default();
+    let distance_li = route_distance_li_for_faction(
+        state,
+        &command.issuer_faction_id,
+        &command.city_id,
+        target_city_id,
+        true,
+    )
+    .unwrap_or_default();
     let travel_months = travel_months_for_faction(state, &command.issuer_faction_id, distance_li);
     {
         let source = state.cities.get_mut(&command.city_id).unwrap();
@@ -1782,6 +1972,256 @@ fn faction_name(state: &GameState, faction_id: &str) -> String {
         .unwrap_or_else(|| faction_id.to_string())
 }
 
+fn resolve_diplomacy_orders(state: &mut GameState, report: &mut TurnReport) {
+    let orders = std::mem::take(&mut state.pending_diplomacy);
+    if orders.is_empty() {
+        return;
+    }
+
+    let mut seen_targets = BTreeSet::new();
+    let order_count = orders.len();
+    let mut accepted = 0;
+    let mut rejected = 0;
+    for order in orders {
+        let key = (
+            order.issuer_faction_id.clone(),
+            order.target_faction_id.clone(),
+        );
+        if !seen_targets.insert(key) {
+            rejected += 1;
+            report.warning(format!("外交被拒绝: {} (本月重复提案)", order.summary()));
+            continue;
+        }
+        match validate_diplomacy_order_base(state, &order) {
+            Ok(()) => {
+                if apply_diplomacy_order(state, &order, report) {
+                    accepted += 1;
+                } else {
+                    rejected += 1;
+                }
+            }
+            Err(error) => {
+                rejected += 1;
+                report.warning(format!("外交被拒绝: {} ({error})", order.summary()));
+            }
+        }
+    }
+    report.info(format!(
+        "本月处理外交提案 {order_count} 条，接受 {accepted} 条，拒绝 {rejected} 条"
+    ));
+}
+
+fn apply_diplomacy_order(
+    state: &mut GameState,
+    order: &DiplomacyOrder,
+    report: &mut TurnReport,
+) -> bool {
+    let issuer_name = faction_name(state, &order.issuer_faction_id);
+    let target_name = faction_name(state, &order.target_faction_id);
+    let acceptance_score = diplomacy_acceptance_score(state, order);
+    let accepted = match order.kind {
+        DiplomacyActionKind::ImproveRelations | DiplomacyActionKind::DeclareWar => true,
+        DiplomacyActionKind::ResourceExchange => acceptance_score >= 0,
+        DiplomacyActionKind::Truce => acceptance_score >= -40,
+        DiplomacyActionKind::RequestPeace => acceptance_score >= -20,
+        DiplomacyActionKind::PassageRight => acceptance_score >= 10,
+    };
+
+    if !accepted {
+        if order.kind != DiplomacyActionKind::ResourceExchange {
+            let relation = state.relation_mut(&order.issuer_faction_id, &order.target_faction_id);
+            relation.score = (relation.score - 2).clamp(-100, 100);
+        }
+        report.warning(format!(
+            "{target_name} 拒绝 {issuer_name} 的{}提案",
+            order.kind.label()
+        ));
+        return false;
+    }
+
+    match order.kind {
+        DiplomacyActionKind::DeclareWar => {
+            let relation = state.relation_mut(&order.issuer_faction_id, &order.target_faction_id);
+            relation.truce_until_turn = None;
+            relation.passage_rights.remove(&order.issuer_faction_id);
+            relation.passage_rights.remove(&order.target_faction_id);
+            relation.score = -80;
+            report.info(format!("{issuer_name} 向 {target_name} 宣战"));
+        }
+        DiplomacyActionKind::ImproveRelations => {
+            transfer_diplomacy_resources(state, order);
+            let score_delta = 8 + order.offer.value() / 200;
+            let relation = state.relation_mut(&order.issuer_faction_id, &order.target_faction_id);
+            relation.score = (i32::from(relation.score) + score_delta).clamp(-100, 100) as i16;
+            report.info(format!(
+                "{issuer_name} 与 {target_name} 修好，关系提升 {score_delta}"
+            ));
+        }
+        DiplomacyActionKind::ResourceExchange => {
+            transfer_diplomacy_resources(state, order);
+            let relation = state.relation_mut(&order.issuer_faction_id, &order.target_faction_id);
+            relation.score = (relation.score + 1).clamp(-100, 100);
+            report.info(format!("{issuer_name} 与 {target_name} 完成互市"));
+        }
+        DiplomacyActionKind::Truce => {
+            transfer_diplomacy_resources(state, order);
+            let turn = state.turn;
+            let relation = state.relation_mut(&order.issuer_faction_id, &order.target_faction_id);
+            relation.truce_until_turn = Some(turn + 6);
+            relation.score = (relation.score + 5).clamp(-100, 100);
+            report.info(format!("{issuer_name} 与 {target_name} 达成 6 个月停战"));
+        }
+        DiplomacyActionKind::RequestPeace => {
+            transfer_diplomacy_resources(state, order);
+            let turn = state.turn;
+            let relation = state.relation_mut(&order.issuer_faction_id, &order.target_faction_id);
+            relation.truce_until_turn = Some(turn + 12);
+            relation.score = relation.score.max(0);
+            report.info(format!(
+                "{issuer_name} 与 {target_name} 求和成功，停战 12 个月"
+            ));
+        }
+        DiplomacyActionKind::PassageRight => {
+            transfer_diplomacy_resources(state, order);
+            let turn = state.turn;
+            let relation = state.relation_mut(&order.issuer_faction_id, &order.target_faction_id);
+            relation
+                .passage_rights
+                .insert(order.issuer_faction_id.clone(), turn + 12);
+            relation.score = (relation.score + 3).clamp(-100, 100);
+            report.info(format!("{target_name} 准许 {issuer_name} 借道 12 个月"));
+        }
+    }
+    true
+}
+
+fn transfer_diplomacy_resources(state: &mut GameState, order: &DiplomacyOrder) {
+    if !order.offer.is_empty() {
+        deduct_city_bundle(state, &order.source_city_id, &order.offer);
+        if let Some(target_city_id) =
+            diplomacy_receiving_city_for_faction(state, &order.target_faction_id)
+        {
+            add_city_bundle(state, &target_city_id, &order.offer);
+        }
+    }
+    if !order.request.is_empty() {
+        deduct_faction_bundle(state, &order.target_faction_id, &order.request);
+        add_city_bundle(state, &order.receive_city_id, &order.request);
+    }
+}
+
+fn diplomacy_receiving_city_for_faction(state: &GameState, faction_id: &str) -> Option<CityId> {
+    state
+        .factions
+        .get(faction_id)
+        .and_then(|faction| state.officers.get(&faction.ruler_id))
+        .and_then(|ruler| ruler.city_id.as_deref())
+        .and_then(|city_id| state.cities.get(city_id))
+        .filter(|city| city.faction_id == faction_id)
+        .map(|city| city.id.clone())
+        .or_else(|| {
+            state
+                .cities
+                .values()
+                .find(|city| city.faction_id == faction_id)
+                .map(|city| city.id.clone())
+        })
+}
+
+fn deduct_city_bundle(state: &mut GameState, city_id: &str, bundle: &ResourceBundle) {
+    let Some(city) = state.cities.get_mut(city_id) else {
+        return;
+    };
+    city.gold -= bundle.gold;
+    city.food -= bundle.food;
+    city.materials -= bundle.materials;
+}
+
+fn add_city_bundle(state: &mut GameState, city_id: &str, bundle: &ResourceBundle) {
+    let Some(city) = state.cities.get_mut(city_id) else {
+        return;
+    };
+    city.gold += bundle.gold;
+    city.food += bundle.food;
+    city.materials += bundle.materials;
+}
+
+fn deduct_faction_bundle(state: &mut GameState, faction_id: &str, bundle: &ResourceBundle) {
+    deduct_faction_resource(state, faction_id, DiplomacyResource::Gold, bundle.gold);
+    deduct_faction_resource(state, faction_id, DiplomacyResource::Food, bundle.food);
+    deduct_faction_resource(
+        state,
+        faction_id,
+        DiplomacyResource::Materials,
+        bundle.materials,
+    );
+}
+
+#[derive(Clone, Copy)]
+enum DiplomacyResource {
+    Gold,
+    Food,
+    Materials,
+}
+
+fn faction_resource_total(state: &GameState, faction_id: &str, resource: DiplomacyResource) -> i32 {
+    state
+        .cities
+        .values()
+        .filter(|city| city.faction_id == faction_id)
+        .map(|city| city_resource(city, resource).max(0))
+        .sum()
+}
+
+fn deduct_faction_resource(
+    state: &mut GameState,
+    faction_id: &str,
+    resource: DiplomacyResource,
+    mut amount: i32,
+) {
+    if amount <= 0 {
+        return;
+    }
+    let mut city_ids: Vec<_> = state
+        .cities
+        .values()
+        .filter(|city| city.faction_id == faction_id && city_resource(city, resource) > 0)
+        .map(|city| (city.id.clone(), city_resource(city, resource)))
+        .collect();
+    city_ids.sort_by(|(left_id, left_amount), (right_id, right_amount)| {
+        right_amount
+            .cmp(left_amount)
+            .then_with(|| left_id.cmp(right_id))
+    });
+    for (city_id, _) in city_ids {
+        if amount <= 0 {
+            break;
+        }
+        let Some(city) = state.cities.get_mut(&city_id) else {
+            continue;
+        };
+        let paid = city_resource(city, resource).min(amount);
+        set_city_resource(city, resource, city_resource(city, resource) - paid);
+        amount -= paid;
+    }
+}
+
+fn city_resource(city: &City, resource: DiplomacyResource) -> i32 {
+    match resource {
+        DiplomacyResource::Gold => city.gold,
+        DiplomacyResource::Food => city.food,
+        DiplomacyResource::Materials => city.materials,
+    }
+}
+
+fn set_city_resource(city: &mut City, resource: DiplomacyResource, amount: i32) {
+    match resource {
+        DiplomacyResource::Gold => city.gold = amount,
+        DiplomacyResource::Food => city.food = amount,
+        DiplomacyResource::Materials => city.materials = amount,
+    }
+}
+
 fn apply_diplomacy(
     state: &mut GameState,
     command: &Command,
@@ -1815,6 +2255,8 @@ fn apply_diplomacy(
         }
         DiplomacyProposal::DeclareWar => {
             relation.truce_until_turn = None;
+            relation.passage_rights.remove(&command.issuer_faction_id);
+            relation.passage_rights.remove(target_faction_id);
             relation.score = -80;
             report.info(format!("{officer_name} 宣战"));
         }
@@ -2726,6 +3168,83 @@ pub fn travel_months_for_faction(state: &GameState, faction_id: &str, distance_l
     travel_months_for_distance(distance_li)
         .saturating_sub(reduction)
         .max(1)
+}
+
+pub fn route_distance_li_for_faction(
+    state: &GameState,
+    faction_id: &str,
+    source_city_id: &str,
+    target_city_id: &str,
+    target_may_be_hostile: bool,
+) -> Option<u32> {
+    if !state.cities.contains_key(source_city_id) || !state.cities.contains_key(target_city_id) {
+        return None;
+    }
+    if source_city_id == target_city_id {
+        return Some(0);
+    }
+
+    let mut distances = BTreeMap::from([(source_city_id.to_string(), 0_u32)]);
+    let mut visited = BTreeSet::new();
+
+    loop {
+        let Some((current_id, current_distance)) = distances
+            .iter()
+            .filter(|(city_id, _)| !visited.contains(city_id.as_str()))
+            .min_by_key(|(city_id, distance)| (*distance, city_id.as_str()))
+            .map(|(city_id, distance)| (city_id.clone(), *distance))
+        else {
+            return None;
+        };
+        if current_id == target_city_id {
+            return Some(current_distance);
+        }
+        visited.insert(current_id.clone());
+
+        for road in state
+            .roads
+            .iter()
+            .filter(|road| road.from == current_id || road.to == current_id)
+        {
+            let next_id = if road.from == current_id {
+                road.to.as_str()
+            } else {
+                road.from.as_str()
+            };
+            if visited.contains(next_id) {
+                continue;
+            }
+            if !(target_may_be_hostile && next_id == target_city_id)
+                && !city_passable_for_faction(state, faction_id, next_id)
+            {
+                continue;
+            }
+            let Some(edge_distance) = direct_road_distance_li(state, &current_id, next_id) else {
+                continue;
+            };
+            let next_distance = current_distance.saturating_add(edge_distance);
+            let entry = distances.entry(next_id.to_string()).or_insert(u32::MAX);
+            if next_distance < *entry {
+                *entry = next_distance;
+            }
+        }
+    }
+}
+
+fn direct_road_distance_li(state: &GameState, from: &str, to: &str) -> Option<u32> {
+    let from_city = state.cities.get(from)?;
+    let to_city = state.cities.get(to)?;
+    Some(map_distance_li(from_city.position, to_city.position))
+}
+
+fn city_passable_for_faction(state: &GameState, faction_id: &str, city_id: &str) -> bool {
+    let Some(city) = state.cities.get(city_id) else {
+        return false;
+    };
+    city.faction_id == faction_id
+        || state
+            .relation(faction_id, &city.faction_id)
+            .is_some_and(|relation| relation.has_passage_right(faction_id, state.turn))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

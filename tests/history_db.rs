@@ -67,7 +67,7 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
         let pool = open_pool(&path).await;
         assert_eq!(
             applied_sqlx_migration_versions(&pool).await,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
         );
 
         let fk_rows = sqlx::query("PRAGMA foreign_key_check")
@@ -411,7 +411,7 @@ fn open_or_create_creates_database_and_runs_initial_migration() {
         let pool = open_pool(&path).await;
         assert_eq!(
             applied_sqlx_migration_versions(&pool).await,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
         );
         pool.close().await;
     });
@@ -736,6 +736,13 @@ fn fixed_scenarios_build_with_valid_selectable_factions_and_governors() {
         .map(|scenario| scenario.id.as_str())
         .collect();
     assert_eq!(scenario_ids, ["ad180", "ad190", "ad200", "ad208", "ad220"]);
+    let taipingdao = scenarios
+        .iter()
+        .find(|scenario| scenario.id == "ad180")
+        .unwrap();
+    assert_eq!(taipingdao.era_name, "光和三年");
+    assert_eq!(taipingdao.name, "太平道将兴");
+    assert_eq!(taipingdao.full_name(), "光和三年 太平道将兴");
 
     for scenario in scenarios {
         let factions = catalog.selectable_factions(&scenario.id).unwrap();
@@ -826,7 +833,9 @@ fn taipingdao_scenario_builds_yellow_turban_roster() {
     );
 
     let game = catalog.build_game("ad180", "yellow_turban").unwrap();
-    assert_eq!(game.scenario_name, "光和三年 太平道将兴");
+    assert_eq!(game.scenario_era_name, "光和三年");
+    assert_eq!(game.scenario_name, "太平道将兴");
+    assert_eq!(game.scenario_full_name(), "光和三年 太平道将兴");
     assert_eq!(game.year, 180);
     assert_eq!(game.factions["yellow_turban"].ruler_id, "ctk_5f20_89d2");
     assert_eq!(game.factions["han_court"].ruler_id, "ctk_5218_5b8f");
