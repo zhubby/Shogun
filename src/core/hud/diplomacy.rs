@@ -7,8 +7,8 @@ use super::super::labels::diplomacy_action_label;
 use super::super::map::faction_color;
 use super::super::state::GameUiState;
 use super::super::style::{
-    modal_title_bar, war_danger, war_gold, war_panel_frame, war_sub_panel_frame, war_success,
-    war_text_muted, war_warning,
+    modal_title_bar, war_border, war_danger, war_gold, war_panel_frame, war_sub_panel_frame,
+    war_success, war_text_muted, war_warning,
 };
 
 pub(super) fn diplomacy_hud(
@@ -114,35 +114,6 @@ fn target_row(
     let truce = relation.is_some_and(|relation| relation.has_active_truce(game.turn));
     let passage = relation
         .is_some_and(|relation| relation.has_passage_right(&game.player_faction_id, game.turn));
-    let button = egui::Button::new(egui::WidgetText::from(faction_target_text(
-        game,
-        faction,
-        relation_score,
-        truce,
-        passage,
-        t,
-    )))
-    .selected(selected);
-    let response = ui.add_sized([ui.available_width(), 56.0], button);
-    let swatch = egui::Rect::from_min_size(
-        response.rect.left_top() + egui::vec2(7.0, 8.0),
-        egui::vec2(5.0, 40.0),
-    );
-    ui.painter()
-        .rect_filled(swatch, 2.0, faction_color(faction));
-    if response.clicked() {
-        ui_state.selected_diplomacy_target = Some(faction.id.clone());
-    }
-}
-
-fn faction_target_text(
-    game: &GameState,
-    faction: &Faction,
-    relation_score: i16,
-    truce: bool,
-    passage: bool,
-    t: &Translator,
-) -> egui::text::LayoutJob {
     let cities = game.cities_for_faction(&faction.id).len();
     let troops: u32 = game
         .cities
@@ -150,57 +121,83 @@ fn faction_target_text(
         .filter(|city| city.faction_id == faction.id)
         .map(|city| city.troops.total())
         .sum();
-    let mut job = egui::text::LayoutJob::default();
-    job.append(
-        &format!("  {}", faction.name),
-        0.0,
-        egui::TextFormat {
-            color: war_gold(),
-            font_id: egui::FontId::proportional(15.0),
-            ..Default::default()
-        },
-    );
-    job.append(
-        &format!(
-            "\n  {} / {} / {} {}",
-            t.text_args(
-                "faction-detail-header-cities",
-                &args([("count", cities.to_string())])
-            ),
-            t.text_args(
-                "diplomacy-relation-score",
-                &args([("score", relation_score.to_string())])
-            ),
-            t.text("resource-troops"),
-            troops
-        ),
-        0.0,
-        egui::TextFormat {
-            color: war_text_muted(),
-            font_id: egui::FontId::proportional(12.0),
-            ..Default::default()
-        },
-    );
     let status = match (truce, passage) {
         (true, true) => t.text("diplomacy-status-truce-passage"),
         (true, false) => t.text("diplomacy-status-truce"),
         (false, true) => t.text("diplomacy-status-passage"),
         (false, false) => t.text("diplomacy-status-open"),
     };
-    job.append(
-        &format!(" / {status}"),
-        0.0,
-        egui::TextFormat {
-            color: if truce || passage {
+
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width().max(180.0), 56.0),
+        egui::Sense::click(),
+    );
+    if ui.is_rect_visible(rect) {
+        let fill = if selected {
+            egui::Color32::from_rgba_unmultiplied(113, 80, 42, 220)
+        } else if response.hovered() {
+            egui::Color32::from_rgba_unmultiplied(52, 42, 29, 220)
+        } else {
+            egui::Color32::from_rgba_unmultiplied(24, 21, 16, 96)
+        };
+        let stroke = egui::Stroke::new(
+            if selected { 1.6 } else { 1.0 },
+            if selected { war_gold() } else { war_border() },
+        );
+        let painter = ui.painter().with_clip_rect(rect);
+        painter.rect(
+            rect.shrink(1.0),
+            4.0,
+            fill,
+            stroke,
+            egui::StrokeKind::Inside,
+        );
+        painter.rect_filled(
+            egui::Rect::from_min_size(
+                rect.left_top() + egui::vec2(7.0, 8.0),
+                egui::vec2(5.0, 40.0),
+            ),
+            2.0,
+            faction_color(faction),
+        );
+
+        let text_left = rect.left() + 22.0;
+        painter.text(
+            egui::pos2(text_left, rect.top() + 8.0),
+            egui::Align2::LEFT_TOP,
+            faction.name.as_str(),
+            egui::FontId::proportional(15.0),
+            war_gold(),
+        );
+        painter.text(
+            egui::pos2(text_left, rect.top() + 30.0),
+            egui::Align2::LEFT_TOP,
+            format!(
+                "{} / {} / {} {} / {}",
+                t.text_args(
+                    "faction-detail-header-cities",
+                    &args([("count", cities.to_string())])
+                ),
+                t.text_args(
+                    "diplomacy-relation-score",
+                    &args([("score", relation_score.to_string())])
+                ),
+                t.text("resource-troops"),
+                troops,
+                status
+            ),
+            egui::FontId::proportional(12.0),
+            if truce || passage {
                 war_success()
             } else {
                 war_text_muted()
             },
-            font_id: egui::FontId::proportional(12.0),
-            ..Default::default()
-        },
-    );
-    job
+        );
+    }
+
+    if response.clicked() {
+        ui_state.selected_diplomacy_target = Some(faction.id.clone());
+    }
 }
 
 fn action_panel(

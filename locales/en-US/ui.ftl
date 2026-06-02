@@ -313,6 +313,7 @@ map-title = Map
 map-boundaries = Boundaries
 map-boundary-asset-missing = Boundary asset unavailable
 map-road-distance = {$distance} li / {$months} mo.
+map-siege-badge = Siege {$count} {$troops}
 map-troops-ten-thousand = {$value}0k
 city-list-title = City List
 city-list-row-resources = Gold {$gold} / Food {$food} / Troops {$troops}

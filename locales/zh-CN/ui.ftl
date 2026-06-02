@@ -313,6 +313,7 @@ map-title = 地图
 map-boundaries = 州郡边界
 map-boundary-asset-missing = 边界资产不可用
 map-road-distance = {$distance}里 / {$months}月
+map-siege-badge = 围{$count} {$troops}
 map-troops-ten-thousand = {$value}万
 city-list-title = 城池列表
 city-list-row-resources = 金{$gold} / 粮{$food} / 兵{$troops}

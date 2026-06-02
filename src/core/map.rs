@@ -1,6 +1,6 @@
 use crate::game::*;
 use bevy_egui::egui;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::actions::open_city;
 use super::i18n::{Translator, args};
@@ -77,6 +77,8 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Trans
         draw_map_road(&painter, game, road, a, b, selected, t);
     }
 
+    draw_expedition_movements(&painter, game, bounds, rect, ui_state, t);
+
     for city in game.cities.values() {
         let pos = map_to_screen(city.position, bounds, rect, ui_state);
         let faction = &game.factions[&city.faction_id];
@@ -96,6 +98,8 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Trans
             t,
         );
     }
+
+    draw_siege_overlays(&painter, game, bounds, rect, ui_state, t);
 
     let picked_city = response
         .interact_pointer_pos()
@@ -123,6 +127,266 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Trans
             ui.close();
         }
     });
+}
+
+fn draw_expedition_movements(
+    painter: &egui::Painter,
+    game: &GameState,
+    bounds: MapBounds,
+    rect: egui::Rect,
+    ui_state: &GameUiState,
+    t: &Translator,
+) {
+    for (index, movement) in active_expedition_movements(game).enumerate() {
+        let Some(source) = game.cities.get(&movement.source_city_id) else {
+            continue;
+        };
+        let Some(target) = game.cities.get(&movement.target_city_id) else {
+            continue;
+        };
+        let Some(progress) = expedition_movement_line_progress(movement, game.turn) else {
+            continue;
+        };
+        let Some(faction) = game.factions.get(&movement.issuer_faction_id) else {
+            continue;
+        };
+
+        let start = map_to_screen(source.position, bounds, rect, ui_state);
+        let end = map_to_screen(target.position, bounds, rect, ui_state);
+        draw_expedition_marker(
+            painter,
+            start,
+            end,
+            progress,
+            index,
+            faction_color(faction),
+            compact_troops(movement.troops.total(), t),
+        );
+    }
+}
+
+fn draw_expedition_marker(
+    painter: &egui::Painter,
+    start: egui::Pos2,
+    end: egui::Pos2,
+    progress: f32,
+    index: usize,
+    faction_color: egui::Color32,
+    troops: String,
+) {
+    let delta = end - start;
+    let length = delta.length();
+    if length <= f32::EPSILON {
+        return;
+    }
+
+    let direction = delta / length;
+    let normal = egui::vec2(-direction.y, direction.x);
+    let lane_offset = match index % 3 {
+        0 => 0.0,
+        1 => 13.0,
+        _ => -13.0,
+    };
+    let marker_pos = start + delta * progress + normal * lane_offset;
+    let marker_bounds = egui::Rect::from_center_size(marker_pos, egui::vec2(72.0, 66.0));
+    if !marker_bounds.intersects(painter.clip_rect()) {
+        return;
+    }
+
+    let shadow = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 128);
+    let ring = egui::Color32::from_rgba_unmultiplied(242, 208, 142, 230);
+    let label_fill = egui::Color32::from_rgba_unmultiplied(18, 15, 11, 236);
+    let fill = faction_color.gamma_multiply(0.78);
+    let icon_pos = marker_pos - normal * 0.5;
+
+    painter.circle_filled(marker_pos + egui::vec2(1.8, 2.2), 16.5, shadow);
+    painter.circle_filled(
+        marker_pos,
+        16.0,
+        egui::Color32::from_rgba_unmultiplied(20, 17, 13, 238),
+    );
+    painter.circle_filled(marker_pos, 12.2, fill);
+    painter.circle_stroke(marker_pos, 16.0, egui::Stroke::new(1.7, ring));
+
+    painter.text(
+        icon_pos,
+        egui::Align2::CENTER_CENTER,
+        egui_phosphor::regular::FLAG_BANNER,
+        egui::FontId::proportional(18.5),
+        egui::Color32::WHITE,
+    );
+
+    let label_center = marker_pos - normal * 25.0;
+    let label_width = (troops.chars().count() as f32 * 8.0 + 20.0).clamp(44.0, 76.0);
+    let label_rect = egui::Rect::from_center_size(label_center, egui::vec2(label_width, 21.0));
+    painter.rect(
+        label_rect.translate(egui::vec2(1.4, 1.8)),
+        4.0,
+        shadow,
+        egui::Stroke::NONE,
+        egui::StrokeKind::Outside,
+    );
+    painter.rect(
+        label_rect,
+        4.0,
+        label_fill,
+        egui::Stroke::new(1.0, ring.gamma_multiply(0.9)),
+        egui::StrokeKind::Outside,
+    );
+    painter.text(
+        label_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        troops,
+        egui::FontId::proportional(12.5),
+        war_text(),
+    );
+}
+
+fn draw_siege_overlays(
+    painter: &egui::Painter,
+    game: &GameState,
+    bounds: MapBounds,
+    rect: egui::Rect,
+    ui_state: &GameUiState,
+    t: &Translator,
+) {
+    for siege in siege_summaries(game) {
+        let Some(city) = game.cities.get(&siege.target_city_id) else {
+            continue;
+        };
+        let pos = map_to_screen(city.position, bounds, rect, ui_state);
+        draw_siege_badge(painter, pos, city, &siege, ui_state.map_zoom, t);
+    }
+}
+
+fn draw_siege_badge(
+    painter: &egui::Painter,
+    pos: egui::Pos2,
+    city: &City,
+    siege: &SiegeSummary,
+    map_zoom: f32,
+    t: &Translator,
+) {
+    let scale = map_zoom.sqrt().clamp(0.85, 1.35);
+    let marker_scale = scale * city_marker_rank_scale(city);
+    let center = pos + egui::vec2(0.0, -5.0 * scale);
+    let radius = 30.0 * marker_scale;
+    let bounds = egui::Rect::from_center_size(center, egui::vec2(156.0 * scale, 98.0 * scale));
+    if !bounds.intersects(painter.clip_rect()) {
+        return;
+    }
+
+    let warning = egui::Color32::from_rgb(219, 87, 58);
+    painter.circle_stroke(
+        center,
+        radius + 9.0 * scale,
+        egui::Stroke::new(
+            6.0 * scale,
+            egui::Color32::from_rgba_unmultiplied(74, 9, 6, 132),
+        ),
+    );
+    painter.circle_stroke(
+        center,
+        radius + 7.0 * scale,
+        egui::Stroke::new(2.0 * scale, warning),
+    );
+
+    let badge_text = t.text_args(
+        "map-siege-badge",
+        &args([
+            ("count", siege.attacker_count().to_string()),
+            ("troops", compact_troops(siege.total_troops, t)),
+        ]),
+    );
+    let badge_width = (badge_text.chars().count() as f32 * 8.5 + 22.0).clamp(64.0, 124.0) * scale;
+    let badge_rect = egui::Rect::from_center_size(
+        center + egui::vec2(0.0, -42.0 * scale),
+        egui::vec2(badge_width, 23.0 * scale),
+    );
+    painter.rect(
+        badge_rect.translate(egui::vec2(1.6 * scale, 2.0 * scale)),
+        4.0 * scale,
+        egui::Color32::from_rgba_unmultiplied(0, 0, 0, 128),
+        egui::Stroke::NONE,
+        egui::StrokeKind::Outside,
+    );
+    painter.rect(
+        badge_rect,
+        4.0 * scale,
+        egui::Color32::from_rgba_unmultiplied(54, 18, 13, 238),
+        egui::Stroke::new(1.0 * scale, warning),
+        egui::StrokeKind::Outside,
+    );
+    painter.text(
+        badge_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        badge_text,
+        egui::FontId::proportional(12.0 * scale),
+        egui::Color32::from_rgb(255, 223, 183),
+    );
+}
+
+fn active_expedition_movements(game: &GameState) -> impl Iterator<Item = &ArmyMovement> {
+    game.army_movements
+        .iter()
+        .filter(|movement| movement.kind == ArmyMovementKind::Expedition)
+        .filter(|movement| movement.siege_started_turn.is_none())
+}
+
+fn besieging_expedition_movements(game: &GameState) -> impl Iterator<Item = &ArmyMovement> {
+    game.army_movements
+        .iter()
+        .filter(|movement| movement.kind == ArmyMovementKind::Expedition)
+        .filter(|movement| movement.siege_started_turn.is_some())
+}
+
+fn siege_summaries(game: &GameState) -> Vec<SiegeSummary> {
+    let mut summaries: BTreeMap<&str, SiegeSummary> = BTreeMap::new();
+    for movement in besieging_expedition_movements(game) {
+        let summary = summaries
+            .entry(&movement.target_city_id)
+            .or_insert_with(|| SiegeSummary {
+                target_city_id: movement.target_city_id.clone(),
+                attacker_faction_ids: BTreeSet::new(),
+                total_troops: 0,
+            });
+        summary
+            .attacker_faction_ids
+            .insert(movement.issuer_faction_id.clone());
+        summary.total_troops = summary.total_troops.saturating_add(movement.troops.total());
+    }
+    summaries.into_values().collect()
+}
+
+fn expedition_movement_line_progress(movement: &ArmyMovement, current_turn: u32) -> Option<f32> {
+    if movement.kind != ArmyMovementKind::Expedition || movement.siege_started_turn.is_some() {
+        return None;
+    }
+
+    let total = movement
+        .arrival_turn
+        .saturating_sub(movement.departure_turn);
+    if total == 0 {
+        return Some(0.92);
+    }
+
+    let elapsed = current_turn
+        .saturating_sub(movement.departure_turn)
+        .min(total);
+    Some((elapsed as f32 / total as f32).clamp(0.08, 0.92))
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SiegeSummary {
+    target_city_id: CityId,
+    attacker_faction_ids: BTreeSet<FactionId>,
+    total_troops: u32,
+}
+
+impl SiegeSummary {
+    fn attacker_count(&self) -> usize {
+        self.attacker_faction_ids.len()
+    }
 }
 
 fn draw_map_road(
@@ -1069,6 +1333,61 @@ mod tests {
     }
 
     #[test]
+    fn active_expedition_progress_stays_inside_road_line() {
+        let movement = test_movement(ArmyMovementKind::Expedition, 10, 14, None);
+
+        let progress = expedition_movement_line_progress(&movement, 12).unwrap();
+
+        assert!((0.0..=1.0).contains(&progress));
+        assert_eq!(progress, 0.5);
+    }
+
+    #[test]
+    fn arrived_expedition_without_siege_still_stays_near_target() {
+        let movement = test_movement(ArmyMovementKind::Expedition, 10, 12, None);
+
+        let progress = expedition_movement_line_progress(&movement, 13).unwrap();
+
+        assert_eq!(progress, 0.92);
+    }
+
+    #[test]
+    fn expedition_with_siege_started_is_grouped_as_siege() {
+        let mut game = test_game_with_movements(vec![
+            test_movement(ArmyMovementKind::Expedition, 10, 12, Some(12)),
+            test_movement(ArmyMovementKind::Expedition, 10, 13, Some(13)),
+        ]);
+        game.army_movements[1].issuer_faction_id = "sun_quan".to_string();
+        game.army_movements[1].troops = TroopPool::new(0, 400, 0);
+
+        let active_count = active_expedition_movements(&game).count();
+        let summaries = siege_summaries(&game);
+
+        assert_eq!(active_count, 0);
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].target_city_id, "target");
+        assert_eq!(summaries[0].attacker_count(), 2);
+        assert_eq!(summaries[0].total_troops, 1400);
+    }
+
+    #[test]
+    fn transfer_movement_is_not_map_expedition_overlay() {
+        let game = test_game_with_movements(vec![test_movement(
+            ArmyMovementKind::Transfer,
+            10,
+            12,
+            None,
+        )]);
+
+        assert_eq!(active_expedition_movements(&game).count(), 0);
+        assert!(siege_summaries(&game).is_empty());
+        assert_eq!(
+            expedition_movement_line_progress(&game.army_movements[0], 11),
+            None
+        );
+    }
+
+    #[test]
     fn explicit_cell_city_ids_do_not_match_other_cities_in_same_commandery() {
         let cell = test_cell("颍川郡", &["yingchuan"]);
         let xuchang = test_city("xuchang", "颍川郡");
@@ -1082,6 +1401,101 @@ mod tests {
         let xuchang = test_city("xuchang", "颍川郡");
 
         assert!(city_matches_cell(&cell, &xuchang));
+    }
+
+    fn test_game_with_movements(army_movements: Vec<ArmyMovement>) -> GameState {
+        let mut factions = BTreeMap::new();
+        factions.insert(
+            "liu_bei".to_string(),
+            Faction {
+                id: "liu_bei".to_string(),
+                name: "刘备".to_string(),
+                ruler_id: "liu_bei".to_string(),
+                heir_id: None,
+                color: [0.2, 0.6, 0.3],
+                selectable: true,
+                controlled_by: Controller::Player,
+            },
+        );
+        factions.insert(
+            "sun_quan".to_string(),
+            Faction {
+                id: "sun_quan".to_string(),
+                name: "孙权".to_string(),
+                ruler_id: "sun_quan".to_string(),
+                heir_id: None,
+                color: [0.7, 0.35, 0.2],
+                selectable: true,
+                controlled_by: Controller::RuleAi,
+            },
+        );
+
+        let mut cities = BTreeMap::new();
+        cities.insert("source".to_string(), test_city("source", "沛郡"));
+        cities.insert("target".to_string(), test_city("target", "颍川郡"));
+
+        GameState {
+            version: SAVE_VERSION,
+            scenario_id: "test".to_string(),
+            scenario_name: "test".to_string(),
+            scenario_era_name: String::new(),
+            year: 200,
+            month: 1,
+            turn: 12,
+            player_faction_id: "liu_bei".to_string(),
+            factions,
+            cities,
+            officers: BTreeMap::new(),
+            officer_tag_definitions: Vec::new(),
+            officer_tag_aliases: BTreeMap::new(),
+            roads: vec![Road {
+                from: "source".to_string(),
+                to: "target".to_string(),
+            }],
+            diplomacy: BTreeMap::new(),
+            pending_diplomacy: Vec::new(),
+            pending_commands: Vec::new(),
+            army_movements,
+            technologies: BTreeMap::new(),
+            technology_catalog: TechnologyCatalog::default(),
+            events: Vec::new(),
+            next_event_sequence: 0,
+            dynamic_event_cooldowns: BTreeMap::new(),
+            marriages: Vec::new(),
+            family_relationships: Vec::new(),
+            next_generated_officer_sequence: 0,
+            last_lifecycle_year: None,
+            officer_recruitments: Vec::new(),
+            next_officer_recruitment_sequence: 0,
+            applied_event_ids: BTreeSet::new(),
+            reports: Vec::new(),
+            status: GameStatus::Running,
+        }
+    }
+
+    fn test_movement(
+        kind: ArmyMovementKind,
+        departure_turn: u32,
+        arrival_turn: u32,
+        siege_started_turn: Option<u32>,
+    ) -> ArmyMovement {
+        ArmyMovement {
+            kind,
+            issuer_faction_id: "liu_bei".to_string(),
+            source_city_id: "source".to_string(),
+            target_city_id: "target".to_string(),
+            commander_id: "zhang_fei".to_string(),
+            officer_ids: vec!["zhang_fei".to_string()],
+            troops: TroopPool::new(1000, 0, 0),
+            food_supply: 100,
+            wounded_troops: TroopPool::default(),
+            assignments: Vec::new(),
+            siege_started_turn,
+            training: 50,
+            distance_li: 500,
+            departure_turn,
+            arrival_turn,
+        }
     }
 
     fn test_cell(name: &str, city_ids: &[&str]) -> TerritoryCell {

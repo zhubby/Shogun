@@ -124,14 +124,7 @@ pub(super) fn bottom_map_actions_hud(
                         ui_state.faction_overview_open = !ui_state.faction_overview_open;
                     }
 
-                    if ui
-                        .button(format!(
-                            "{} {}",
-                            egui_phosphor::regular::HANDSHAKE,
-                            t.text("hud-diplomacy")
-                        ))
-                        .clicked()
-                    {
+                    if ui.button(t.text("hud-diplomacy")).clicked() {
                         ui_state.diplomacy_open = !ui_state.diplomacy_open;
                     }
 
