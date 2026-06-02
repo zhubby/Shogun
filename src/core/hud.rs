@@ -201,48 +201,23 @@ pub(super) fn bottom_map_actions_hud(
         .show(ctx, |ui| {
             war_panel_frame().show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    let city_label = if ui_state.city_list_open {
-                        t.text("hud-collapse-cities")
-                    } else {
-                        t.text("hud-cities")
-                    };
-                    if ui.button(city_label).clicked() {
+                    if ui.button(t.text("hud-cities")).clicked() {
                         ui_state.city_list_open = !ui_state.city_list_open;
                     }
 
-                    let officer_label = if ui_state.officer_browser_open {
-                        t.text("hud-collapse-officers")
-                    } else {
-                        t.text("hud-officers")
-                    };
-                    if ui.button(officer_label).clicked() {
+                    if ui.button(t.text("hud-officers")).clicked() {
                         ui_state.officer_browser_open = !ui_state.officer_browser_open;
                     }
 
-                    let retainer_label = if ui_state.retainers_open {
-                        t.text("hud-collapse-retainers")
-                    } else {
-                        t.text("hud-retainers")
-                    };
-                    if ui.button(retainer_label).clicked() {
+                    if ui.button(t.text("hud-retainers")).clicked() {
                         ui_state.retainers_open = !ui_state.retainers_open;
                     }
 
-                    let shrine_label = if ui_state.shrine_open {
-                        t.text("hud-collapse-shrine")
-                    } else {
-                        t.text("hud-shrine")
-                    };
-                    if ui.button(shrine_label).clicked() {
+                    if ui.button(t.text("hud-shrine")).clicked() {
                         ui_state.shrine_open = !ui_state.shrine_open;
                     }
 
-                    let technology_label = if ui_state.technology_open {
-                        t.text("hud-collapse-technology")
-                    } else {
-                        t.text("hud-technology")
-                    };
-                    if ui.button(technology_label).clicked() {
+                    if ui.button(t.text("hud-technology")).clicked() {
                         ui_state.technology_open = !ui_state.technology_open;
                     }
 
@@ -404,11 +379,7 @@ fn event_button_label(ui_state: &GameUiState, t: &Translator) -> String {
     if unread > 0 {
         return t.text_args("hud-events-unread", &args([("count", unread.to_string())]));
     }
-    if ui_state.events_open {
-        t.text("hud-collapse-events")
-    } else {
-        t.text("hud-events")
-    }
+    t.text("hud-events")
 }
 
 fn ensure_selected_event(ui_state: &mut GameUiState) {

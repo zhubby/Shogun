@@ -345,10 +345,6 @@ pub fn officer_recruitment_progress_gain(
     ))
 }
 
-pub fn would_life_event_enter_service(state: &GameState, officer_id: &str, event_id: &str) -> bool {
-    deterministic_percent_seed(&state.scenario_id, officer_id, event_id) < 70
-}
-
 fn appointment_loyalty_delta(old_rank: Option<OfficialRank>, new_rank: OfficialRank) -> i16 {
     let new_bonus = i16::from(official_rank_loyalty_bonus(new_rank));
     let Some(old_rank) = old_rank else {
@@ -2708,7 +2704,7 @@ fn apply_due_life_events(
 pub fn resolve_life_event_assignment(
     state: &GameState,
     officer_id: &str,
-    event_id: &str,
+    _event_id: &str,
     requested_faction_id: Option<&str>,
     requested_city_id: Option<&str>,
 ) -> (String, Option<String>, OfficerStatus) {
@@ -2744,15 +2740,9 @@ pub fn resolve_life_event_assignment(
                 .map(|city| city.id.clone())
         });
 
-    let should_enter_service = would_life_event_enter_service(state, officer_id, event_id);
-    match (city_id, should_enter_service) {
-        (Some(city_id), true) => (target_faction_id, Some(city_id), OfficerStatus::Active),
-        (Some(city_id), false) => (
-            WILD_FACTION_ID.to_string(),
-            Some(city_id),
-            OfficerStatus::Wild,
-        ),
-        (None, _) => (
+    match city_id {
+        Some(city_id) => (target_faction_id, Some(city_id), OfficerStatus::Active),
+        None => (
             WILD_FACTION_ID.to_string(),
             deterministic_city_id(state, officer_id, "life-event-wild"),
             OfficerStatus::Wild,

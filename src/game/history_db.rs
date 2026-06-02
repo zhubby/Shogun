@@ -5,7 +5,7 @@ use super::city::{
 use super::ids::{CityId, FactionId, OfficerId, ScenarioId, WILD_FACTION_ID};
 use super::model::{
     Controller, DiplomaticRelation, Faction, GameState, GameStatus, MapPosition, Road,
-    SAVE_VERSION, TroopPool, deterministic_index_seed, deterministic_percent_seed, diplomacy_key,
+    SAVE_VERSION, TroopPool, deterministic_index_seed, diplomacy_key,
 };
 use super::officer::{
     Officer, OfficerCatalog, OfficerGender, OfficerProfile, OfficerProfileUpdate,
@@ -792,9 +792,7 @@ fn apply_initial_life_event(
                         .find(|city| city.faction_id == faction_id)
                         .map(|city| city.id.clone())
                 });
-            let enter_service = factions.contains_key(&faction_id)
-                && city_id.is_some()
-                && would_life_event_enter_service_for_scenario(scenario_id, &profile.id, &event.id);
+            let enter_service = factions.contains_key(&faction_id) && city_id.is_some();
             if enter_service {
                 officers.insert(
                     profile.id.clone(),
@@ -862,14 +860,6 @@ fn clean_invalid_governors(
             city.governor_id = None;
         }
     }
-}
-
-fn would_life_event_enter_service_for_scenario(
-    scenario_id: &str,
-    officer_id: &str,
-    event_id: &str,
-) -> bool {
-    deterministic_percent_seed(scenario_id, officer_id, event_id) < 70
 }
 
 fn deterministic_initial_city_id(

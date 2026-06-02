@@ -2113,6 +2113,35 @@ fn minor_officer_matures_at_eighteen_and_can_act() {
     resolve_command_batch(&mut game, Vec::new());
 
     assert_eq!(game.officers["liu_an"].status, OfficerStatus::Active);
+    assert_eq!(game.officers["liu_an"].faction_id, "liu_bei");
+    assert_eq!(game.officers["liu_an"].city_id.as_deref(), Some("pingyuan"));
+    assert!(game.officers["liu_an"].is_adult_at(game.year));
+}
+
+#[test]
+fn minor_officer_becomes_wild_when_faction_has_no_city_at_adulthood() {
+    let mut game = sample_game();
+    game.year = 217;
+    game.month = 12;
+    game.player_faction_id = "cao_cao".to_string();
+    for city in game.cities.values_mut() {
+        if city.faction_id == "liu_bei" {
+            city.faction_id = "cao_cao".to_string();
+        }
+    }
+    let mut child = game.officers["liu_bei"].clone();
+    child.id = "liu_an".to_string();
+    child.name = "刘安".to_string();
+    child.birth_year = 200;
+    child.status = OfficerStatus::Minor;
+    child.city_id = Some("pingyuan".to_string());
+    game.officers.insert(child.id.clone(), child);
+
+    resolve_command_batch(&mut game, Vec::new());
+
+    assert_eq!(game.officers["liu_an"].status, OfficerStatus::Wild);
+    assert_eq!(game.officers["liu_an"].faction_id, WILD_FACTION_ID);
+    assert_eq!(game.officers["liu_an"].city_id.as_deref(), Some("pingyuan"));
     assert!(game.officers["liu_an"].is_adult_at(game.year));
 }
 

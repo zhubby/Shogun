@@ -2,7 +2,7 @@ use super::events::{
     EventChoice, EventChoiceEffects, EventChoiceRequirements, EventResolution, GameEventDraft,
     GameEventKind, GameEventScope, GameEventSeverity, record_game_event,
 };
-use super::ids::{FactionId, OfficerId};
+use super::ids::{CityId, FactionId, OfficerId, WILD_FACTION_ID};
 use super::model::{
     FamilyRelationship, GameState, Marriage, TurnReport, deterministic_index_seed,
     deterministic_percent_seed,
@@ -332,14 +332,30 @@ fn mature_minors(state: &mut GameState, report: &mut TurnReport) {
         .map(|officer| officer.id.clone())
         .collect::<Vec<_>>();
     for officer_id in ids {
+        let Some((current_faction_id, current_city_id)) = state
+            .officers
+            .get(&officer_id)
+            .map(|officer| (officer.faction_id.clone(), officer.city_id.clone()))
+        else {
+            continue;
+        };
+        let (faction_id, city_id, status) =
+            mature_officer_assignment(state, &current_faction_id, current_city_id.as_deref());
         let Some(officer) = state.officers.get_mut(&officer_id) else {
             continue;
         };
-        officer.status = OfficerStatus::Active;
+        officer.faction_id = faction_id;
+        officer.city_id = city_id;
+        officer.status = status;
         let officer_name = officer.name.clone();
         let faction_id = officer.faction_id.clone();
-        report.info(format!("{officer_name} 成年出仕"));
-        if faction_id == state.player_faction_id {
+        let status = officer.status.clone();
+        report.info(match status {
+            OfficerStatus::Active => format!("{officer_name} 成年出仕"),
+            OfficerStatus::Wild => format!("{officer_name} 成年后成为在野武将"),
+            _ => format!("{officer_name} 成年"),
+        });
+        if faction_id == state.player_faction_id && status == OfficerStatus::Active {
             record_lifecycle_event(
                 state,
                 GameEventSeverity::Info,
@@ -351,6 +367,39 @@ fn mature_minors(state: &mut GameState, report: &mut TurnReport) {
             );
         }
     }
+}
+
+fn mature_officer_assignment(
+    state: &GameState,
+    requested_faction_id: &str,
+    requested_city_id: Option<&str>,
+) -> (FactionId, Option<CityId>, OfficerStatus) {
+    if requested_faction_id != WILD_FACTION_ID && state.faction_alive(requested_faction_id) {
+        let city_id = requested_city_id
+            .and_then(|city_id| state.cities.get(city_id))
+            .filter(|city| city.faction_id == requested_faction_id)
+            .map(|city| city.id.clone())
+            .or_else(|| {
+                state
+                    .cities
+                    .values()
+                    .find(|city| city.faction_id == requested_faction_id)
+                    .map(|city| city.id.clone())
+            });
+        if city_id.is_some() {
+            return (
+                requested_faction_id.to_string(),
+                city_id,
+                OfficerStatus::Active,
+            );
+        }
+    }
+
+    let city_id = requested_city_id
+        .and_then(|city_id| state.cities.get(city_id))
+        .map(|city| city.id.clone())
+        .or_else(|| state.cities.keys().next().cloned());
+    (WILD_FACTION_ID.to_string(), city_id, OfficerStatus::Wild)
 }
 
 fn apply_lifecycle_deaths(state: &mut GameState, report: &mut TurnReport, config: LifecycleConfig) {

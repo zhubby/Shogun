@@ -67,7 +67,7 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
         let pool = open_pool(&path).await;
         assert_eq!(
             applied_sqlx_migration_versions(&pool).await,
-            [1, 2, 3, 4, 5, 6]
+            [1, 2, 3, 4, 5, 6, 7, 8]
         );
 
         let fk_rows = sqlx::query("PRAGMA foreign_key_check")
@@ -79,11 +79,11 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
         let city_count = query_count(&pool, "cities").await;
         let officer_count = query_count(&pool, "officers").await;
         assert!((60..=90).contains(&city_count));
-        assert_eq!(officer_count, 420);
+        assert_eq!(officer_count, 432);
         assert_eq!(
             query_count_sql(&pool, "SELECT count(*) AS count FROM officers WHERE gender = 'Male'")
                 .await,
-            350
+            362
         );
         assert_eq!(
             query_count_sql(
@@ -93,7 +93,7 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
             .await,
             70
         );
-        assert_eq!(query_count(&pool, "scenarios").await, 4);
+        assert_eq!(query_count(&pool, "scenarios").await, 5);
         assert!(query_count(&pool, "officer_life_events").await >= officer_count);
         assert_eq!(
             query_count_sql(
@@ -196,7 +196,7 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
             0
         );
         assert!(query_count(&pool, "officer_tag_definitions").await >= 30);
-        assert_eq!(query_count(&pool, "officer_tag_aliases").await, 52);
+        assert_eq!(query_count(&pool, "officer_tag_aliases").await, 54);
         assert_eq!(
             query_count_sql(
                 &pool,
@@ -288,12 +288,12 @@ fn open_or_create_creates_database_and_runs_initial_migration() {
     let catalog = SqliteHistoricalCatalog::open_or_create(&path).unwrap();
 
     assert!(path.exists());
-    assert_eq!(catalog.scenarios().unwrap().len(), 4);
+    assert_eq!(catalog.scenarios().unwrap().len(), 5);
     runtime().block_on(async {
         let pool = open_pool(&path).await;
         assert_eq!(
             applied_sqlx_migration_versions(&pool).await,
-            [1, 2, 3, 4, 5, 6]
+            [1, 2, 3, 4, 5, 6, 7, 8]
         );
         pool.close().await;
     });
@@ -512,7 +512,7 @@ fn fixed_scenarios_build_with_valid_selectable_factions_and_governors() {
         .iter()
         .map(|scenario| scenario.id.as_str())
         .collect();
-    assert_eq!(scenario_ids, ["ad190", "ad200", "ad208", "ad220"]);
+    assert_eq!(scenario_ids, ["ad180", "ad190", "ad200", "ad208", "ad220"]);
 
     for scenario in scenarios {
         let factions = catalog.selectable_factions(&scenario.id).unwrap();
@@ -578,6 +578,111 @@ fn fixed_scenarios_build_with_valid_selectable_factions_and_governors() {
 }
 
 #[test]
+fn taipingdao_scenario_builds_yellow_turban_roster() {
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
+    let factions = catalog.selectable_factions("ad180").unwrap();
+    let selectable_ids = factions
+        .iter()
+        .filter(|faction| faction.selectable)
+        .map(|faction| faction.id.as_str())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        selectable_ids,
+        BTreeSet::from([
+            "dong_zhuo",
+            "gongsun_zan",
+            "han_court",
+            "liu_biao",
+            "liu_yan",
+            "ma_teng",
+            "shi_xie",
+            "sun_quan",
+            "tao_qian",
+            "yellow_turban",
+        ])
+    );
+
+    let game = catalog.build_game("ad180", "yellow_turban").unwrap();
+    assert_eq!(game.scenario_name, "光和三年 太平道将兴");
+    assert_eq!(game.year, 180);
+    assert_eq!(game.factions["yellow_turban"].ruler_id, "ctk_5f20_89d2");
+    assert_eq!(game.factions["han_court"].ruler_id, "ctk_5218_5b8f");
+    assert_eq!(game.factions["sun_quan"].ruler_id, "sun_jian");
+    assert_eq!(game.factions["liu_yan"].ruler_id, "ctk_5218_7109");
+    assert_eq!(game.cities["ganling"].faction_id, "yellow_turban");
+    assert_eq!(game.cities["zhongshan"].faction_id, "yellow_turban");
+    assert_eq!(game.cities["runan"].faction_id, "yellow_turban");
+    assert_eq!(game.cities["anding"].faction_id, "dong_zhuo");
+    assert_eq!(game.cities["wuwei"].faction_id, "ma_teng");
+    assert_eq!(game.cities["youbeiping"].faction_id, "gongsun_zan");
+    assert_eq!(game.cities["xiapi"].faction_id, "tao_qian");
+    assert_eq!(game.cities["xiangyang"].faction_id, "liu_biao");
+    assert_eq!(game.cities["chengdu"].faction_id, "liu_yan");
+    assert_eq!(game.cities["wu"].faction_id, "sun_quan");
+    assert_eq!(game.cities["jiaozhi"].faction_id, "shi_xie");
+
+    let yellow_roster = game
+        .officers
+        .values()
+        .filter(|officer| officer.faction_id == "yellow_turban" && officer.is_active())
+        .map(|officer| officer.id.as_str())
+        .collect::<BTreeSet<_>>();
+    assert!(yellow_roster.len() >= 10);
+    for officer_id in [
+        "ctk_5f20_89d2",
+        "ctk_5f20_5b9d",
+        "ctk_5f20_6881",
+        "ctk_5f20_71d5",
+        "bo_cai",
+        "ma_yuanyi",
+        "bu_ji",
+        "peng_tuo",
+        "guan_hai",
+        "zhang_mancheng",
+        "zhao_hong_yellow",
+        "han_zhong_yellow",
+        "sun_xia_yellow",
+        "huang_shao",
+        "he_man",
+        "pei_yuanshao",
+    ] {
+        assert!(yellow_roster.contains(officer_id), "missing {officer_id}");
+        let officer = &game.officers[officer_id];
+        assert!(officer.profile.is_some());
+        assert!(officer.birth_year != 0);
+        assert!(matches!(
+            officer.city_id.as_deref(),
+            Some("ganling" | "zhongshan" | "runan")
+        ));
+    }
+
+    let events = catalog.life_events_until(180, 1).unwrap();
+    for officer_id in [
+        "bo_cai",
+        "ma_yuanyi",
+        "bu_ji",
+        "peng_tuo",
+        "guan_hai",
+        "zhang_mancheng",
+        "zhao_hong_yellow",
+        "han_zhong_yellow",
+        "sun_xia_yellow",
+        "huang_shao",
+        "he_man",
+        "pei_yuanshao",
+    ] {
+        let profile = catalog.officer_profile(officer_id).unwrap().unwrap();
+        assert!(profile.birth_year.is_some());
+        assert!(
+            events.iter().any(|event| event.officer_id == officer_id
+                && event.faction_id.as_deref() == Some("yellow_turban")
+                && event.city_id.is_some()),
+            "missing 180 life event for {officer_id}"
+        );
+    }
+}
+
+#[test]
 fn life_events_apply_appearances_deaths_and_do_not_repeat() {
     let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
 
@@ -589,16 +694,9 @@ fn life_events_apply_appearances_deaths_and_do_not_repeat() {
     resolve_command_batch_with_history(&mut appear_game, Vec::new(), &catalog);
 
     let jiang_wei = appear_game.officers.get("jiang_wei").unwrap();
-    assert!(matches!(
-        jiang_wei.status,
-        OfficerStatus::Active | OfficerStatus::Wild
-    ));
-    if jiang_wei.is_active() {
-        assert_eq!(jiang_wei.faction_id, "liu_bei");
-    } else {
-        assert_eq!(jiang_wei.faction_id, WILD_FACTION_ID);
-        assert!(jiang_wei.city_id.is_some());
-    }
+    assert_eq!(jiang_wei.status, OfficerStatus::Active);
+    assert_eq!(jiang_wei.faction_id, "liu_bei");
+    assert!(jiang_wei.city_id.is_some());
     assert!(appear_game.applied_event_ids.contains("start_jiang_wei"));
 
     let mut death_game = catalog.build_game("ad200", "sun_quan").unwrap();
@@ -645,10 +743,30 @@ fn life_events_with_loyalty_apply_initial_loyalty() {
     let officer = game.officers.get("ctk_5f20_6e29_32").unwrap();
     assert_eq!(officer.name, "张温");
     assert_eq!(officer.loyalty, 76);
-    assert!(matches!(
-        officer.status,
-        OfficerStatus::Active | OfficerStatus::Wild
-    ));
+    assert_eq!(officer.status, OfficerStatus::Wild);
+    assert_eq!(officer.faction_id, WILD_FACTION_ID);
+    assert!(officer.city_id.is_some());
+}
+
+#[test]
+fn life_event_officer_becomes_wild_when_target_faction_has_no_city() {
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
+
+    let mut game = catalog.build_game("ad208", "cao_cao").unwrap();
+    for city in game.cities.values_mut() {
+        if city.faction_id == "liu_bei" {
+            city.faction_id = "cao_cao".to_string();
+        }
+    }
+    game.year = 219;
+    game.month = 12;
+
+    resolve_command_batch_with_history(&mut game, Vec::new(), &catalog);
+
+    let jiang_wei = game.officers.get("jiang_wei").unwrap();
+    assert_eq!(jiang_wei.status, OfficerStatus::Wild);
+    assert_eq!(jiang_wei.faction_id, WILD_FACTION_ID);
+    assert!(jiang_wei.city_id.is_some());
 }
 
 #[test]
