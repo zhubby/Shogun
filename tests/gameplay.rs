@@ -1661,6 +1661,14 @@ fn save_load_preserves_officer_profile_extensions_and_dynamic_loyalty() {
 #[test]
 fn old_save_json_missing_profile_extensions_still_deserializes() {
     let mut game_json = serde_json::to_value(sample_game()).unwrap();
+    game_json
+        .as_object_mut()
+        .unwrap()
+        .remove("officer_tag_definitions");
+    game_json
+        .as_object_mut()
+        .unwrap()
+        .remove("officer_tag_aliases");
     let officers = game_json
         .get_mut("officers")
         .and_then(serde_json::Value::as_object_mut)
@@ -1707,6 +1715,8 @@ fn old_save_json_missing_profile_extensions_still_deserializes() {
     assert_eq!(profile.gender, OfficerGender::Male);
     assert!(profile.biography.is_empty());
     assert!(profile.relationships.is_empty());
+    assert!(loaded.officer_tag_definitions.is_empty());
+    assert!(loaded.officer_tag_aliases.is_empty());
 }
 
 #[test]

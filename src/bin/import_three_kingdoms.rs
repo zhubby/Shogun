@@ -179,7 +179,7 @@ fn render_migration_fragment(officers: &[ImportedOfficer]) -> String {
     for officer in officers {
         let [leadership, strength, intelligence, politics, charm] = officer.stats;
         output.push_str("INSERT INTO officers\n");
-        output.push_str("(id, name, courtesy_name, native_place, birth_year, death_year, gender, leadership, strength, intelligence, politics, charm, tags, confidence, biography, notes)\n");
+        output.push_str("(id, name, courtesy_name, native_place, birth_year, death_year, gender, leadership, strength, intelligence, politics, charm, confidence, biography, notes)\n");
         output.push_str("VALUES (");
         output.push_str(&sql_string(&officer.id));
         output.push_str(", ");
@@ -197,8 +197,6 @@ fn render_migration_fragment(officers: &[ImportedOfficer]) -> String {
         output.push_str(&format!(
             ", {leadership}, {strength}, {intelligence}, {politics}, {charm}, "
         ));
-        output.push_str(&sql_string(&officer.tags.join(",")));
-        output.push_str(", ");
         output.push_str(&sql_string(&officer.confidence));
         output.push_str(", ");
         output.push_str(&sql_string(&officer.biography));
@@ -214,9 +212,17 @@ fn render_migration_fragment(officers: &[ImportedOfficer]) -> String {
         output.push_str("    birth_year = COALESCE(officers.birth_year, excluded.birth_year),\n");
         output.push_str("    death_year = COALESCE(officers.death_year, excluded.death_year),\n");
         output.push_str("    gender = excluded.gender,\n");
-        output.push_str("    tags = CASE WHEN instr(officers.tags, 'ctk_import') = 0 THEN trim(officers.tags || ',ctk_import', ',') ELSE officers.tags END,\n");
         output.push_str("    biography = CASE WHEN excluded.biography <> '' THEN excluded.biography ELSE officers.biography END,\n");
         output.push_str("    notes = CASE WHEN instr(officers.notes, 'Characters_of_the_Three_Kingdoms') = 0 THEN trim(officers.notes || '；' || excluded.notes, '；') ELSE officers.notes END;\n\n");
+
+        for tag_id in officer.tags.iter().filter_map(|tag| canonical_tag_id(tag)) {
+            output.push_str("INSERT OR IGNORE INTO officer_tags (officer_id, tag_id) VALUES (");
+            output.push_str(&sql_string(&officer.id));
+            output.push_str(", ");
+            output.push_str(&sql_string(tag_id));
+            output.push_str(");\n");
+        }
+        output.push('\n');
 
         output.push_str("INSERT OR REPLACE INTO officer_external_ids\n");
         output.push_str("(officer_id, source, external_id, source_url, confidence, notes)\n");
@@ -598,6 +604,24 @@ fn tags_for(faction: &str, positions: &str) -> Vec<String> {
         tags.insert("administrator".to_string());
     }
     tags.into_iter().collect()
+}
+
+fn canonical_tag_id(tag: &str) -> Option<&'static str> {
+    match tag {
+        "ctk_import" => Some("source:ctk_import"),
+        "source_backed" => Some("source:source_backed"),
+        "ruler" => Some("role:ruler"),
+        "general" => Some("role:general"),
+        "administrator" => Some("role:administrator"),
+        "faction:东汉" => Some("affiliation:han_court"),
+        "faction:魏国" | "faction:魏" => Some("affiliation:cao_wei"),
+        "faction:蜀" | "faction:蜀汉" => Some("affiliation:shu_han"),
+        "faction:东吴" | "faction:吴" => Some("affiliation:eastern_wu"),
+        "faction:西晋" => Some("affiliation:western_jin"),
+        "faction:起义军" => Some("affiliation:rebel"),
+        "faction:袁术" => Some("affiliation:yuan_shu"),
+        _ => None,
+    }
 }
 
 fn sql_optional_i32(value: Option<i32>) -> String {

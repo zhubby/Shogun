@@ -40,14 +40,20 @@ impl UiLanguage {
 
 #[derive(Clone, Copy)]
 pub(super) struct Translator {
+    language: UiLanguage,
     loader: &'static FluentLanguageLoader,
 }
 
 impl Translator {
     pub(super) fn new(language: UiLanguage) -> Self {
         Self {
+            language,
             loader: cached_loader(language),
         }
+    }
+
+    pub(super) fn language(&self) -> UiLanguage {
+        self.language
     }
 
     pub(super) fn text(&self, key: &str) -> String {

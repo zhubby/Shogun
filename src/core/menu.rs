@@ -17,7 +17,8 @@ use super::HUD_MARGIN;
 use super::actions::{enter_game, refresh_saves, start_history_game};
 use super::hud::{
     OfficerBrowserTableOptions, OfficerPortraitModalContext, officer_browser_filters,
-    officer_browser_table, officer_detail_modal_for_game,
+    officer_browser_table, officer_detail_modal_for_game, officer_tag_category_label,
+    officer_tag_definitions_by_category, officer_tag_label,
 };
 use super::i18n::{Translator, args};
 use super::labels::{confidence_label, officer_gender_label};
@@ -1468,7 +1469,7 @@ fn officer_profile_edit_form(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &
             ui.end_row();
 
             ui.label(t.text("officer-field-tags"));
-            ui.text_edit_singleline(&mut draft.tags);
+            officer_profile_tag_selector(ui, &ui_state.officer_settings_game, draft, t);
             ui.end_row();
         });
 
@@ -1498,6 +1499,45 @@ fn officer_profile_edit_form(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &
         ui.add_space(8.0);
         ui.colored_label(egui::Color32::from_rgb(220, 92, 72), error);
     }
+}
+
+fn officer_profile_tag_selector(
+    ui: &mut egui::Ui,
+    game: &Option<GameState>,
+    draft: &mut OfficerEditDraft,
+    t: &Translator,
+) {
+    let Some(game) = game else {
+        ui.colored_label(war_text_muted(), t.text("officer-edit-no-tag-definitions"));
+        return;
+    };
+    if game.officer_tag_definitions.is_empty() {
+        ui.colored_label(war_text_muted(), t.text("officer-edit-no-tag-definitions"));
+        return;
+    }
+    ui.vertical(|ui| {
+        for (category, definitions) in officer_tag_definitions_by_category(game) {
+            ui.label(
+                egui::RichText::new(officer_tag_category_label(category, t))
+                    .color(war_text_muted()),
+            );
+            ui.horizontal_wrapped(|ui| {
+                for definition in definitions {
+                    let mut selected = draft.tag_ids.contains(&definition.id);
+                    if ui
+                        .checkbox(&mut selected, officer_tag_label(definition, t))
+                        .changed()
+                    {
+                        if selected {
+                            draft.tag_ids.insert(definition.id.clone());
+                        } else {
+                            draft.tag_ids.remove(&definition.id);
+                        }
+                    }
+                }
+            });
+        }
+    });
 }
 
 fn officer_profile_portrait_panel(
@@ -1648,13 +1688,7 @@ fn draft_to_update(draft: &OfficerEditDraft) -> Result<OfficerProfileUpdate, Str
             politics: draft.politics,
             charm: draft.charm,
         },
-        tags: draft
-            .tags
-            .split(',')
-            .map(str::trim)
-            .filter(|tag| !tag.is_empty())
-            .map(str::to_string)
-            .collect(),
+        tags: draft.tag_ids.iter().cloned().collect(),
         confidence: draft.confidence.clone(),
         biography: draft.biography.trim().to_string(),
         notes: draft.notes.trim().to_string(),
@@ -1729,7 +1763,7 @@ mod tests {
                 politics: 80,
                 charm: 99,
             },
-            tags: vec!["ruler".to_string()],
+            tags: vec!["role:ruler".to_string()],
             confidence: SourceConfidence::High,
             biography: "刘备生平".to_string(),
             relationships: Vec::new(),
@@ -1847,13 +1881,13 @@ mod tests {
     }
 
     #[test]
-    fn draft_to_update_normalizes_blank_optional_fields_and_tags() {
+    fn draft_to_update_normalizes_blank_optional_fields_and_keeps_tags() {
         let mut draft = OfficerEditDraft::from_profile(&test_profile("刘备"));
         draft.courtesy_name = " ".to_string();
         draft.native_place = " 涿郡 ".to_string();
         draft.birth_year.clear();
         draft.death_year = "223".to_string();
-        draft.tags = " ruler, edited ,, ".to_string();
+        draft.tag_ids.insert("source:manual_curated".to_string());
 
         let update = draft_to_update(&draft).unwrap();
 
@@ -1861,7 +1895,7 @@ mod tests {
         assert_eq!(update.native_place.as_deref(), Some("涿郡"));
         assert_eq!(update.birth_year, None);
         assert_eq!(update.death_year, Some(223));
-        assert_eq!(update.tags, ["ruler", "edited"]);
+        assert_eq!(update.tags, ["role:ruler", "source:manual_curated"]);
     }
 
     #[test]

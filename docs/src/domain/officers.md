@@ -11,6 +11,7 @@
 - **忠诚度** — 0-100，影响叛变概率
 - **官职** — 当前担任的官职
 - **关系** — 与其他武将的关系（君臣、亲子、夫妻、兄弟、结义、仇敌）
+- **标签** — 来自历史资料库的规范标签，用于资料展示和武将浏览器筛选
 
 ## 官职系统
 
@@ -44,6 +45,12 @@ pub enum OfficerRelationshipKind {
 ```
 
 关系数据来自历史数据库，第一版仅用于资料展示，不参与规则判定。
+
+## 武将标签
+
+标签由历史资料库的 `officer_tag_definitions`、`officer_tag_aliases` 和 `officer_tags` 提供。`OfficerProfile.tags` 保存规范标签 ID，例如 `role:ruler`、`role:general`、`affiliation:shu_han`、`basis:history`。
+
+武将浏览器支持按标签分面筛选：同一分类内为 OR，不同分类之间为 AND。例如同时选择 `role:general`、`role:administrator` 和 `affiliation:shu_han`，会返回蜀汉阵营中属于武将或文官的人员。
 
 ## 性别
 

@@ -2,6 +2,29 @@ use super::city::SourceConfidence;
 use super::ids::{CityId, FactionId, OfficerId, OfficialPostId};
 use serde::{Deserialize, Deserializer, Serialize};
 
+pub type OfficerTagId = String;
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum OfficerTagCategory {
+    Role,
+    Affiliation,
+    Source,
+    Batch,
+    Basis,
+    Region,
+    Context,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OfficerTagDefinition {
+    pub id: OfficerTagId,
+    pub category: OfficerTagCategory,
+    pub label_zh: String,
+    pub label_en: String,
+    pub description: String,
+    pub sort_order: i32,
+}
+
 pub const ALL_OFFICIAL_POST_SPECS: [OfficialPostSpec; 32] = [
     OfficialPostSpec {
         id: "taifu",
@@ -702,4 +725,6 @@ pub trait OfficerCatalog {
 
     fn officer_profiles(&self) -> Result<Vec<OfficerProfile>, Self::Error>;
     fn officer_profile(&self, officer_id: &str) -> Result<Option<OfficerProfile>, Self::Error>;
+    fn officer_tag_definitions(&self) -> Result<Vec<OfficerTagDefinition>, Self::Error>;
+    fn officer_tag_aliases(&self) -> Result<Vec<(String, OfficerTagId)>, Self::Error>;
 }

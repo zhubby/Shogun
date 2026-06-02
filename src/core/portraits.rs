@@ -261,7 +261,8 @@ pub(super) fn build_officer_portrait_prompt(draft: &OfficerEditDraft) -> String 
     push_prompt_detail(&mut details, "Native place", &draft.native_place);
     push_prompt_detail(&mut details, "Birth year", &draft.birth_year);
     push_prompt_detail(&mut details, "Death year", &draft.death_year);
-    push_prompt_detail(&mut details, "Tags", &draft.tags);
+    let tag_text = officer_draft_tag_text(draft);
+    push_prompt_detail(&mut details, "Tags", &tag_text);
     let biography = truncate_prompt_text(draft.biography.trim(), 260);
     push_prompt_detail(&mut details, "Biography", &biography);
 
@@ -661,10 +662,15 @@ fn officer_identity_description(draft: &OfficerEditDraft) -> String {
     )];
     push_prompt_detail(&mut parts, "courtesy name", &draft.courtesy_name);
     push_prompt_detail(&mut parts, "native place", &draft.native_place);
-    if !draft.tags.trim().is_empty() {
-        parts.push(format!("historical tags {}", draft.tags.trim()));
+    let tag_text = officer_draft_tag_text(draft);
+    if !tag_text.is_empty() {
+        parts.push(format!("historical tags {tag_text}"));
     }
     parts.join(", ")
+}
+
+fn officer_draft_tag_text(draft: &OfficerEditDraft) -> String {
+    draft.tag_ids.iter().cloned().collect::<Vec<_>>().join(", ")
 }
 
 fn officer_gender_prompt_label(gender: &OfficerGender) -> &'static str {
@@ -711,7 +717,9 @@ mod tests {
             intelligence: 78,
             politics: 80,
             charm: 99,
-            tags: "ruler,shu_han".to_string(),
+            tag_ids: ["role:ruler".to_string(), "affiliation:shu_han".to_string()]
+                .into_iter()
+                .collect(),
             confidence: SourceConfidence::High,
             biography: "汉昭烈帝，蜀汉开国君主。".to_string(),
             notes: String::new(),

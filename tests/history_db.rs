@@ -67,7 +67,7 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
         let pool = open_pool(&path).await;
         assert_eq!(
             applied_sqlx_migration_versions(&pool).await,
-            [1, 2, 3, 4, 5]
+            [1, 2, 3, 4, 5, 6]
         );
 
         let fk_rows = sqlx::query("PRAGMA foreign_key_check")
@@ -103,7 +103,6 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
                  WHERE id = 'zhao_yun_early'
                     OR id LIKE 'supplemental_%'
                     OR name = '名不详'
-                    OR tags LIKE '%supplemental%'
                     OR notes LIKE '%低置信度补充人物%'",
             )
             .await,
@@ -130,7 +129,9 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
         assert_eq!(
             query_count_sql(
                 &pool,
-                "SELECT count(*) AS count FROM officers WHERE tags LIKE '%expansion_003%'",
+                "SELECT count(*) AS count
+                 FROM officer_tags
+                 WHERE tag_id = 'batch:expansion_003'",
             )
             .await,
             263
@@ -139,8 +140,9 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
             query_count_sql(
                 &pool,
                 "SELECT count(*) AS count
-                 FROM officers
-                 WHERE tags LIKE '%expansion_003%'
+                 FROM officers o
+                 JOIN officer_tags t ON t.officer_id = o.id
+                 WHERE t.tag_id = 'batch:expansion_003'
                    AND biography LIKE '%收录用于扩充三国时期群雄、宗族与幕府网络%'",
             )
             .await,
@@ -162,7 +164,8 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
                 &pool,
                 "SELECT count(*) AS count
                  FROM officers o
-                 WHERE o.tags LIKE '%expansion_003%'
+                 JOIN officer_tags t ON t.officer_id = o.id
+                 WHERE t.tag_id = 'batch:expansion_003'
                    AND NOT EXISTS (
                        SELECT 1
                        FROM officer_external_ids e
@@ -172,6 +175,28 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
             .await,
             0
         );
+        let officer_columns: BTreeSet<String> = sqlx::query("PRAGMA table_info(officers)")
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| row.get("name"))
+            .collect();
+        assert!(!officer_columns.contains("tags"));
+        assert_eq!(
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count
+                 FROM officer_tags
+                 WHERE tag_id = 'female'
+                    OR tag_id LIKE 'faction:%'
+                    OR tag_id IN ('蜀', '魏', '东吴', '西晋')",
+            )
+            .await,
+            0
+        );
+        assert!(query_count(&pool, "officer_tag_definitions").await >= 30);
+        assert_eq!(query_count(&pool, "officer_tag_aliases").await, 52);
         assert_eq!(
             query_count_sql(
                 &pool,
@@ -244,6 +269,9 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
             "idx_officer_relationships_target",
             "idx_officer_relationships_kind",
             "idx_officer_external_ids_source",
+            "idx_officer_tags_tag",
+            "idx_officer_tags_officer",
+            "idx_officer_tag_definitions_category",
             "idx_cities_province",
         ] {
             assert!(indexes.contains(index), "missing index {index}");
@@ -265,7 +293,7 @@ fn open_or_create_creates_database_and_runs_initial_migration() {
         let pool = open_pool(&path).await;
         assert_eq!(
             applied_sqlx_migration_versions(&pool).await,
-            [1, 2, 3, 4, 5]
+            [1, 2, 3, 4, 5, 6]
         );
         pool.close().await;
     });
@@ -329,7 +357,10 @@ fn update_officer_profile_persists_basic_fields() {
         politics: 83,
         charm: 99,
     };
-    update.tags = vec!["ruler".to_string(), "edited".to_string()];
+    update.tags = vec![
+        "role:ruler".to_string(),
+        "source:manual_curated".to_string(),
+    ];
     update.confidence = SourceConfidence::Medium;
     update.biography = "编辑后的刘备生平摘要".to_string();
     update.notes = "编辑测试备注".to_string();
@@ -344,7 +375,7 @@ fn update_officer_profile_persists_basic_fields() {
     assert_eq!(loaded.birth_year, Some(160));
     assert_eq!(loaded.death_year, None);
     assert_eq!(loaded.stats.leadership, 88);
-    assert_eq!(loaded.tags, ["ruler", "edited"]);
+    assert_eq!(loaded.tags, ["role:ruler", "source:manual_curated"]);
     assert_eq!(loaded.confidence, SourceConfidence::Medium);
     assert_eq!(loaded.biography, "编辑后的刘备生平摘要");
     assert_eq!(loaded.notes, "编辑测试备注");
@@ -370,6 +401,14 @@ fn update_officer_profile_rejects_invalid_values() {
             .update_officer_profile("liu_bei", &zero_stat)
             .is_err()
     );
+
+    let mut unknown_tag = OfficerProfileUpdate::from_profile(&profile);
+    unknown_tag.tags = vec!["not_a_real_tag".to_string()];
+    let error = catalog
+        .update_officer_profile("liu_bei", &unknown_tag)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("未知武将标签"));
 }
 
 #[test]

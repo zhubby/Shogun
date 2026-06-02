@@ -34,7 +34,17 @@ cargo run --bin build_history_db
 - 游戏启动时自动执行未应用的迁移
 - 迁移记录使用 SQLx 的 `_sqlx_migrations` 表
 
-当前武将目录固定为 420 名命名人物，男 350、女 70。扩充数据通过 `003_expand_officer_catalog.sql` 增加 `expansion_003` 标记人物，并删除匿名低质量补充人物。女性人物可以使用稳定通称（夫人、皇后、太后、大乔、小乔等），但不收录无法作为展示名的“某从兄”“某妻”“无名氏”占位描述。
+当前武将目录固定为 420 名命名人物，男 350、女 70。扩充数据通过 `003_expand_officer_catalog.sql` 增加扩充人物，并删除匿名低质量补充人物。女性人物可以使用稳定通称（夫人、皇后、太后、大乔、小乔等），但不收录无法作为展示名的“某从兄”“某妻”“无名氏”占位描述。
+
+## 武将标签
+
+武将标签是规范化关系数据，不再存储在 `officers.tags` 文本列中：
+
+- `officer_tag_definitions` 定义标签 ID、分类、中英文显示名和排序。
+- `officer_tag_aliases` 保存旧标签到规范标签的映射，用于迁移和旧存档兼容。
+- `officer_tags` 保存武将与规范标签的多对多关系。
+
+标签 ID 使用稳定 ASCII 命名，例如 `role:general`、`affiliation:shu_han`、`source:ctk_import`、`batch:expansion_003`、`basis:history`。性别不是标签，继续由 `officers.gender` 表示。
 
 ## HistoricalCatalog trait
 
@@ -72,8 +82,8 @@ pub enum LifeEventKind {
 
 | 来源 | 标记 | 说明 |
 |------|------|------|
-| CTK 语料 | `characters_of_the_three_kingdoms` | MIT 许可的人物数据 |
-| 人工校订 | `manual_curated` | 手工验证和补充；`expansion_003` 使用原创短句摘要，不复制外部百科正文 |
+| CTK 语料 | `characters_of_the_three_kingdoms` / `source:ctk_import` | MIT 许可的人物数据 |
+| 人工校订 | `manual_curated` / `source:manual_curated` | 手工验证和补充；`batch:expansion_003` 使用原创短句摘要，不复制外部百科正文 |
 
 不确定的信息通过 `confidence`（High/Medium/Low）和 `notes` 字段标注。
 
@@ -81,6 +91,7 @@ pub enum LifeEventKind {
 
 ```
 cities, factions, officers, officer_external_ids,
+officer_tag_definitions, officer_tag_aliases, officer_tags,
 officer_relationships, roads, scenarios,
 scenario_faction_states, scenario_city_states,
 officer_life_events, scenario_diplomacy

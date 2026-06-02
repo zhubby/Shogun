@@ -1,13 +1,13 @@
 use crate::game::*;
 use bevy_egui::egui;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::actions::{
     clear_pending_commands, enter_game, finish_current_turn, open_city, refresh_saves,
 };
 use super::city_intel::city_summary_intel;
 use super::city_panel::selected_city_panel;
-use super::i18n::{Translator, args};
+use super::i18n::{Translator, UiLanguage, args};
 use super::labels::{
     confidence_label, officer_gender_label, officer_relationship_label, technology_branch_label,
 };
@@ -1679,7 +1679,7 @@ pub(super) fn officer_detail_modal_for_game(
                                     t,
                                 );
                                 columns[1].add_space(8.0);
-                                officer_detail_history_section(&mut columns[1], officer, t);
+                                officer_detail_history_section(&mut columns[1], game, officer, t);
                             });
                         });
                 });
@@ -1874,12 +1874,23 @@ fn officer_detail_relationship_section(
     });
 }
 
-fn officer_detail_history_section(ui: &mut egui::Ui, officer: &Officer, t: &Translator) {
+fn officer_detail_history_section(
+    ui: &mut egui::Ui,
+    game: &GameState,
+    officer: &Officer,
+    t: &Translator,
+) {
     war_sub_panel_frame().show(ui, |ui| {
         officer_detail_section_title(ui, &t.text("officer-detail-section-history"));
         if let Some(profile) = &officer.profile {
             if !profile.tags.is_empty() {
-                detail_kv(ui, &t.text("officer-detail-tags"), profile.tags.join(", "));
+                let tags = profile
+                    .tags
+                    .iter()
+                    .map(|tag_id| officer_tag_display_text(game, tag_id, t))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                detail_kv(ui, &t.text("officer-detail-tags"), tags);
             }
             if !profile.biography.is_empty() {
                 ui.label(egui::RichText::new(t.text("officer-biography")).color(war_text_muted()));
@@ -2989,6 +3000,38 @@ pub(super) fn officer_browser_filters(
                 }
             });
 
+        let selected_tag_text = selected_tag_filter_text(game, filters, t);
+        egui::ComboBox::from_id_salt((id_salt, "tags"))
+            .width(190.0)
+            .selected_text(selected_tag_text)
+            .show_ui(ui, |ui| {
+                if ui.button(t.text("officer-filter-clear-tags")).clicked() {
+                    filters.tag_ids.clear();
+                    ui.close();
+                }
+                let definitions_by_category = officer_tag_definitions_by_category(game);
+                for (category, definitions) in definitions_by_category {
+                    ui.separator();
+                    ui.label(
+                        egui::RichText::new(officer_tag_category_label(category, t))
+                            .color(war_text_muted()),
+                    );
+                    for definition in definitions {
+                        let mut selected = filters.tag_ids.contains(&definition.id);
+                        if ui
+                            .checkbox(&mut selected, officer_tag_label(definition, t))
+                            .changed()
+                        {
+                            if selected {
+                                filters.tag_ids.insert(definition.id.clone());
+                            } else {
+                                filters.tag_ids.remove(&definition.id);
+                            }
+                        }
+                    }
+                }
+            });
+
         if ui
             .add_sized(
                 [86.0, FILTER_HEIGHT],
@@ -3100,6 +3143,67 @@ pub(super) fn officer_browser_table(
                 });
         });
     table_response
+}
+
+pub(super) fn officer_tag_label(definition: &OfficerTagDefinition, t: &Translator) -> String {
+    match t.language() {
+        UiLanguage::English => definition.label_en.clone(),
+        UiLanguage::SimplifiedChinese => definition.label_zh.clone(),
+    }
+}
+
+pub(super) fn officer_tag_display_text(game: &GameState, tag_id: &str, t: &Translator) -> String {
+    game.officer_tag_definitions
+        .iter()
+        .find(|definition| definition.id == tag_id)
+        .map(|definition| officer_tag_label(definition, t))
+        .unwrap_or_else(|| tag_id.to_string())
+}
+
+fn selected_tag_filter_text(
+    game: &GameState,
+    filters: &OfficerBrowserFilters,
+    t: &Translator,
+) -> String {
+    match filters.tag_ids.len() {
+        0 => t.text("officer-filter-all-tags"),
+        1 => filters
+            .tag_ids
+            .iter()
+            .next()
+            .map(|tag_id| officer_tag_display_text(game, tag_id, t))
+            .unwrap_or_else(|| t.text("officer-filter-all-tags")),
+        count => t.text_args(
+            "officer-filter-selected-tags",
+            &args([("count", count.to_string())]),
+        ),
+    }
+}
+
+pub(super) fn officer_tag_definitions_by_category(
+    game: &GameState,
+) -> BTreeMap<OfficerTagCategory, Vec<&OfficerTagDefinition>> {
+    let mut grouped: BTreeMap<OfficerTagCategory, Vec<&OfficerTagDefinition>> = BTreeMap::new();
+    for definition in &game.officer_tag_definitions {
+        grouped
+            .entry(definition.category)
+            .or_default()
+            .push(definition);
+    }
+    grouped
+}
+
+pub(super) fn officer_tag_category_label(category: OfficerTagCategory, t: &Translator) -> String {
+    let key = match category {
+        OfficerTagCategory::Role => "officer-tag-category-role",
+        OfficerTagCategory::Affiliation => "officer-tag-category-affiliation",
+        OfficerTagCategory::Source => "officer-tag-category-source",
+        OfficerTagCategory::Batch => "officer-tag-category-batch",
+        OfficerTagCategory::Basis => "officer-tag-category-basis",
+        OfficerTagCategory::Region => "officer-tag-category-region",
+        OfficerTagCategory::Context => "officer-tag-category-context",
+    };
+    t.text(key)
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3339,7 +3443,59 @@ fn officer_matches_filters(
     {
         return false;
     }
+    if !officer_tags_match_filters(officer, game, filters) {
+        return false;
+    }
     search.is_empty() || officer_search_text(officer, game).contains(search)
+}
+
+fn officer_tags_match_filters(
+    officer: &Officer,
+    game: &GameState,
+    filters: &OfficerBrowserFilters,
+) -> bool {
+    if filters.tag_ids.is_empty() {
+        return true;
+    }
+    let officer_tags = normalized_officer_tag_ids(officer, game);
+    let definition_by_id = game
+        .officer_tag_definitions
+        .iter()
+        .map(|definition| (definition.id.as_str(), definition.category))
+        .collect::<BTreeMap<_, _>>();
+    let mut selected_by_category: BTreeMap<OfficerTagCategory, BTreeSet<&str>> = BTreeMap::new();
+    for tag_id in &filters.tag_ids {
+        let Some(category) = definition_by_id.get(tag_id.as_str()).copied() else {
+            return false;
+        };
+        selected_by_category
+            .entry(category)
+            .or_default()
+            .insert(tag_id.as_str());
+    }
+    selected_by_category
+        .values()
+        .all(|selected| selected.iter().any(|tag_id| officer_tags.contains(*tag_id)))
+}
+
+fn normalized_officer_tag_ids(officer: &Officer, game: &GameState) -> BTreeSet<String> {
+    officer
+        .profile
+        .as_ref()
+        .into_iter()
+        .flat_map(|profile| profile.tags.iter())
+        .filter_map(|tag| {
+            if game
+                .officer_tag_definitions
+                .iter()
+                .any(|definition| definition.id == *tag)
+            {
+                Some(tag.clone())
+            } else {
+                game.officer_tag_aliases.get(tag).cloned()
+            }
+        })
+        .collect()
 }
 
 fn officer_search_text(officer: &Officer, game: &GameState) -> String {
@@ -3366,6 +3522,20 @@ fn officer_search_text(officer: &Officer, game: &GameState) -> String {
         if let Some(native_place) = &profile.native_place {
             text.push(' ');
             text.push_str(native_place);
+        }
+        for tag_id in normalized_officer_tag_ids(officer, game) {
+            text.push(' ');
+            text.push_str(&tag_id);
+            if let Some(definition) = game
+                .officer_tag_definitions
+                .iter()
+                .find(|definition| definition.id == tag_id)
+            {
+                text.push(' ');
+                text.push_str(&definition.label_zh);
+                text.push(' ');
+                text.push_str(&definition.label_en);
+            }
         }
     }
     if let Some(spec) = officer.office_id.as_deref().and_then(official_post_spec) {
@@ -3614,6 +3784,60 @@ mod tests {
                 && row.status == "在任"
                 && row.city_name == "平原"
         }));
+    }
+
+    #[test]
+    fn officer_browser_tag_filters_use_or_within_category_and_and_across_categories() {
+        let mut state = ui_state_with_game();
+        state
+            .officer_browser_filters
+            .tag_ids
+            .insert("role:general".to_string());
+        state
+            .officer_browser_filters
+            .tag_ids
+            .insert("role:administrator".to_string());
+        state
+            .officer_browser_filters
+            .tag_ids
+            .insert("affiliation:shu_han".to_string());
+
+        let game = state.game.as_ref().unwrap();
+        let rows = filtered_officer_rows(&state.officer_browser_filters, game, &zh());
+
+        assert!(!rows.is_empty());
+        assert!(rows.iter().all(|row| {
+            let officer = &game.officers[&row.id];
+            let tags = normalized_officer_tag_ids(officer, game);
+            (tags.contains("role:general") || tags.contains("role:administrator"))
+                && tags.contains("affiliation:shu_han")
+        }));
+    }
+
+    #[test]
+    fn officer_browser_tag_filter_matches_legacy_profile_tags_and_resets() {
+        let mut state = ui_state_with_game();
+        {
+            let game = state.game.as_mut().unwrap();
+            let officer = game.officers.get_mut("liu_bei").unwrap();
+            let profile = officer.profile.as_mut().unwrap();
+            profile.tags = vec!["ruler".to_string(), "shu_han".to_string()];
+        }
+        state
+            .officer_browser_filters
+            .tag_ids
+            .insert("role:ruler".to_string());
+        state
+            .officer_browser_filters
+            .tag_ids
+            .insert("affiliation:shu_han".to_string());
+
+        let game = state.game.as_ref().unwrap();
+        let rows = filtered_officer_rows(&state.officer_browser_filters, game, &zh());
+
+        assert!(rows.iter().any(|row| row.id == "liu_bei"));
+        state.officer_browser_filters.reset();
+        assert!(state.officer_browser_filters.tag_ids.is_empty());
     }
 
     #[test]

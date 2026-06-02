@@ -1,5 +1,7 @@
+use super::history_db::SqliteHistoricalCatalog;
 use super::ids::FactionId;
 use super::model::*;
+use super::officer::OfficerCatalog;
 use super::personnel::normalize_personnel_state;
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
@@ -85,6 +87,7 @@ impl SaveManager {
             });
         }
         let mut state = envelope.state;
+        hydrate_officer_tag_metadata(&mut state);
         normalize_personnel_state(&mut state);
         Ok(state)
     }
@@ -125,6 +128,25 @@ impl SaveManager {
 
     fn slot_path(&self, slot_id: &str) -> PathBuf {
         self.slots_dir().join(format!("{slot_id}.json"))
+    }
+}
+
+fn hydrate_officer_tag_metadata(state: &mut GameState) {
+    if !state.officer_tag_definitions.is_empty() && !state.officer_tag_aliases.is_empty() {
+        return;
+    }
+    let Ok(catalog) = SqliteHistoricalCatalog::open_default() else {
+        return;
+    };
+    if state.officer_tag_definitions.is_empty()
+        && let Ok(definitions) = catalog.officer_tag_definitions()
+    {
+        state.officer_tag_definitions = definitions;
+    }
+    if state.officer_tag_aliases.is_empty()
+        && let Ok(aliases) = catalog.officer_tag_aliases()
+    {
+        state.officer_tag_aliases = aliases.into_iter().collect();
     }
 }
 

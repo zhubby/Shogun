@@ -1,7 +1,7 @@
 use crate::game::*;
 use bevy::prelude::Resource;
 use bevy_egui::egui;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use super::asset_path;
 use super::i18n::{Translator, args};
@@ -463,6 +463,7 @@ pub(super) struct OfficerBrowserFilters {
     pub(super) faction_id: Option<FactionId>,
     pub(super) status: OfficerStatusFilter,
     pub(super) city_id: Option<CityId>,
+    pub(super) tag_ids: BTreeSet<OfficerTagId>,
 }
 
 impl OfficerBrowserFilters {
@@ -485,7 +486,7 @@ pub(super) struct OfficerEditDraft {
     pub(super) intelligence: u8,
     pub(super) politics: u8,
     pub(super) charm: u8,
-    pub(super) tags: String,
+    pub(super) tag_ids: BTreeSet<OfficerTagId>,
     pub(super) confidence: SourceConfidence,
     pub(super) biography: String,
     pub(super) notes: String,
@@ -512,7 +513,7 @@ impl OfficerEditDraft {
             intelligence: profile.stats.intelligence,
             politics: profile.stats.politics,
             charm: profile.stats.charm,
-            tags: profile.tags.join(","),
+            tag_ids: profile.tags.iter().cloned().collect(),
             confidence: profile.confidence.clone(),
             biography: profile.biography.clone(),
             notes: profile.notes.clone(),
@@ -540,7 +541,7 @@ impl OfficerEditDraft {
                 intelligence: officer.stats.intelligence,
                 politics: officer.stats.politics,
                 charm: officer.stats.charm,
-                tags: String::new(),
+                tag_ids: BTreeSet::new(),
                 confidence: SourceConfidence::Medium,
                 biography: String::new(),
                 notes: String::new(),
@@ -624,7 +625,10 @@ mod tests {
         assert_eq!(draft.death_year, "222");
         assert_eq!(draft.gender, OfficerGender::Male);
         assert_eq!(draft.leadership, 90);
-        assert_eq!(draft.tags, "famous_general");
+        assert_eq!(
+            draft.tag_ids,
+            BTreeSet::from(["famous_general".to_string()])
+        );
         assert_eq!(draft.confidence, SourceConfidence::High);
         assert_eq!(draft.biography, "以勇略闻名。");
     }

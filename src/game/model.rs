@@ -1,7 +1,7 @@
 use super::city::{City, FacilityKind};
 use super::events::GameEvent;
 use super::ids::{CityId, FactionId, OfficerId};
-use super::officer::Officer;
+use super::officer::{Officer, OfficerTagDefinition};
 use super::technology::FactionTechnologyState;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,6 +20,10 @@ pub struct GameState {
     pub factions: BTreeMap<FactionId, Faction>,
     pub cities: BTreeMap<CityId, City>,
     pub officers: BTreeMap<OfficerId, Officer>,
+    #[serde(default)]
+    pub officer_tag_definitions: Vec<OfficerTagDefinition>,
+    #[serde(default)]
+    pub officer_tag_aliases: BTreeMap<String, String>,
     pub roads: Vec<Road>,
     pub diplomacy: BTreeMap<String, DiplomaticRelation>,
     pub pending_commands: Vec<Command>,

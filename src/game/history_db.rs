@@ -9,7 +9,8 @@ use super::model::{
 };
 use super::officer::{
     Officer, OfficerCatalog, OfficerGender, OfficerProfile, OfficerProfileUpdate,
-    OfficerRelationship, OfficerRelationshipKind, OfficerStats, OfficerStatus,
+    OfficerRelationship, OfficerRelationshipKind, OfficerStats, OfficerStatus, OfficerTagCategory,
+    OfficerTagDefinition,
 };
 use super::personnel::normalize_personnel_state;
 use super::technology::FactionTechnologyState;
@@ -28,6 +29,9 @@ const REQUIRED_HISTORY_TABLES: &[&str] = &[
     "cities",
     "factions",
     "officers",
+    "officer_tag_definitions",
+    "officer_tag_aliases",
+    "officer_tags",
     "officer_external_ids",
     "officer_relationships",
     "roads",
@@ -170,15 +174,11 @@ impl SqliteHistoricalCatalog {
         let native_place = trimmed_optional(&update.native_place);
         let biography = update.biography.trim();
         let notes = update.notes.trim();
-        let tags = update
-            .tags
-            .iter()
-            .map(|tag| tag.trim())
-            .filter(|tag| !tag.is_empty())
-            .collect::<Vec<_>>()
-            .join(",");
+        let tag_ids =
+            self.block_on(async { normalize_officer_tag_ids(&self.pool, &update.tags).await })?;
         let rows_affected = self.block_on(async {
-            sqlx::query(
+            let mut tx = self.pool.begin().await.map_err(HistoryDbError::Sqlx)?;
+            let rows_affected = sqlx::query(
                 "UPDATE officers
                  SET name = ?1,
                      courtesy_name = ?2,
@@ -191,11 +191,10 @@ impl SqliteHistoricalCatalog {
                      intelligence = ?9,
                      politics = ?10,
                      charm = ?11,
-                     tags = ?12,
-                     confidence = ?13,
-                     biography = ?14,
-                     notes = ?15
-                 WHERE id = ?16",
+                     confidence = ?12,
+                     biography = ?13,
+                     notes = ?14
+                 WHERE id = ?15",
             )
             .bind(name)
             .bind(courtesy_name.as_deref())
@@ -208,15 +207,36 @@ impl SqliteHistoricalCatalog {
             .bind(i64::from(update.stats.intelligence))
             .bind(i64::from(update.stats.politics))
             .bind(i64::from(update.stats.charm))
-            .bind(tags)
             .bind(confidence_value(&update.confidence))
             .bind(biography)
             .bind(notes)
             .bind(officer_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map(|result| result.rows_affected())
-            .map_err(HistoryDbError::Sqlx)
+            .map_err(HistoryDbError::Sqlx)?;
+            if rows_affected == 0 {
+                tx.rollback().await.map_err(HistoryDbError::Sqlx)?;
+                return Ok::<u64, HistoryDbError>(0);
+            }
+            sqlx::query("DELETE FROM officer_tags WHERE officer_id = ?1")
+                .bind(officer_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(HistoryDbError::Sqlx)?;
+            for tag_id in &tag_ids {
+                sqlx::query(
+                    "INSERT INTO officer_tags (officer_id, tag_id)
+                     VALUES (?1, ?2)",
+                )
+                .bind(officer_id)
+                .bind(tag_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(HistoryDbError::Sqlx)?;
+            }
+            tx.commit().await.map_err(HistoryDbError::Sqlx)?;
+            Ok(rows_affected)
         })?;
         if rows_affected == 0 {
             return Err(HistoryDbError::Invalid(format!("武将 {officer_id} 不存在")));
@@ -290,7 +310,8 @@ async fn run_history_migrations(pool: &SqlitePool) -> Result<(), HistoryDbError>
 
 async fn validate_history_database(pool: &SqlitePool) -> Result<(), HistoryDbError> {
     validate_required_tables(pool).await?;
-    validate_foreign_keys(pool).await
+    validate_foreign_keys(pool).await?;
+    validate_officer_tags(pool).await
 }
 
 async fn validate_required_tables(pool: &SqlitePool) -> Result<(), HistoryDbError> {
@@ -343,6 +364,27 @@ async fn validate_foreign_keys(pool: &SqlitePool) -> Result<(), HistoryDbError> 
     }
 }
 
+async fn validate_officer_tags(pool: &SqlitePool) -> Result<(), HistoryDbError> {
+    let orphan_count = sqlx::query(
+        "SELECT count(*) AS count
+         FROM officer_tags t
+         LEFT JOIN officers o ON o.id = t.officer_id
+         LEFT JOIN officer_tag_definitions d ON d.id = t.tag_id
+         WHERE o.id IS NULL OR d.id IS NULL",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(HistoryDbError::Sqlx)?
+    .get::<i64, _>("count");
+    if orphan_count == 0 {
+        Ok(())
+    } else {
+        Err(HistoryDbError::Invalid(
+            "历史资料库武将标签存在孤儿引用".to_string(),
+        ))
+    }
+}
+
 impl CityCatalog for SqliteHistoricalCatalog {
     type Error = HistoryDbError;
 
@@ -387,7 +429,7 @@ impl OfficerCatalog for SqliteHistoricalCatalog {
         self.block_on(async {
             let rows = sqlx::query(
                 "SELECT id, name, courtesy_name, native_place, birth_year, death_year,
-                        gender, leadership, strength, intelligence, politics, charm, tags,
+                        gender, leadership, strength, intelligence, politics, charm,
                         confidence, biography, notes
                  FROM officers
                  ORDER BY id",
@@ -400,6 +442,7 @@ impl OfficerCatalog for SqliteHistoricalCatalog {
                 .map(officer_profile_from_row)
                 .collect::<Result<Vec<_>, _>>()?;
             for profile in &mut profiles {
+                profile.tags = officer_tag_ids(&self.pool, &profile.id).await?;
                 profile.relationships = officer_relationships(&self.pool, &profile.id).await?;
             }
             Ok(profiles)
@@ -410,7 +453,7 @@ impl OfficerCatalog for SqliteHistoricalCatalog {
         self.block_on(async {
             let row = sqlx::query(
                 "SELECT id, name, courtesy_name, native_place, birth_year, death_year,
-                        gender, leadership, strength, intelligence, politics, charm, tags,
+                        gender, leadership, strength, intelligence, politics, charm,
                         confidence, biography, notes
                  FROM officers
                  WHERE id = ?1",
@@ -423,8 +466,30 @@ impl OfficerCatalog for SqliteHistoricalCatalog {
                 return Ok(None);
             };
             let mut profile = officer_profile_from_row(row)?;
+            profile.tags = officer_tag_ids(&self.pool, &profile.id).await?;
             profile.relationships = officer_relationships(&self.pool, &profile.id).await?;
             Ok(Some(profile))
+        })
+    }
+
+    fn officer_tag_definitions(&self) -> Result<Vec<OfficerTagDefinition>, Self::Error> {
+        self.block_on(async { officer_tag_definitions(&self.pool).await })
+    }
+
+    fn officer_tag_aliases(&self) -> Result<Vec<(String, String)>, Self::Error> {
+        self.block_on(async {
+            let rows = sqlx::query(
+                "SELECT alias, tag_id
+                 FROM officer_tag_aliases
+                 ORDER BY alias",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
+            Ok(rows
+                .into_iter()
+                .map(|row| (row.get("alias"), row.get("tag_id")))
+                .collect())
         })
     }
 }
@@ -649,6 +714,11 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
             factions,
             cities,
             officers: officer_states,
+            officer_tag_definitions: self.officer_tag_definitions()?,
+            officer_tag_aliases: self
+                .officer_tag_aliases()?
+                .into_iter()
+                .collect::<BTreeMap<_, _>>(),
             roads,
             diplomacy,
             pending_commands: Vec::new(),
@@ -834,6 +904,87 @@ async fn officer_relationships(
     rows.into_iter().map(relationship_from_row).collect()
 }
 
+async fn officer_tag_ids(
+    pool: &SqlitePool,
+    officer_id: &str,
+) -> Result<Vec<String>, HistoryDbError> {
+    let rows = sqlx::query(
+        "SELECT t.tag_id
+         FROM officer_tags t
+         JOIN officer_tag_definitions d ON d.id = t.tag_id
+         WHERE t.officer_id = ?1
+         ORDER BY d.category, d.sort_order, d.id",
+    )
+    .bind(officer_id)
+    .fetch_all(pool)
+    .await
+    .map_err(HistoryDbError::Sqlx)?;
+    Ok(rows.into_iter().map(|row| row.get("tag_id")).collect())
+}
+
+async fn officer_tag_definitions(
+    pool: &SqlitePool,
+) -> Result<Vec<OfficerTagDefinition>, HistoryDbError> {
+    let rows = sqlx::query(
+        "SELECT id, category, label_zh, label_en, description, sort_order
+         FROM officer_tag_definitions
+         ORDER BY category, sort_order, id",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(HistoryDbError::Sqlx)?;
+    rows.into_iter()
+        .map(officer_tag_definition_from_row)
+        .collect()
+}
+
+async fn normalize_officer_tag_ids(
+    pool: &SqlitePool,
+    tags: &[String],
+) -> Result<Vec<String>, HistoryDbError> {
+    let aliases = sqlx::query(
+        "SELECT alias, tag_id
+         FROM officer_tag_aliases",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(HistoryDbError::Sqlx)?
+    .into_iter()
+    .map(|row| {
+        (
+            row.get::<String, _>("alias"),
+            row.get::<String, _>("tag_id"),
+        )
+    })
+    .collect::<BTreeMap<_, _>>();
+    let definitions = sqlx::query("SELECT id FROM officer_tag_definitions")
+        .fetch_all(pool)
+        .await
+        .map_err(HistoryDbError::Sqlx)?
+        .into_iter()
+        .map(|row| row.get::<String, _>("id"))
+        .collect::<BTreeSet<_>>();
+    let mut normalized = BTreeSet::new();
+    for tag in tags
+        .iter()
+        .map(|tag| tag.trim())
+        .filter(|tag| !tag.is_empty())
+    {
+        if tag == "female" {
+            continue;
+        }
+        let tag_id = if definitions.contains(tag) {
+            tag.to_string()
+        } else if let Some(tag_id) = aliases.get(tag) {
+            tag_id.clone()
+        } else {
+            return Err(HistoryDbError::Invalid(format!("未知武将标签: {tag}")));
+        };
+        normalized.insert(tag_id);
+    }
+    Ok(normalized.into_iter().collect())
+}
+
 fn derive_city_level(profile: &CityProfile) -> u8 {
     let scale_base = match profile.scale {
         CityScale::County => 2,
@@ -933,12 +1084,7 @@ fn officer_profile_from_row(row: SqliteRow) -> Result<OfficerProfile, HistoryDbE
             politics: row.get::<i64, _>("politics") as u8,
             charm: row.get::<i64, _>("charm") as u8,
         },
-        tags: row
-            .get::<String, _>("tags")
-            .split(',')
-            .filter(|tag| !tag.is_empty())
-            .map(str::to_string)
-            .collect(),
+        tags: Vec::new(),
         confidence: parse_confidence(row.get::<String, _>("confidence").as_str()),
         biography: row.get("biography"),
         relationships: Vec::new(),
@@ -954,6 +1100,17 @@ fn relationship_from_row(row: SqliteRow) -> Result<OfficerRelationship, HistoryD
         confidence: parse_confidence(row.get::<String, _>("confidence").as_str()),
         notes: row.get("notes"),
         source: row.get("source"),
+    })
+}
+
+fn officer_tag_definition_from_row(row: SqliteRow) -> Result<OfficerTagDefinition, HistoryDbError> {
+    Ok(OfficerTagDefinition {
+        id: row.get("id"),
+        category: parse_officer_tag_category(row.get::<String, _>("category").as_str()),
+        label_zh: row.get("label_zh"),
+        label_en: row.get("label_en"),
+        description: row.get("description"),
+        sort_order: row.get::<i64, _>("sort_order") as i32,
     })
 }
 
@@ -1002,6 +1159,18 @@ fn parse_gender(value: &str) -> OfficerGender {
     match value {
         "Female" => OfficerGender::Female,
         _ => OfficerGender::Male,
+    }
+}
+
+fn parse_officer_tag_category(value: &str) -> OfficerTagCategory {
+    match value {
+        "Affiliation" => OfficerTagCategory::Affiliation,
+        "Source" => OfficerTagCategory::Source,
+        "Batch" => OfficerTagCategory::Batch,
+        "Basis" => OfficerTagCategory::Basis,
+        "Region" => OfficerTagCategory::Region,
+        "Context" => OfficerTagCategory::Context,
+        _ => OfficerTagCategory::Role,
     }
 }
 
