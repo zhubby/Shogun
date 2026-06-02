@@ -277,6 +277,14 @@ command-tent-title = 议事厅
 report-title = 战报
 officer-browser-title = 武将一览
 retainer-title = 臣僚任命
+turn-summary-title = 月初奏报
+turn-summary-subtitle = 进入 {$year}年{$month}月 · 第{$turn}回合 · 本阵营 {$faction}
+turn-summary-cities = 城池
+turn-summary-wounded-population = 伤兵 / 人口
+turn-summary-wounded-population-value = {$wounded} / {$population}
+turn-summary-report-section = 上回合记录
+turn-summary-continue = 继续
+turn-summary-open-report = 打开战报
 
 message-no-game-state = 尚未开始游戏
 message-game-not-started = 尚未开始游戏

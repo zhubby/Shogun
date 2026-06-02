@@ -8,6 +8,7 @@ mod officer_detail;
 mod save_report;
 mod shrine;
 mod technology;
+mod turn_summary;
 
 pub(super) use officer_browser::{
     OFFICER_BROWSER_MODAL_WIDTH, OfficerBrowserTableOptions, officer_browser_filters,
@@ -61,6 +62,7 @@ pub(super) fn in_game_hud(
     technology::technology_hud(ctx, ui_state, t, screen);
     events::event_center_hud(ctx, ui_state, t, screen);
     events::event_popup_hud(ctx, ui_state, t, screen);
+    turn_summary::turn_summary_hud(ctx, ui_state, t, screen);
     chrome::return_main_menu_confirm_hud(ctx, ui_state, t, screen);
 }
 

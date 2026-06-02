@@ -188,7 +188,7 @@ pub(super) fn report_panel(
         });
 }
 
-fn highlighted_report_label(
+pub(in crate::core::hud) fn highlighted_report_label(
     ui: &mut egui::Ui,
     text: &str,
     entities: &[ReportHighlightEntity],
@@ -226,7 +226,7 @@ fn report_city_highlight() -> egui::Color32 {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct ReportHighlightEntity {
+pub(in crate::core::hud) struct ReportHighlightEntity {
     name: String,
     kind: ReportHighlightKind,
 }
@@ -243,7 +243,9 @@ struct ReportHighlightToken {
     kind: Option<ReportHighlightKind>,
 }
 
-fn report_highlight_entities(game: &GameState) -> Vec<ReportHighlightEntity> {
+pub(in crate::core::hud) fn report_highlight_entities(
+    game: &GameState,
+) -> Vec<ReportHighlightEntity> {
     let mut seen = BTreeSet::new();
     let mut entities = Vec::new();
     for officer in game.officers.values() {

@@ -277,6 +277,14 @@ command-tent-title = Council Hall
 report-title = Reports
 officer-browser-title = Officer Browser
 retainer-title = Retainer Posts
+turn-summary-title = Month Opening Report
+turn-summary-subtitle = Entering {$year}/{$month} · turn {$turn} · your faction {$faction}
+turn-summary-cities = Cities
+turn-summary-wounded-population = Wounded / Population
+turn-summary-wounded-population-value = {$wounded} / {$population}
+turn-summary-report-section = Previous Turn Records
+turn-summary-continue = Continue
+turn-summary-open-report = Open Reports
 
 message-no-game-state = No game has started
 message-game-not-started = No game has started

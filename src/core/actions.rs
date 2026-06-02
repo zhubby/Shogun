@@ -49,6 +49,8 @@ pub(super) fn enter_game(ui_state: &mut GameUiState, game: GameState, message: S
     ui_state.officer_detail_id = None;
     ui_state.event_message.clear();
     ui_state.reports_open = true;
+    ui_state.turn_summary_open = false;
+    ui_state.turn_summary_report_index = None;
     ui_state.save_panel_open = false;
     ui_state.main_menu_new_game_open = false;
     ui_state.main_menu_load_game_open = false;
@@ -77,6 +79,8 @@ pub(super) fn finish_current_turn(ui_state: &mut GameUiState) {
         "message-turn-finished",
         &args([("count", report.entries.len().to_string())]),
     );
+    ui_state.turn_summary_report_index = game.reports.len().checked_sub(1);
+    ui_state.turn_summary_open = ui_state.turn_summary_report_index.is_some();
     ui_state.selected_city_id = first_player_city(game);
     ui_state.city_drawer_open = false;
     autosave_current_game(ui_state, &t);
@@ -119,6 +123,8 @@ fn close_in_game_panels(ui_state: &mut GameUiState) {
     ui_state.technology_open = false;
     ui_state.events_open = false;
     ui_state.return_main_menu_confirm_open = false;
+    ui_state.turn_summary_open = false;
+    ui_state.turn_summary_report_index = None;
     ui_state.save_panel_open = false;
 }
 

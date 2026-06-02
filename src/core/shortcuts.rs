@@ -619,6 +619,11 @@ pub(super) fn close_top_panel(ui_state: &mut GameUiState) -> bool {
     if ui_state.screen != Screen::InGame {
         return false;
     }
+    if ui_state.turn_summary_open {
+        ui_state.turn_summary_open = false;
+        ui_state.turn_summary_report_index = None;
+        return true;
+    }
     if ui_state.return_main_menu_confirm_open {
         ui_state.return_main_menu_confirm_open = false;
         return true;
@@ -750,7 +755,7 @@ fn dispatch_shortcut_action(action: ShortcutAction, ui_state: &mut GameUiState) 
             }
         }
         ShortcutAction::EndMonth => {
-            if ui_state.screen == Screen::InGame {
+            if ui_state.screen == Screen::InGame && !ui_state.turn_summary_open {
                 finish_current_turn(ui_state);
             }
         }
@@ -1230,6 +1235,14 @@ mod tests {
     }
 
     #[test]
+    fn turn_summary_defaults_closed() {
+        let ui_state = GameUiState::default();
+
+        assert!(!ui_state.turn_summary_open);
+        assert_eq!(ui_state.turn_summary_report_index, None);
+    }
+
+    #[test]
     fn close_top_panel_prefers_foreground_layers() {
         let mut ui_state = GameUiState {
             settings_open: true,
@@ -1266,5 +1279,36 @@ mod tests {
 
         assert!(close_top_panel(&mut ui_state));
         assert!(!ui_state.technology_open);
+    }
+
+    #[test]
+    fn close_top_panel_closes_turn_summary_before_other_in_game_panels() {
+        let mut ui_state = GameUiState {
+            screen: Screen::InGame,
+            turn_summary_open: true,
+            turn_summary_report_index: Some(0),
+            technology_open: true,
+            ..GameUiState::default()
+        };
+
+        assert!(close_top_panel(&mut ui_state));
+        assert!(!ui_state.turn_summary_open);
+        assert_eq!(ui_state.turn_summary_report_index, None);
+        assert!(ui_state.technology_open);
+    }
+
+    #[test]
+    fn end_month_shortcut_is_ignored_while_turn_summary_is_open() {
+        let mut ui_state = GameUiState {
+            screen: Screen::InGame,
+            turn_summary_open: true,
+            message: "unchanged".to_string(),
+            ..GameUiState::default()
+        };
+
+        dispatch_shortcut_action(ShortcutAction::EndMonth, &mut ui_state);
+
+        assert!(ui_state.turn_summary_open);
+        assert_eq!(ui_state.message, "unchanged");
     }
 }
