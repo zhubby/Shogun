@@ -239,6 +239,8 @@ city-monthly-facilities-title = Monthly and Facilities
 
 hud-date-turn = {$scenario} {$year}/{$month}, turn {$turn}
 hud-player = Player {$faction}
+hud-faction-resources = Gold {$gold} / Food {$food} / Materials {$materials} / Troops {$troops}
+hud-faction-resources-tooltip = Cities {$cities} / Population {$population} / Wounded {$wounded}
 hud-main-menu = Main Menu
 hud-save = Save
 hud-clear-commands = Clear Orders

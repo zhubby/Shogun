@@ -239,6 +239,8 @@ city-monthly-facilities-title = 月度与设施
 
 hud-date-turn = {$scenario} {$year}年{$month}月 第{$turn}回合
 hud-player = 玩家 {$faction}
+hud-faction-resources = 金{$gold} / 粮{$food} / 材{$materials} / 兵{$troops}
+hud-faction-resources-tooltip = 城池 {$cities} / 人口 {$population} / 伤兵 {$wounded}
 hud-main-menu = 主菜单
 hud-save = 存档
 hud-clear-commands = 清除命令

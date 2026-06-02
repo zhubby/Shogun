@@ -1,5 +1,6 @@
 use crate::game::*;
 use bevy_egui::egui;
+use egui_extras::{Column, TableBuilder};
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::actions::{
@@ -23,8 +24,8 @@ use super::state::{
     Screen, ShrineTab,
 };
 use super::style::{
-    modal_title_bar, war_bar_frame, war_border, war_danger, war_gold, war_panel_frame,
-    war_sub_panel_frame, war_success, war_text, war_text_muted, war_warning,
+    collapse_icon_button, modal_title_bar, war_bar_frame, war_border, war_danger, war_gold,
+    war_panel_frame, war_sub_panel_frame, war_success, war_text, war_text_muted, war_warning,
 };
 use super::{HUD_MARGIN, HUD_TOP_HEIGHT, HUD_TOP_OFFSET, MAP_ZOOM_STEP};
 
@@ -83,6 +84,7 @@ pub(super) fn top_status_hud(
             .get(&game.player_faction_id)
             .map(|faction| faction.name.clone())
             .unwrap_or_else(|| t.text("unknown-faction"));
+        let resources = FactionResourceSummary::from_game(game, &game.player_faction_id);
         let status = match &game.status {
             GameStatus::Running => None,
             GameStatus::Victory { reason } => {
@@ -98,6 +100,7 @@ pub(super) fn top_status_hud(
             game.month,
             game.turn,
             faction_name,
+            resources,
             status,
         )
     });
@@ -119,7 +122,9 @@ pub(super) fn top_status_hud(
                             .strong(),
                     );
                     ui.separator();
-                    if let Some((scenario, year, month, turn, faction_name, status)) = summary {
+                    if let Some((scenario, year, month, turn, faction_name, resources, status)) =
+                        summary
+                    {
                         ui.label(t.text_args(
                             "hud-date-turn",
                             &args([
@@ -130,6 +135,8 @@ pub(super) fn top_status_hud(
                             ]),
                         ));
                         ui.label(t.text_args("hud-player", &args([("faction", faction_name)])));
+                        ui.label(resources.label(t))
+                            .on_hover_text(resources.tooltip(t));
                         if let Some(status) = status {
                             ui.colored_label(egui::Color32::from_rgb(200, 72, 52), status);
                         }
@@ -319,16 +326,11 @@ pub(super) fn event_popup_hud(
         .show(ctx, |ui| {
             war_panel_frame().show(ui, |ui| {
                 ui.set_width(width);
-                ui.horizontal(|ui| {
-                    ui.heading(egui::RichText::new(&event.title).color(war_gold()));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(t.text("event-later")).clicked()
-                            && let Some(game) = &mut ui_state.game
-                        {
-                            let _ = dismiss_event_popup(game, &event_id);
-                        }
-                    });
-                });
+                if modal_title_bar(ui, t, &event.title)
+                    && let Some(game) = &mut ui_state.game
+                {
+                    let _ = dismiss_event_popup(game, &event_id);
+                }
                 ui.separator();
                 ui.label(egui::RichText::new(&event.summary).strong());
                 ui.colored_label(war_text_muted(), event_time_label(&event));
@@ -437,6 +439,60 @@ fn event_center(
             event_detail(ui, ui_state, t, height - 112.0);
         });
     });
+}
+
+#[derive(Clone, Debug, Default)]
+struct FactionResourceSummary {
+    city_count: usize,
+    gold: i64,
+    food: i64,
+    materials: i64,
+    troops: u64,
+    population: u64,
+    wounded: u64,
+}
+
+impl FactionResourceSummary {
+    fn from_game(game: &GameState, faction_id: &str) -> Self {
+        let mut summary = Self::default();
+        for city in game
+            .cities
+            .values()
+            .filter(|city| city.faction_id == faction_id)
+        {
+            summary.city_count += 1;
+            summary.gold += i64::from(city.gold);
+            summary.food += i64::from(city.food);
+            summary.materials += i64::from(city.materials);
+            summary.troops += u64::from(city.troops.total());
+            summary.population += u64::from(city.population);
+            summary.wounded += u64::from(city.wounded_troops.total());
+        }
+        summary
+    }
+
+    fn label(&self, t: &Translator) -> String {
+        t.text_args(
+            "hud-faction-resources",
+            &args([
+                ("gold", self.gold.to_string()),
+                ("food", self.food.to_string()),
+                ("materials", self.materials.to_string()),
+                ("troops", self.troops.to_string()),
+            ]),
+        )
+    }
+
+    fn tooltip(&self, t: &Translator) -> String {
+        t.text_args(
+            "hud-faction-resources-tooltip",
+            &args([
+                ("cities", self.city_count.to_string()),
+                ("population", self.population.to_string()),
+                ("wounded", self.wounded.to_string()),
+            ]),
+        )
+    }
 }
 
 fn event_list(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Translator, max_height: f32) {
@@ -1287,7 +1343,7 @@ pub(super) fn save_hud(
                 ui.horizontal(|ui| {
                     ui.heading(egui::RichText::new(t.text("save-title")).color(war_gold()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(t.text("common-collapse")).clicked() {
+                        if collapse_icon_button(ui, t, true).clicked() {
                             ui_state.save_panel_open = false;
                         }
                     });
@@ -1318,7 +1374,7 @@ pub(super) fn city_drawer_hud(
                 ui.horizontal(|ui| {
                     ui.heading(egui::RichText::new(t.text("command-tent-title")).color(war_gold()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(t.text("common-collapse")).clicked() {
+                        if collapse_icon_button(ui, t, true).clicked() {
                             ui_state.city_drawer_open = false;
                         }
                     });
@@ -1354,14 +1410,7 @@ pub(super) fn report_hud(
                 ui.horizontal(|ui| {
                     ui.heading(egui::RichText::new(t.text("report-title")).color(war_gold()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .button(if ui_state.reports_open {
-                                t.text("common-collapse")
-                            } else {
-                                t.text("common-expand")
-                            })
-                            .clicked()
-                        {
+                        if collapse_icon_button(ui, t, ui_state.reports_open).clicked() {
                             ui_state.reports_open = !ui_state.reports_open;
                         }
                     });
@@ -1419,12 +1468,15 @@ pub(super) fn officer_browser_hud(
                         OfficerBrowserTableOptions {
                             max_height: height - 118.0,
                             id_salt: "hud_officer_browser_table",
-                            selected_officer_id: None,
+                            selected_officer_id: ui_state.officer_browser_selected_id.as_deref(),
                             editable: false,
                             retainer_faction_id: None,
                         },
                         t,
                     );
+                    if let Some(officer_id) = response.selected_officer_id {
+                        ui_state.officer_browser_selected_id = Some(officer_id);
+                    }
                     if let Some(officer_id) = response.view_officer_id {
                         ui_state.officer_detail_id = Some(officer_id);
                     }
@@ -1479,12 +1531,15 @@ pub(super) fn retainer_hud(
                     OfficerBrowserTableOptions {
                         max_height: height - 142.0,
                         id_salt: "hud_retainer_table",
-                        selected_officer_id: None,
+                        selected_officer_id: ui_state.retainer_selected_id.as_deref(),
                         editable: false,
                         retainer_faction_id: Some(player_faction_id.as_str()),
                     },
                     t,
                 );
+                if let Some(officer_id) = response.selected_officer_id.clone() {
+                    ui_state.retainer_selected_id = Some(officer_id);
+                }
                 if let Some(officer_id) = response.view_officer_id {
                     ui_state.officer_detail_id = Some(officer_id);
                 }
@@ -3031,87 +3086,85 @@ pub(super) fn officer_browser_table(
         "officer-browser-count",
         &args([("count", rows.len().to_string())]),
     ));
-    egui::ScrollArea::vertical()
-        .id_salt(options.id_salt)
-        .max_height(options.max_height.max(260.0))
-        .auto_shrink([false, false])
-        .show(ui, |ui| {
-            egui::Grid::new((options.id_salt, "grid"))
-                .striped(true)
-                .num_columns(15)
-                .min_col_width(42.0)
-                .spacing(egui::vec2(12.0, 6.0))
-                .show(ui, |ui| {
-                    ui.strong(t.text("officer-column-tools"));
-                    ui.strong(t.text("officer-column-name"));
-                    ui.strong(t.text("officer-column-gender"));
-                    ui.strong(t.text("officer-column-age"));
-                    ui.strong(t.text("officer-column-faction"));
-                    ui.strong(t.text("officer-column-city"));
-                    ui.strong(t.text("officer-column-office"));
-                    ui.strong(t.text("officer-column-salary"));
-                    ui.strong(t.text("officer-column-status"));
-                    ui.strong(t.text("officer-column-loyalty"));
-                    ui.strong(t.text("stat-leadership"));
-                    ui.strong(t.text("stat-strength"));
-                    ui.strong(t.text("stat-intelligence"));
-                    ui.strong(t.text("stat-politics"));
-                    ui.strong(t.text("stat-charm"));
-                    ui.end_row();
 
-                    for row in rows {
-                        let selected = options.selected_officer_id == Some(row.id.as_str());
-                        let mut cell_context = OfficerRowCellContext {
-                            ui,
-                            game,
-                            table_response: &mut table_response,
-                            editable: options.editable,
-                            retainer_faction_id: options.retainer_faction_id,
-                            t,
-                        };
-                        officer_row_tools(&mut cell_context, &row);
-                        officer_row_cell(&mut cell_context, &row, selected, &row.name);
-                        officer_row_cell(&mut cell_context, &row, selected, &row.gender);
-                        officer_row_cell(&mut cell_context, &row, selected, row.age.to_string());
-                        officer_row_cell(&mut cell_context, &row, selected, &row.faction_name);
-                        officer_row_cell(&mut cell_context, &row, selected, &row.city_name);
-                        officer_row_cell(&mut cell_context, &row, selected, &row.office_name);
-                        officer_row_cell(&mut cell_context, &row, selected, row.salary.to_string());
-                        officer_row_cell(&mut cell_context, &row, selected, &row.status);
-                        officer_row_cell(
-                            &mut cell_context,
-                            &row,
-                            selected,
-                            row.loyalty.to_string(),
-                        );
-                        officer_row_cell(
-                            &mut cell_context,
-                            &row,
-                            selected,
-                            row.leadership.to_string(),
-                        );
-                        officer_row_cell(
-                            &mut cell_context,
-                            &row,
-                            selected,
-                            row.strength.to_string(),
-                        );
-                        officer_row_cell(
-                            &mut cell_context,
-                            &row,
-                            selected,
-                            row.intelligence.to_string(),
-                        );
-                        officer_row_cell(
-                            &mut cell_context,
-                            &row,
-                            selected,
-                            row.politics.to_string(),
-                        );
-                        officer_row_cell(&mut cell_context, &row, selected, row.charm.to_string());
-                        ui.end_row();
+    let table_height = options.max_height.max(260.0);
+    TableBuilder::new(ui)
+        .id_salt(options.id_salt)
+        .striped(true)
+        .resizable(true)
+        .sense(egui::Sense::click())
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .min_scrolled_height(table_height)
+        .max_scroll_height(table_height)
+        .auto_shrink([false, false])
+        .column(Column::exact(42.0))
+        .column(Column::initial(84.0).at_least(62.0).clip(true))
+        .column(Column::initial(52.0).at_least(42.0).clip(true))
+        .column(Column::initial(44.0).at_least(38.0).clip(true))
+        .column(Column::initial(86.0).at_least(64.0).clip(true))
+        .column(Column::initial(78.0).at_least(58.0).clip(true))
+        .column(Column::initial(88.0).at_least(64.0).clip(true))
+        .column(Column::initial(56.0).at_least(46.0).clip(true))
+        .column(Column::initial(66.0).at_least(52.0).clip(true))
+        .column(Column::initial(56.0).at_least(46.0).clip(true))
+        .columns(Column::initial(50.0).at_least(42.0).clip(true), 5)
+        .header(26.0, |mut header| {
+            officer_table_header_cell(&mut header, t.text("officer-column-tools"));
+            officer_table_header_cell(&mut header, t.text("officer-column-name"));
+            officer_table_header_cell(&mut header, t.text("officer-column-gender"));
+            officer_table_header_cell(&mut header, t.text("officer-column-age"));
+            officer_table_header_cell(&mut header, t.text("officer-column-faction"));
+            officer_table_header_cell(&mut header, t.text("officer-column-city"));
+            officer_table_header_cell(&mut header, t.text("officer-column-office"));
+            officer_table_header_cell(&mut header, t.text("officer-column-salary"));
+            officer_table_header_cell(&mut header, t.text("officer-column-status"));
+            officer_table_header_cell(&mut header, t.text("officer-column-loyalty"));
+            officer_table_header_cell(&mut header, t.text("stat-leadership"));
+            officer_table_header_cell(&mut header, t.text("stat-strength"));
+            officer_table_header_cell(&mut header, t.text("stat-intelligence"));
+            officer_table_header_cell(&mut header, t.text("stat-politics"));
+            officer_table_header_cell(&mut header, t.text("stat-charm"));
+        })
+        .body(|mut body| {
+            for row in rows {
+                let selected = options.selected_officer_id == Some(row.id.as_str());
+                body.row(28.0, |mut table_row| {
+                    table_row.set_selected(selected);
+                    table_row.col(|ui| officer_row_tools(ui, &row, &mut table_response, t));
+                    table_row.col(|ui| officer_row_cell(ui, &row.name));
+                    table_row.col(|ui| officer_row_cell(ui, &row.gender));
+                    table_row.col(|ui| officer_row_cell(ui, row.age.to_string()));
+                    table_row.col(|ui| officer_row_cell(ui, &row.faction_name));
+                    table_row.col(|ui| officer_row_cell(ui, &row.city_name));
+                    table_row.col(|ui| officer_row_cell(ui, &row.office_name));
+                    table_row.col(|ui| officer_row_cell(ui, row.salary.to_string()));
+                    table_row.col(|ui| officer_row_cell(ui, &row.status));
+                    table_row.col(|ui| officer_row_cell(ui, row.loyalty.to_string()));
+                    table_row.col(|ui| officer_row_cell(ui, row.leadership.to_string()));
+                    table_row.col(|ui| officer_row_cell(ui, row.strength.to_string()));
+                    table_row.col(|ui| officer_row_cell(ui, row.intelligence.to_string()));
+                    table_row.col(|ui| officer_row_cell(ui, row.politics.to_string()));
+                    table_row.col(|ui| officer_row_cell(ui, row.charm.to_string()));
+
+                    let row_response = table_row.response();
+                    if row_response.clicked() || row_response.secondary_clicked() {
+                        table_response.selected_officer_id = Some(row.id.clone());
+                    }
+                    if options.editable || options.retainer_faction_id.is_some() {
+                        row_response.context_menu(|ui| {
+                            officer_row_context_menu(
+                                ui,
+                                game,
+                                &row,
+                                &mut table_response,
+                                options.editable,
+                                options.retainer_faction_id,
+                                t,
+                            );
+                        });
                     }
                 });
+            }
         });
     table_response
 }
@@ -3216,9 +3269,19 @@ pub(super) struct OfficerBrowserTableResponse {
     pub(super) dismiss_officer_id: Option<OfficerId>,
 }
 
-fn officer_row_tools(context: &mut OfficerRowCellContext<'_, '_>, row: &OfficerBrowserRow) {
-    let response = context
-        .ui
+fn officer_table_header_cell(row: &mut egui_extras::TableRow<'_, '_>, text: String) {
+    row.col(|ui| {
+        ui.strong(text);
+    });
+}
+
+fn officer_row_tools(
+    ui: &mut egui::Ui,
+    row: &OfficerBrowserRow,
+    table_response: &mut OfficerBrowserTableResponse,
+    t: &Translator,
+) {
+    let response = ui
         .add_sized(
             [28.0, 24.0],
             egui::Button::new(
@@ -3227,94 +3290,82 @@ fn officer_row_tools(context: &mut OfficerRowCellContext<'_, '_>, row: &OfficerB
                     .color(war_gold()),
             ),
         )
-        .on_hover_text(context.t.text("officer-action-view"));
+        .on_hover_text(t.text("officer-action-view"));
     if response.clicked() {
-        context.table_response.selected_officer_id = Some(row.id.clone());
-        context.table_response.view_officer_id = Some(row.id.clone());
+        table_response.selected_officer_id = Some(row.id.clone());
+        table_response.view_officer_id = Some(row.id.clone());
     }
 }
 
-fn officer_row_cell(
-    context: &mut OfficerRowCellContext<'_, '_>,
+fn officer_row_cell(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) {
+    ui.add(egui::Label::new(text).truncate());
+}
+
+fn officer_row_context_menu(
+    ui: &mut egui::Ui,
+    game: &GameState,
     row: &OfficerBrowserRow,
-    selected: bool,
-    text: impl Into<egui::WidgetText>,
+    table_response: &mut OfficerBrowserTableResponse,
+    editable: bool,
+    retainer_faction_id: Option<&str>,
+    t: &Translator,
 ) {
-    let response = context.ui.selectable_label(selected, text);
-    if response.clicked() || response.secondary_clicked() {
-        context.table_response.selected_officer_id = Some(row.id.clone());
+    if editable && ui.button(t.text("officer-action-edit")).clicked() {
+        table_response.selected_officer_id = Some(row.id.clone());
+        table_response.edit_officer_id = Some(row.id.clone());
+        ui.close();
     }
-    if context.editable || context.retainer_faction_id.is_some() {
-        response.context_menu(|ui| {
-            if context.editable && ui.button(context.t.text("officer-action-edit")).clicked() {
-                context.table_response.selected_officer_id = Some(row.id.clone());
-                context.table_response.edit_officer_id = Some(row.id.clone());
-                ui.close();
-            }
-            if context.retainer_faction_id.is_some() {
-                ui.menu_button(context.t.text("officer-action-appoint-office"), |ui| {
-                    for spec in official_post_specs() {
-                        let occupant = context.game.officers.values().find(|officer| {
-                            officer.faction_id == row.faction_id
-                                && officer.office_id.as_deref() == Some(spec.id)
-                        });
-                        let label = if let Some(occupant) = occupant {
-                            if occupant.id == row.id {
-                                context.t.text_args(
-                                    "official-post-current",
-                                    &args([
-                                        ("name", spec.name.to_string()),
-                                        ("rank", official_rank_label(spec.rank).to_string()),
-                                    ]),
-                                )
-                            } else {
-                                context.t.text_args(
-                                    "official-post-occupied",
-                                    &args([
-                                        ("name", spec.name.to_string()),
-                                        ("rank", official_rank_label(spec.rank).to_string()),
-                                        ("occupant", occupant.name.clone()),
-                                    ]),
-                                )
-                            }
-                        } else {
-                            context.t.text_args(
-                                "official-post-empty",
-                                &args([
-                                    ("name", spec.name.to_string()),
-                                    ("rank", official_rank_label(spec.rank).to_string()),
-                                ]),
-                            )
-                        };
-                        if ui.button(label).clicked() {
-                            context.table_response.selected_officer_id = Some(row.id.clone());
-                            context.table_response.appoint_officer_id = Some(row.id.clone());
-                            context.table_response.appoint_office_id = Some(spec.id.to_string());
-                            ui.close();
-                        }
-                    }
+    if retainer_faction_id.is_some() {
+        ui.menu_button(t.text("officer-action-appoint-office"), |ui| {
+            for spec in official_post_specs() {
+                let occupant = game.officers.values().find(|officer| {
+                    officer.faction_id == row.faction_id
+                        && officer.office_id.as_deref() == Some(spec.id)
                 });
-                if row.office_name != context.t.text("none")
-                    && ui
-                        .button(context.t.text("officer-action-dismiss-office"))
-                        .clicked()
-                {
-                    context.table_response.selected_officer_id = Some(row.id.clone());
-                    context.table_response.dismiss_officer_id = Some(row.id.clone());
+                let label = if let Some(occupant) = occupant {
+                    if occupant.id == row.id {
+                        t.text_args(
+                            "official-post-current",
+                            &args([
+                                ("name", spec.name.to_string()),
+                                ("rank", official_rank_label(spec.rank).to_string()),
+                            ]),
+                        )
+                    } else {
+                        t.text_args(
+                            "official-post-occupied",
+                            &args([
+                                ("name", spec.name.to_string()),
+                                ("rank", official_rank_label(spec.rank).to_string()),
+                                ("occupant", occupant.name.clone()),
+                            ]),
+                        )
+                    }
+                } else {
+                    t.text_args(
+                        "official-post-empty",
+                        &args([
+                            ("name", spec.name.to_string()),
+                            ("rank", official_rank_label(spec.rank).to_string()),
+                        ]),
+                    )
+                };
+                if ui.button(label).clicked() {
+                    table_response.selected_officer_id = Some(row.id.clone());
+                    table_response.appoint_officer_id = Some(row.id.clone());
+                    table_response.appoint_office_id = Some(spec.id.to_string());
                     ui.close();
                 }
             }
         });
+        if row.office_name != t.text("none")
+            && ui.button(t.text("officer-action-dismiss-office")).clicked()
+        {
+            table_response.selected_officer_id = Some(row.id.clone());
+            table_response.dismiss_officer_id = Some(row.id.clone());
+            ui.close();
+        }
     }
-}
-
-struct OfficerRowCellContext<'ui, 'data> {
-    ui: &'ui mut egui::Ui,
-    game: &'data GameState,
-    table_response: &'ui mut OfficerBrowserTableResponse,
-    editable: bool,
-    retainer_faction_id: Option<&'data str>,
-    t: &'data Translator,
 }
 
 pub(super) fn filtered_officer_rows(
@@ -3647,6 +3698,7 @@ pub(super) fn report_panel(
             if game.reports.is_empty() {
                 ui.label(t.text("report-empty"));
             }
+            let highlight_entities = report_highlight_entities(game);
             for report in game.reports.iter().skip(visible_start) {
                 ui.label(t.text_args(
                     "report-turn-heading",
@@ -3659,16 +3711,158 @@ pub(super) fn report_panel(
                 for entry in &report.entries {
                     match entry.severity {
                         ReportSeverity::Info => {
-                            ui.label(format!("· {}", entry.message));
+                            highlighted_report_label(
+                                ui,
+                                &format!("· {}", entry.message),
+                                &highlight_entities,
+                                war_text(),
+                            );
                         }
                         ReportSeverity::Warning => {
-                            ui.colored_label(egui::Color32::YELLOW, format!("! {}", entry.message));
+                            highlighted_report_label(
+                                ui,
+                                &format!("! {}", entry.message),
+                                &highlight_entities,
+                                war_warning(),
+                            );
                         }
                     }
                 }
                 ui.separator();
             }
         });
+}
+
+fn highlighted_report_label(
+    ui: &mut egui::Ui,
+    text: &str,
+    entities: &[ReportHighlightEntity],
+    base_color: egui::Color32,
+) {
+    ui.label(highlighted_report_job(text, entities, base_color));
+}
+
+fn highlighted_report_job(
+    text: &str,
+    entities: &[ReportHighlightEntity],
+    base_color: egui::Color32,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    for token in tokenize_report_message(text, entities) {
+        let color = match token.kind {
+            Some(ReportHighlightKind::Officer) => war_gold(),
+            Some(ReportHighlightKind::City) => report_city_highlight(),
+            None => base_color,
+        };
+        job.append(&token.text, 0.0, report_text_format(color));
+    }
+    job
+}
+
+fn report_text_format(color: egui::Color32) -> egui::TextFormat {
+    egui::TextFormat {
+        color,
+        ..Default::default()
+    }
+}
+
+fn report_city_highlight() -> egui::Color32 {
+    egui::Color32::from_rgb(132, 184, 207)
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReportHighlightEntity {
+    name: String,
+    kind: ReportHighlightKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReportHighlightKind {
+    Officer,
+    City,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ReportHighlightToken {
+    text: String,
+    kind: Option<ReportHighlightKind>,
+}
+
+fn report_highlight_entities(game: &GameState) -> Vec<ReportHighlightEntity> {
+    let mut seen = BTreeSet::new();
+    let mut entities = Vec::new();
+    for officer in game.officers.values() {
+        if !officer.name.is_empty() && seen.insert(officer.name.clone()) {
+            entities.push(ReportHighlightEntity {
+                name: officer.name.clone(),
+                kind: ReportHighlightKind::Officer,
+            });
+        }
+    }
+    for city in game.cities.values() {
+        if !city.name.is_empty() && seen.insert(city.name.clone()) {
+            entities.push(ReportHighlightEntity {
+                name: city.name.clone(),
+                kind: ReportHighlightKind::City,
+            });
+        }
+    }
+    entities
+}
+
+fn tokenize_report_message(
+    message: &str,
+    entities: &[ReportHighlightEntity],
+) -> Vec<ReportHighlightToken> {
+    if message.is_empty() {
+        return Vec::new();
+    }
+
+    let mut ordered_entities: Vec<_> = entities.iter().collect();
+    ordered_entities.sort_by(|a, b| {
+        b.name
+            .len()
+            .cmp(&a.name.len())
+            .then_with(|| a.name.cmp(&b.name))
+    });
+
+    let mut tokens = Vec::new();
+    let mut plain_start = 0;
+    let mut index = 0;
+
+    while index < message.len() {
+        let rest = &message[index..];
+        if let Some(entity) = ordered_entities
+            .iter()
+            .find(|entity| rest.starts_with(entity.name.as_str()))
+        {
+            if plain_start < index {
+                tokens.push(ReportHighlightToken {
+                    text: message[plain_start..index].to_string(),
+                    kind: None,
+                });
+            }
+            tokens.push(ReportHighlightToken {
+                text: entity.name.clone(),
+                kind: Some(entity.kind),
+            });
+            index += entity.name.len();
+            plain_start = index;
+        } else if let Some(ch) = rest.chars().next() {
+            index += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+
+    if plain_start < message.len() {
+        tokens.push(ReportHighlightToken {
+            text: message[plain_start..].to_string(),
+            kind: None,
+        });
+    }
+
+    tokens
 }
 
 #[cfg(test)]
@@ -3700,6 +3894,105 @@ mod tests {
 
     fn zh() -> Translator {
         Translator::new(UiLanguage::SimplifiedChinese)
+    }
+
+    #[test]
+    fn report_highlight_tokenizer_matches_officers_and_cities() {
+        let entities = vec![
+            ReportHighlightEntity {
+                name: "关羽".to_string(),
+                kind: ReportHighlightKind::Officer,
+            },
+            ReportHighlightEntity {
+                name: "平原".to_string(),
+                kind: ReportHighlightKind::City,
+            },
+        ];
+
+        let tokens = tokenize_report_message("关羽 进驻 平原", &entities);
+
+        assert_eq!(
+            tokens,
+            vec![
+                ReportHighlightToken {
+                    text: "关羽".to_string(),
+                    kind: Some(ReportHighlightKind::Officer),
+                },
+                ReportHighlightToken {
+                    text: " 进驻 ".to_string(),
+                    kind: None,
+                },
+                ReportHighlightToken {
+                    text: "平原".to_string(),
+                    kind: Some(ReportHighlightKind::City),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn report_highlight_tokenizer_prefers_longest_match() {
+        let entities = vec![
+            ReportHighlightEntity {
+                name: "关羽".to_string(),
+                kind: ReportHighlightKind::Officer,
+            },
+            ReportHighlightEntity {
+                name: "关羽改".to_string(),
+                kind: ReportHighlightKind::Officer,
+            },
+        ];
+
+        let tokens = tokenize_report_message("关羽改 完成训练", &entities);
+
+        assert_eq!(
+            tokens,
+            vec![
+                ReportHighlightToken {
+                    text: "关羽改".to_string(),
+                    kind: Some(ReportHighlightKind::Officer),
+                },
+                ReportHighlightToken {
+                    text: " 完成训练".to_string(),
+                    kind: None,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn report_highlight_tokenizer_keeps_unmatched_text_plain() {
+        let entities = vec![ReportHighlightEntity {
+            name: "关羽".to_string(),
+            kind: ReportHighlightKind::Officer,
+        }];
+
+        let tokens = tokenize_report_message("本月无事", &entities);
+
+        assert_eq!(
+            tokens,
+            vec![ReportHighlightToken {
+                text: "本月无事".to_string(),
+                kind: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn report_highlight_entities_collect_officers_before_cities() {
+        let state = ui_state_with_game();
+        let game = state.game.as_ref().unwrap();
+
+        let entities = report_highlight_entities(game);
+
+        assert!(entities.iter().any(|entity| {
+            entity.name == "刘备" && entity.kind == ReportHighlightKind::Officer
+        }));
+        assert!(
+            entities.iter().any(|entity| {
+                entity.name == "平原" && entity.kind == ReportHighlightKind::City
+            })
+        );
     }
 
     #[test]

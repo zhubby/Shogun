@@ -102,23 +102,44 @@ pub(super) fn modal_title_bar(ui: &mut egui::Ui, t: &Translator, title: &str) ->
             ui.set_width(row_width);
             ui.heading(egui::RichText::new(title).color(war_gold()));
             ui.add_space((ui.available_width() - button_size.x).max(0.0));
-            close_clicked = close_icon_button(ui, t, button_size).clicked();
+            close_clicked = square_icon_button(
+                ui,
+                egui_phosphor::regular::X_SQUARE,
+                t.text("common-close"),
+                button_size,
+            )
+            .clicked();
         },
     );
 
     close_clicked
 }
 
-fn close_icon_button(ui: &mut egui::Ui, t: &Translator, size: egui::Vec2) -> egui::Response {
+pub(super) fn collapse_icon_button(
+    ui: &mut egui::Ui,
+    t: &Translator,
+    expanded: bool,
+) -> egui::Response {
+    let (icon, tooltip) = if expanded {
+        (egui_phosphor::regular::CARET_UP, t.text("common-collapse"))
+    } else {
+        (egui_phosphor::regular::CARET_DOWN, t.text("common-expand"))
+    };
+
+    square_icon_button(ui, icon, tooltip, egui::vec2(30.0, 30.0))
+}
+
+fn square_icon_button(
+    ui: &mut egui::Ui,
+    icon: &str,
+    tooltip: String,
+    size: egui::Vec2,
+) -> egui::Response {
     ui.add_sized(
         size,
-        egui::Button::new(
-            egui::RichText::new(egui_phosphor::regular::X)
-                .size(18.0)
-                .color(war_gold()),
-        ),
+        egui::Button::new(egui::RichText::new(icon).size(18.0).color(war_gold())),
     )
-    .on_hover_text(t.text("common-close"))
+    .on_hover_text(tooltip)
 }
 
 pub(super) fn draw_strategy_map_background(painter: &egui::Painter, rect: egui::Rect) {

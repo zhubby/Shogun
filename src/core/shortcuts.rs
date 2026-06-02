@@ -1,3 +1,4 @@
+use crate::game::{dismiss_event_popup, popup_event_id};
 use bevy::prelude::{ButtonInput, KeyCode};
 use bevy_egui::egui;
 use serde::{Deserialize, Serialize};
@@ -615,6 +616,16 @@ pub(super) fn close_top_panel(ui_state: &mut GameUiState) -> bool {
     }
     if ui_state.screen != Screen::InGame {
         return false;
+    }
+    if let Some(event_id) = ui_state
+        .game
+        .as_ref()
+        .and_then(|game| popup_event_id(game).map(str::to_string))
+    {
+        if let Some(game) = &mut ui_state.game {
+            let _ = dismiss_event_popup(game, &event_id);
+            return true;
+        }
     }
     if ui_state.events_open {
         ui_state.events_open = false;
