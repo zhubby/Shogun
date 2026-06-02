@@ -167,6 +167,24 @@ pub enum FacilityKind {
     Medical,
 }
 
+pub fn facility_kind_name(kind: FacilityKind) -> &'static str {
+    match kind {
+        FacilityKind::Farmland => "农田",
+        FacilityKind::Irrigation => "水利",
+        FacilityKind::Market => "市场",
+        FacilityKind::TradeDepot => "商栈",
+        FacilityKind::Workshop => "工坊",
+        FacilityKind::Quarry => "采石场",
+        FacilityKind::Barracks => "兵营",
+        FacilityKind::DrillGround => "校场",
+        FacilityKind::Walls => "城墙",
+        FacilityKind::Administration => "官署",
+        FacilityKind::Granary => "粮仓",
+        FacilityKind::RelayStation => "驿站",
+        FacilityKind::Medical => "医馆",
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CityFacility {
     pub kind: FacilityKind,

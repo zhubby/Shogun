@@ -1,6 +1,7 @@
 use super::city::{
     CITY_MAX_LEVEL, City, CityEconomyEffects, FACILITY_MAX_LEVEL, FacilityKind, ResourceCost,
-    city_core_upgrade_cost, facility_upgrade_cost, project_city_monthly_change_with_effects,
+    city_core_upgrade_cost, facility_kind_name, facility_upgrade_cost,
+    project_city_monthly_change_with_effects,
 };
 use super::events::*;
 use super::history_db::{HistoricalCatalog, LifeEventKind};
@@ -901,8 +902,7 @@ fn apply_build_facility(
     let city_name = city.name.clone();
     let facility_name = facility_kind_name(kind);
     report.info(format!(
-        "{} 主持建设，{} 的 {:?} 达到 {} 级",
-        officer_name, city_name, kind, target_level
+        "{officer_name} 主持建设，{city_name} 的 {facility_name} 达到 {target_level} 级"
     ));
     if command.issuer_faction_id == state.player_faction_id {
         record_game_event(
@@ -2686,24 +2686,6 @@ pub fn recruit_cost_for_kind(kind: TroopKind, amount: u32) -> ResourceCost {
         gold: (((amount / 10) as i32 + 30) * multiplier) / 100,
         food: (((amount / 4) as i32 + 80) * multiplier) / 100,
         materials: 0,
-    }
-}
-
-fn facility_kind_name(kind: FacilityKind) -> &'static str {
-    match kind {
-        FacilityKind::Farmland => "农田",
-        FacilityKind::Irrigation => "水利",
-        FacilityKind::Market => "市场",
-        FacilityKind::TradeDepot => "商栈",
-        FacilityKind::Workshop => "工坊",
-        FacilityKind::Quarry => "采石场",
-        FacilityKind::Barracks => "兵营",
-        FacilityKind::DrillGround => "校场",
-        FacilityKind::Walls => "城墙",
-        FacilityKind::Administration => "官署",
-        FacilityKind::Granary => "粮仓",
-        FacilityKind::RelayStation => "驿站",
-        FacilityKind::Medical => "医馆",
     }
 }
 

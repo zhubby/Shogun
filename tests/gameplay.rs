@@ -139,6 +139,15 @@ fn resolve_empty_turn_with_history(
     resolve_command_batch_with_history(game, Vec::new(), catalog)
 }
 
+fn report_messages(report: &TurnReport) -> String {
+    report
+        .entries
+        .iter()
+        .map(|entry| entry.message.as_str())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn resolve_pending_dynamic_defaults(game: &mut GameState) {
     let pending = game
         .events
@@ -497,7 +506,8 @@ fn build_facility_adds_or_upgrades_facility() {
     )
     .unwrap();
     let commands = game.pending_commands.clone();
-    resolve_command_batch(&mut game, commands);
+    let report = resolve_command_batch(&mut game, commands);
+    let messages = report_messages(&report);
 
     assert_eq!(
         game.cities["pingyuan"]
@@ -505,9 +515,22 @@ fn build_facility_adds_or_upgrades_facility() {
             .map(|facility| facility.level),
         Some(1)
     );
+    assert!(messages.contains("市场"));
+    assert!(!messages.contains("Market"));
     assert!(game.events.iter().any(
         |event| event.kind == GameEventKind::CityDevelopment && event.summary.contains("市场")
     ));
+    assert_eq!(
+        command(
+            "pingyuan",
+            "liu_bei",
+            CommandKind::BuildFacility {
+                kind: FacilityKind::Barracks,
+            },
+        )
+        .summary(),
+        "建设设施 兵营"
+    );
 
     queue_player_command(
         &mut game,
@@ -521,7 +544,8 @@ fn build_facility_adds_or_upgrades_facility() {
     )
     .unwrap();
     let commands = game.pending_commands.clone();
-    resolve_command_batch(&mut game, commands);
+    let report = resolve_command_batch(&mut game, commands);
+    let messages = report_messages(&report);
 
     assert_eq!(
         game.cities["pingyuan"]
@@ -529,6 +553,8 @@ fn build_facility_adds_or_upgrades_facility() {
             .map(|facility| facility.level),
         Some(2)
     );
+    assert!(messages.contains("农田"));
+    assert!(!messages.contains("Farmland"));
 }
 
 #[test]

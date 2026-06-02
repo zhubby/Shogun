@@ -1,4 +1,4 @@
-use super::city::{City, FacilityKind};
+use super::city::{City, FacilityKind, facility_kind_name};
 use super::events::GameEvent;
 use super::ids::{CityId, FactionId, OfficerId};
 use super::officer::{Officer, OfficerTagDefinition};
@@ -525,7 +525,9 @@ impl Command {
         match &self.kind {
             CommandKind::Develop { focus } => format!("开发 {focus:?}"),
             CommandKind::UpgradeCityCore => "升级城镇核心".to_string(),
-            CommandKind::BuildFacility { kind } => format!("建设设施 {kind:?}"),
+            CommandKind::BuildFacility { kind } => {
+                format!("建设设施 {}", facility_kind_name(*kind))
+            }
             CommandKind::Recruit { kind, amount } => format!("征兵 {kind:?} {amount}"),
             CommandKind::Train => "训练".to_string(),
             CommandKind::AppointGovernor { target_officer_id } => {
