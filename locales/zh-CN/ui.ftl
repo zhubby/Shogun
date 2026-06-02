@@ -326,6 +326,7 @@ faction-detail-section-officers = 武将
 faction-detail-section-diplomacy = 外交
 faction-detail-section-technology = 科技
 faction-detail-section-actions = 当前行动
+faction-detail-technology-progress = 进度
 faction-detail-id = ID
 faction-detail-status = 状态
 faction-detail-status-alive = 存活

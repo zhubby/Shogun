@@ -326,6 +326,7 @@ faction-detail-section-officers = Officers
 faction-detail-section-diplomacy = Diplomacy
 faction-detail-section-technology = Technology
 faction-detail-section-actions = Current Actions
+faction-detail-technology-progress = Progress
 faction-detail-id = ID
 faction-detail-status = Status
 faction-detail-status-alive = Active

@@ -458,7 +458,7 @@ fn faction_technology_section(ui: &mut egui::Ui, snapshot: &FactionDetailSnapsho
         );
         detail_kv(
             ui,
-            &t.text("technology-progress"),
+            &t.text("faction-detail-technology-progress"),
             snapshot.technology.progress_label.clone(),
         );
         detail_kv(
