@@ -758,27 +758,12 @@ pub struct ResearchStartOutcome {
     pub resumed: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum TechnologyError {
+    #[error("{0} 已完成")]
     Completed(String),
+    #[error("需要先完成 {0}")]
     MissingPrerequisite(String),
+    #[error("金钱不足，太学研习立项需要 {required} 金，当前 {available} 金")]
     InsufficientGold { required: i32, available: i32 },
 }
-
-impl std::fmt::Display for TechnologyError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TechnologyError::Completed(name) => write!(f, "{name} 已完成"),
-            TechnologyError::MissingPrerequisite(name) => write!(f, "需要先完成 {name}"),
-            TechnologyError::InsufficientGold {
-                required,
-                available,
-            } => write!(
-                f,
-                "金钱不足，太学研习立项需要 {required} 金，当前 {available} 金"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for TechnologyError {}

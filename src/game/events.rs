@@ -1,7 +1,6 @@
 use super::ids::{CityId, FactionId, OfficerId};
 use super::model::{GameState, TroopPool};
 use serde::{Deserialize, Serialize};
-use std::fmt;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct GameEvent {
@@ -257,33 +256,17 @@ pub struct GameEventDraft {
     pub resolution: EventResolution,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum EventError {
+    #[error("事件 {0} 不存在")]
     NotFound(String),
+    #[error("事件 {0} 不需要决策")]
     NoDecisionRequired(String),
+    #[error("事件 {event_id} 没有选项 {choice_id}")]
     InvalidChoice { event_id: String, choice_id: String },
+    #[error("{0}")]
     RequirementsNotMet(String),
 }
-
-impl fmt::Display for EventError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            EventError::NotFound(event_id) => write!(f, "事件 {event_id} 不存在"),
-            EventError::NoDecisionRequired(event_id) => {
-                write!(f, "事件 {event_id} 不需要决策")
-            }
-            EventError::InvalidChoice {
-                event_id,
-                choice_id,
-            } => {
-                write!(f, "事件 {event_id} 没有选项 {choice_id}")
-            }
-            EventError::RequirementsNotMet(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl std::error::Error for EventError {}
 
 pub fn record_game_event(state: &mut GameState, draft: GameEventDraft) -> String {
     record_game_event_with_metadata(state, draft, None, None)

@@ -440,24 +440,15 @@ impl GameSettingsLoadMessage {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub(super) enum GameSettingsError {
-    Io(std::io::Error),
-    Json(serde_json::Error),
+    #[error("设置 IO 失败: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("设置 JSON 失败: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("{0}")]
     Invalid(String),
 }
-
-impl std::fmt::Display for GameSettingsError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Io(error) => write!(f, "设置 IO 失败: {error}"),
-            Self::Json(error) => write!(f, "设置 JSON 失败: {error}"),
-            Self::Invalid(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl std::error::Error for GameSettingsError {}
 
 pub(super) fn settings_modal(ctx: &egui::Context, ui_state: &mut GameUiState) -> bool {
     let t = Translator::new(ui_state.pending_settings.general.ui_language);

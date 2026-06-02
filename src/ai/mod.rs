@@ -6,87 +6,40 @@ pub use openai::*;
 
 use reqwest::StatusCode;
 use serde_json::Value;
-use std::error::Error;
-use std::fmt::{self, Display, Formatter};
 
 pub type AiApiResult<T> = Result<T, AiApiError>;
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum AiApiError {
-    MissingEnvironmentVariable {
-        name: &'static str,
-    },
+    #[error("missing required environment variable {name}")]
+    MissingEnvironmentVariable { name: &'static str },
+    #[error("invalid AI API config: {0}")]
     InvalidConfig(String),
+    #[error("invalid AI API request: {0}")]
     Validation(String),
-    Http(reqwest::Error),
-    Json(serde_json::Error),
-    Io(std::io::Error),
+    #[error("AI API HTTP request failed: {0}")]
+    Http(#[from] reqwest::Error),
+    #[error("AI API JSON handling failed: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("AI API file handling failed: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("AI API returned {status}{}: {message}", api_error_code_suffix(code))]
     Api {
         status: StatusCode,
         code: Option<String>,
         message: String,
         body: Value,
     },
+    #[error("AI API stream failed: {0}")]
     Stream(String),
+    #[error("AI API operation timed out: {0}")]
     Timeout(String),
 }
 
-impl Display for AiApiError {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::MissingEnvironmentVariable { name } => {
-                write!(formatter, "missing required environment variable {name}")
-            }
-            Self::InvalidConfig(message) => write!(formatter, "invalid AI API config: {message}"),
-            Self::Validation(message) => write!(formatter, "invalid AI API request: {message}"),
-            Self::Http(error) => write!(formatter, "AI API HTTP request failed: {error}"),
-            Self::Json(error) => write!(formatter, "AI API JSON handling failed: {error}"),
-            Self::Io(error) => write!(formatter, "AI API file handling failed: {error}"),
-            Self::Api {
-                status,
-                code,
-                message,
-                ..
-            } => {
-                if let Some(code) = code {
-                    write!(formatter, "AI API returned {status} ({code}): {message}")
-                } else {
-                    write!(formatter, "AI API returned {status}: {message}")
-                }
-            }
-            Self::Stream(message) => write!(formatter, "AI API stream failed: {message}"),
-            Self::Timeout(message) => write!(formatter, "AI API operation timed out: {message}"),
-        }
-    }
-}
-
-impl Error for AiApiError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match self {
-            Self::Http(error) => Some(error),
-            Self::Json(error) => Some(error),
-            Self::Io(error) => Some(error),
-            _ => None,
-        }
-    }
-}
-
-impl From<reqwest::Error> for AiApiError {
-    fn from(error: reqwest::Error) -> Self {
-        Self::Http(error)
-    }
-}
-
-impl From<serde_json::Error> for AiApiError {
-    fn from(error: serde_json::Error) -> Self {
-        Self::Json(error)
-    }
-}
-
-impl From<std::io::Error> for AiApiError {
-    fn from(error: std::io::Error) -> Self {
-        Self::Io(error)
-    }
+fn api_error_code_suffix(code: &Option<String>) -> String {
+    code.as_ref()
+        .map(|code| format!(" ({code})"))
+        .unwrap_or_default()
 }
 
 pub(crate) async fn parse_json_response<T: serde::de::DeserializeOwned>(

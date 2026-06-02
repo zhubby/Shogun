@@ -1616,25 +1616,16 @@ fn parse_dynamic_effect_kind(value: &str) -> Result<DynamicEventEffectKind, Hist
     })
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum HistoryDbError {
-    Io(std::io::Error),
-    Runtime(std::io::Error),
-    Sqlx(sqlx::Error),
-    Migrate(sqlx::migrate::MigrateError),
+    #[error("历史资料库 IO 失败: {0}")]
+    Io(#[source] std::io::Error),
+    #[error("历史资料库运行时初始化失败: {0}")]
+    Runtime(#[source] std::io::Error),
+    #[error("历史资料库 SQLx 失败: {0}")]
+    Sqlx(#[from] sqlx::Error),
+    #[error("历史资料库迁移失败: {0}")]
+    Migrate(#[from] sqlx::migrate::MigrateError),
+    #[error("历史资料库数据无效: {0}")]
     Invalid(String),
 }
-
-impl std::fmt::Display for HistoryDbError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            HistoryDbError::Io(error) => write!(f, "历史资料库 IO 失败: {error}"),
-            HistoryDbError::Runtime(error) => write!(f, "历史资料库运行时初始化失败: {error}"),
-            HistoryDbError::Sqlx(error) => write!(f, "历史资料库 SQLx 失败: {error}"),
-            HistoryDbError::Migrate(error) => write!(f, "历史资料库迁移失败: {error}"),
-            HistoryDbError::Invalid(message) => write!(f, "历史资料库数据无效: {message}"),
-        }
-    }
-}
-
-impl std::error::Error for HistoryDbError {}

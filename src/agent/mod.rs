@@ -5,7 +5,6 @@ use crate::ai::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
-use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -587,40 +586,25 @@ fn now_unix() -> u64 {
         .as_secs()
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum AgentError {
-    AiApi(AiApiError),
+    #[error("{0}")]
+    AiApi(#[from] AiApiError),
+    #[error("{0}")]
     Provider(String),
-    Runtime(std::io::Error),
+    #[error("agent runtime failed: {0}")]
+    Runtime(#[source] std::io::Error),
+    #[error("invalid agent response: {0}")]
     InvalidResponse(String),
+    #[error("invalid tool arguments: {0}")]
     InvalidToolArguments(String),
+    #[error("agent did not call a tool: {0}")]
     NoToolCall(String),
-    CheckpointIo(std::io::Error),
-    CheckpointJson(serde_json::Error),
+    #[error("agent checkpoint IO failed: {0}")]
+    CheckpointIo(#[source] std::io::Error),
+    #[error("agent checkpoint JSON failed: {0}")]
+    CheckpointJson(#[from] serde_json::Error),
 }
-
-impl fmt::Display for AgentError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::AiApi(error) => write!(formatter, "{error}"),
-            Self::Provider(message) => write!(formatter, "{message}"),
-            Self::Runtime(error) => write!(formatter, "agent runtime failed: {error}"),
-            Self::InvalidResponse(message) => {
-                write!(formatter, "invalid agent response: {message}")
-            }
-            Self::InvalidToolArguments(message) => {
-                write!(formatter, "invalid tool arguments: {message}")
-            }
-            Self::NoToolCall(message) => write!(formatter, "agent did not call a tool: {message}"),
-            Self::CheckpointIo(error) => write!(formatter, "agent checkpoint IO failed: {error}"),
-            Self::CheckpointJson(error) => {
-                write!(formatter, "agent checkpoint JSON failed: {error}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for AgentError {}
 
 pub fn default_checkpoint_dir(base_dir: impl AsRef<Path>) -> PathBuf {
     base_dir.as_ref().join("agent_checkpoints")

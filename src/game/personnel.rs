@@ -11,7 +11,6 @@ use super::officer::{
     Officer, OfficerGender, OfficerRelationshipKind, OfficerStats, OfficerStatus,
 };
 use std::collections::BTreeSet;
-use std::fmt;
 
 pub const ADULT_AGE: u32 = 18;
 const BIRTH_WIFE_MIN_AGE: u32 = 18;
@@ -107,24 +106,15 @@ impl OfficerGenerationProvider for RuleBasedChildGenerator {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PersonnelError {
+    #[error("势力 {0} 不存在")]
     FactionNotFound(String),
+    #[error("武将 {0} 不存在")]
     OfficerNotFound(String),
+    #[error("{0}")]
     Invalid(String),
 }
-
-impl fmt::Display for PersonnelError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::FactionNotFound(faction_id) => write!(f, "势力 {faction_id} 不存在"),
-            Self::OfficerNotFound(officer_id) => write!(f, "武将 {officer_id} 不存在"),
-            Self::Invalid(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl std::error::Error for PersonnelError {}
 
 pub fn normalize_personnel_state(state: &mut GameState) {
     for officer in state.officers.values_mut() {

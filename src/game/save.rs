@@ -240,28 +240,17 @@ struct SaveEnvelope {
     state: GameState,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum SaveError {
-    Io(std::io::Error),
-    Json(serde_json::Error),
+    #[error("存档 IO 失败: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("存档 JSON 失败: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("非法存档槽位: {0}")]
     InvalidSlotId(String),
+    #[error("存档版本不匹配: 需要 {expected}, 实际 {found}")]
     Version { expected: u32, found: u32 },
 }
-
-impl std::fmt::Display for SaveError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SaveError::Io(error) => write!(f, "存档 IO 失败: {error}"),
-            SaveError::Json(error) => write!(f, "存档 JSON 失败: {error}"),
-            SaveError::InvalidSlotId(slot_id) => write!(f, "非法存档槽位: {slot_id}"),
-            SaveError::Version { expected, found } => {
-                write!(f, "存档版本不匹配: 需要 {expected}, 实际 {found}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for SaveError {}
 
 fn validate_slot_id(slot_id: &str) -> Result<(), SaveError> {
     let valid = !slot_id.is_empty()

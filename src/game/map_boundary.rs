@@ -204,24 +204,15 @@ pub struct TerritoryCell {
     pub points: Vec<MapPosition>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum MapBoundaryError {
-    Io(std::io::Error),
-    Parse(serde_json::Error),
+    #[error("读取地图边界失败: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("解析地图边界失败: {0}")]
+    Parse(#[from] serde_json::Error),
+    #[error("地图边界数据无效: {0}")]
     Invalid(String),
 }
-
-impl std::fmt::Display for MapBoundaryError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            MapBoundaryError::Io(error) => write!(f, "读取地图边界失败: {error}"),
-            MapBoundaryError::Parse(error) => write!(f, "解析地图边界失败: {error}"),
-            MapBoundaryError::Invalid(message) => write!(f, "地图边界数据无效: {message}"),
-        }
-    }
-}
-
-impl std::error::Error for MapBoundaryError {}
 
 #[derive(Deserialize)]
 #[serde(untagged)]

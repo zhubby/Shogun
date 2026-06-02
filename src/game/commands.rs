@@ -2732,17 +2732,8 @@ pub fn travel_months_for_faction(state: &GameState, faction_id: &str, distance_l
         .max(1)
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum CommandError {
+    #[error("{0}")]
     Invalid(String),
 }
-
-impl std::fmt::Display for CommandError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            CommandError::Invalid(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl std::error::Error for CommandError {}
