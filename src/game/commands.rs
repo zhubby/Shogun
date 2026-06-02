@@ -5,6 +5,7 @@ use super::city::{
 use super::events::*;
 use super::history_db::{HistoricalCatalog, LifeEventKind};
 use super::ids::{CityId, FactionId, OfficerId, WILD_FACTION_ID};
+use super::incidents::trigger_dynamic_incidents;
 use super::model::*;
 use super::officer::{
     Officer, OfficerStats, OfficerStatus, OfficialPostEffect, OfficialRank, official_post_spec,
@@ -147,7 +148,9 @@ fn resolve_command_batch_inner(
             generator,
             LifecycleConfig::default(),
         );
-        trigger_monthly_incidents(state);
+        if let Some(catalog) = catalog {
+            trigger_dynamic_incidents(state, catalog, &mut report);
+        }
     }
     append_turn_summary(state, &mut report);
     state.reports.push(report.clone());
@@ -2189,93 +2192,12 @@ fn record_status_change(state: &mut GameState, previous_status: &GameStatus) {
     );
 }
 
-fn trigger_monthly_incidents(state: &mut GameState) {
-    let Some(city) = state
-        .cities
-        .values()
-        .filter(|city| city.faction_id == state.player_faction_id)
-        .filter(|city| !has_pending_famine_for_city(state, &city.id))
-        .find(|city| {
-            city.food < famine_food_threshold(city.population)
-                || deterministic_famine_roll(state, &city.id)
-        })
-        .cloned()
-    else {
-        return;
-    };
-
-    let population_loss = famine_population_loss(city.population);
-    record_game_event(
-        state,
-        GameEventDraft {
-            kind: GameEventKind::Famine,
-            severity: GameEventSeverity::Warning,
-            scope: GameEventScope::Player,
-            title: "饥荒".to_string(),
-            summary: format!("{} 粮食不足，发生饥荒", city.name),
-            detail: format!(
-                "{} 粮食低于维持人口所需，民心动摇。可消耗 120 金赈灾，或放任事态发展。",
-                city.name
-            ),
-            city_id: Some(city.id.clone()),
-            faction_id: Some(city.faction_id.clone()),
-            officer_id: None,
-            resolution: EventResolution::PendingDecision {
-                deadline_turn: state.turn + 1,
-                default_choice_id: "ignore".to_string(),
-                choices: vec![
-                    EventChoice {
-                        id: "relief".to_string(),
-                        label: "开仓赈灾".to_string(),
-                        description: "消耗 120 金安抚灾民，治安 +6。".to_string(),
-                        requirements: EventChoiceRequirements {
-                            city_gold: 120,
-                            ..EventChoiceRequirements::default()
-                        },
-                        effects: EventChoiceEffects {
-                            city_gold: -120,
-                            city_order: 6,
-                            ..EventChoiceEffects::default()
-                        },
-                    },
-                    EventChoice {
-                        id: "ignore".to_string(),
-                        label: "放任不管".to_string(),
-                        description: format!("不消耗资源，人口 -{population_loss}，治安 -10。"),
-                        requirements: EventChoiceRequirements::default(),
-                        effects: EventChoiceEffects {
-                            city_order: -10,
-                            city_population: -(population_loss as i32),
-                            ..EventChoiceEffects::default()
-                        },
-                    },
-                ],
-            },
-        },
-    );
-}
-
-fn famine_food_threshold(population: u32) -> i32 {
-    (population / 200).min(i32::MAX as u32) as i32
-}
-
-fn deterministic_famine_roll(state: &GameState, city_id: &str) -> bool {
-    let city_seed = city_id
-        .bytes()
-        .fold(0_u32, |acc, byte| acc.wrapping_add(u32::from(byte)));
-    (state.turn + city_seed + 3).is_multiple_of(6)
-}
-
 fn deterministic_index(state: &GameState, turn: u32, key: &str, salt: &str, len: usize) -> usize {
     deterministic_index_seed(&format!("{}:{turn}", state.scenario_id), key, salt, len)
 }
 
 fn deterministic_percent(state: &GameState, turn: u32, key: &str, salt: &str) -> u32 {
     deterministic_percent_seed(&format!("{}:{turn}", state.scenario_id), key, salt)
-}
-
-fn famine_population_loss(population: u32) -> u32 {
-    (population / 100).clamp(100, 1_000)
 }
 
 fn advance_officer_recruitments(state: &mut GameState, report: &mut TurnReport) {

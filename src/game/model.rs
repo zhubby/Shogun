@@ -36,6 +36,8 @@ pub struct GameState {
     #[serde(default)]
     pub next_event_sequence: u64,
     #[serde(default)]
+    pub dynamic_event_cooldowns: BTreeMap<String, u32>,
+    #[serde(default)]
     pub marriages: Vec<Marriage>,
     #[serde(default)]
     pub family_relationships: Vec<FamilyRelationship>,

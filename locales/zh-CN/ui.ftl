@@ -569,6 +569,12 @@ event-kind-historical-life = 履历
 event-kind-officer-lifecycle = 人物
 event-kind-succession = 继承
 event-kind-famine = 灾害
+event-kind-natural-disaster = 天灾
+event-kind-public-order = 治安
+event-kind-economy = 经济
+event-kind-military = 军务
+event-kind-diplomacy = 外交
+event-kind-opportunity = 机遇
 event-kind-game-status = 终局
 
 shrine-title = 宗庙

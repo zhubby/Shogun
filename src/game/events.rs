@@ -1,5 +1,5 @@
 use super::ids::{CityId, FactionId, OfficerId};
-use super::model::GameState;
+use super::model::{GameState, TroopPool};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -21,7 +21,11 @@ pub struct GameEvent {
     #[serde(default)]
     pub faction_id: Option<FactionId>,
     #[serde(default)]
+    pub related_faction_id: Option<FactionId>,
+    #[serde(default)]
     pub officer_id: Option<OfficerId>,
+    #[serde(default)]
+    pub template_id: Option<String>,
     #[serde(default)]
     pub viewed: bool,
     #[serde(default = "default_popup_pending")]
@@ -44,6 +48,12 @@ pub enum GameEventKind {
     OfficerLifecycle,
     Succession,
     Famine,
+    NaturalDisaster,
+    PublicOrder,
+    Economy,
+    Military,
+    Diplomacy,
+    Opportunity,
     GameStatus,
 }
 
@@ -103,6 +113,8 @@ pub struct EventChoiceRequirements {
     pub city_food: i32,
     #[serde(default)]
     pub city_materials: i32,
+    #[serde(default)]
+    pub dynamic: Vec<DynamicEventRequirement>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -118,7 +130,117 @@ pub struct EventChoiceEffects {
     #[serde(default)]
     pub city_population: i32,
     #[serde(default)]
+    pub dynamic: Vec<DynamicEventEffect>,
+    #[serde(default)]
     pub set_faction_ruler_id: Option<super::ids::OfficerId>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DynamicEventRequirement {
+    pub kind: DynamicEventRequirementKind,
+    pub amount: i32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DynamicEventRequirementKind {
+    CityGold,
+    CityFood,
+    CityMaterials,
+    CityTroops,
+    CityOrder,
+    CityPopulation,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DynamicEventEffect {
+    pub kind: DynamicEventEffectKind,
+    pub amount: i32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DynamicEventEffectKind {
+    CityGold,
+    CityFood,
+    CityMaterials,
+    CityOrder,
+    CityPopulation,
+    CityPopulationPercent,
+    CityTraining,
+    CityAgriculture,
+    CityCommerce,
+    CityDefense,
+    CityTroops,
+    CityTroopsPercent,
+    CityWoundedTroops,
+    DiplomaticScore,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DynamicEventTemplate {
+    pub id: String,
+    pub kind: GameEventKind,
+    pub severity: GameEventSeverity,
+    pub scope: GameEventScope,
+    pub target_scope: DynamicEventTargetScope,
+    pub base_weight: u32,
+    pub target_cooldown_turns: u32,
+    pub deadline_turns: u32,
+    pub enabled: bool,
+    pub title: String,
+    pub summary: String,
+    pub detail: String,
+    pub conditions: Vec<DynamicEventCondition>,
+    pub weight_modifiers: Vec<DynamicEventWeightModifier>,
+    pub choices: Vec<DynamicEventChoice>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DynamicEventTargetScope {
+    PlayerCity,
+    AiCity,
+    AnyCity,
+    BorderCity,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DynamicEventCondition {
+    pub kind: DynamicEventConditionKind,
+    pub min_value: Option<i32>,
+    pub max_value: Option<i32>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DynamicEventConditionKind {
+    CityFoodBelowPopulationThreshold,
+    CityFoodAtLeast,
+    CityOrderAtMost,
+    CityOrderAtLeast,
+    CityPopulationAtLeast,
+    CityTroopsAtLeast,
+    CityDefenseAtLeast,
+    CityTrainingAtMost,
+    CityAgricultureAtLeast,
+    CityCommerceAtLeast,
+    MonthRange,
+    AdjacentEnemy,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DynamicEventWeightModifier {
+    pub kind: DynamicEventConditionKind,
+    pub min_value: Option<i32>,
+    pub max_value: Option<i32>,
+    pub multiplier_percent: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DynamicEventChoice {
+    pub id: String,
+    pub label: String,
+    pub description: String,
+    pub is_default: bool,
+    pub requirements: EventChoiceRequirements,
+    pub effects: EventChoiceEffects,
 }
 
 #[derive(Clone, Debug)]
@@ -164,6 +286,15 @@ impl fmt::Display for EventError {
 impl std::error::Error for EventError {}
 
 pub fn record_game_event(state: &mut GameState, draft: GameEventDraft) -> String {
+    record_game_event_with_metadata(state, draft, None, None)
+}
+
+pub fn record_game_event_with_metadata(
+    state: &mut GameState,
+    draft: GameEventDraft,
+    template_id: Option<String>,
+    related_faction_id: Option<FactionId>,
+) -> String {
     state.next_event_sequence += 1;
     let sequence = state.next_event_sequence;
     let id = format!("event-{sequence}");
@@ -181,7 +312,9 @@ pub fn record_game_event(state: &mut GameState, draft: GameEventDraft) -> String
         detail: draft.detail,
         city_id: draft.city_id,
         faction_id: draft.faction_id,
+        related_faction_id,
         officer_id: draft.officer_id,
+        template_id,
         viewed: false,
         popup_pending: true,
         resolution: draft.resolution,
@@ -271,6 +404,26 @@ pub fn has_pending_famine_for_city(state: &GameState, city_id: &str) -> bool {
     })
 }
 
+pub fn has_pending_dynamic_event_for_city(
+    state: &GameState,
+    template_id: &str,
+    city_id: &str,
+) -> bool {
+    state.events.iter().any(|event| {
+        event.template_id.as_deref() == Some(template_id)
+            && event.city_id.as_deref() == Some(city_id)
+            && matches!(event.resolution, EventResolution::PendingDecision { .. })
+    })
+}
+
+pub fn has_pending_player_dynamic_event(state: &GameState) -> bool {
+    state.events.iter().any(|event| {
+        event.template_id.is_some()
+            && event.scope == GameEventScope::Player
+            && matches!(event.resolution, EventResolution::PendingDecision { .. })
+    })
+}
+
 fn event_mut<'a>(
     state: &'a mut GameState,
     event_id: &str,
@@ -325,26 +478,44 @@ fn apply_choice_effects(
         set_cancelled(state, event_index, "事件缺少目标城池");
         return Ok(());
     };
+    let expected_faction_id = state.events[event_index]
+        .faction_id
+        .clone()
+        .unwrap_or_else(|| state.player_faction_id.clone());
 
     {
         let Some(city) = state.cities.get(&city_id) else {
             set_cancelled(state, event_index, "目标城池已不存在");
             return Ok(());
         };
-        if city.faction_id != state.player_faction_id {
-            set_cancelled(state, event_index, "目标城池已不属玩家");
+        if city.faction_id != expected_faction_id {
+            set_cancelled(state, event_index, "目标城池已不属事件势力");
             return Ok(());
         }
-        if city.gold < choice.requirements.city_gold
-            || city.food < choice.requirements.city_food
-            || city.materials < choice.requirements.city_materials
-        {
+        if !city_meets_choice_requirements(city, &choice.requirements) {
             return Err(EventError::RequirementsNotMet(format!(
                 "{} 资源不足，无法执行 {}",
                 city.name, choice.label
             )));
         }
     }
+
+    let diplomatic_delta: i32 = choice
+        .effects
+        .dynamic
+        .iter()
+        .filter(|effect| effect.kind == DynamicEventEffectKind::DiplomaticScore)
+        .map(|effect| effect.amount)
+        .sum();
+    let related_faction_id = if diplomatic_delta != 0 {
+        let Some(related_faction_id) = state.events[event_index].related_faction_id.clone() else {
+            set_cancelled(state, event_index, "事件缺少相关势力");
+            return Ok(());
+        };
+        Some(related_faction_id)
+    } else {
+        None
+    };
 
     let city = state.cities.get_mut(&city_id).ok_or_else(|| {
         EventError::RequirementsNotMet(format!("事件 {event_id} 的目标城池已不存在"))
@@ -354,7 +525,20 @@ fn apply_choice_effects(
     city.materials += choice.effects.city_materials;
     city.order = apply_i32_to_u8(city.order, choice.effects.city_order, 0, 100);
     city.population = apply_i32_to_u32(city.population, choice.effects.city_population);
+    apply_dynamic_city_effects(
+        city,
+        choice
+            .effects
+            .dynamic
+            .iter()
+            .filter(|effect| effect.kind != DynamicEventEffectKind::DiplomaticScore),
+    );
     city.clamp_fields();
+
+    if let Some(related_faction_id) = related_faction_id {
+        let relation = state.relation_mut(&expected_faction_id, &related_faction_id);
+        relation.score = (i32::from(relation.score) + diplomatic_delta).clamp(-100, 100) as i16;
+    }
 
     let turn = state.turn;
     let label = choice.label.clone();
@@ -449,4 +633,96 @@ fn apply_i32_to_u32(value: u32, delta: i32) -> u32 {
     } else {
         value.saturating_sub(delta.unsigned_abs())
     }
+}
+
+fn city_meets_choice_requirements(
+    city: &super::city::City,
+    requirements: &EventChoiceRequirements,
+) -> bool {
+    if city.gold < requirements.city_gold
+        || city.food < requirements.city_food
+        || city.materials < requirements.city_materials
+    {
+        return false;
+    }
+
+    requirements
+        .dynamic
+        .iter()
+        .all(|requirement| match requirement.kind {
+            DynamicEventRequirementKind::CityGold => city.gold >= requirement.amount,
+            DynamicEventRequirementKind::CityFood => city.food >= requirement.amount,
+            DynamicEventRequirementKind::CityMaterials => city.materials >= requirement.amount,
+            DynamicEventRequirementKind::CityTroops => {
+                city.troops.total() >= requirement.amount.max(0) as u32
+            }
+            DynamicEventRequirementKind::CityOrder => i32::from(city.order) >= requirement.amount,
+            DynamicEventRequirementKind::CityPopulation => {
+                city.population >= requirement.amount.max(0) as u32
+            }
+        })
+}
+
+fn apply_dynamic_city_effects<'a>(
+    city: &mut super::city::City,
+    effects: impl Iterator<Item = &'a DynamicEventEffect>,
+) {
+    for effect in effects {
+        match effect.kind {
+            DynamicEventEffectKind::CityGold => city.gold += effect.amount,
+            DynamicEventEffectKind::CityFood => city.food += effect.amount,
+            DynamicEventEffectKind::CityMaterials => city.materials += effect.amount,
+            DynamicEventEffectKind::CityOrder => {
+                city.order = apply_i32_to_u8(city.order, effect.amount, 0, 100);
+            }
+            DynamicEventEffectKind::CityPopulation => {
+                city.population = apply_i32_to_u32(city.population, effect.amount);
+            }
+            DynamicEventEffectKind::CityPopulationPercent => {
+                let delta = percent_delta(city.population, effect.amount);
+                city.population = apply_i32_to_u32(city.population, delta);
+            }
+            DynamicEventEffectKind::CityTraining => {
+                city.training = apply_i32_to_u8(city.training, effect.amount, 0, 100);
+            }
+            DynamicEventEffectKind::CityAgriculture => {
+                city.agriculture = apply_i32_to_u16(city.agriculture, effect.amount, 0, 999);
+            }
+            DynamicEventEffectKind::CityCommerce => {
+                city.commerce = apply_i32_to_u16(city.commerce, effect.amount, 0, 999);
+            }
+            DynamicEventEffectKind::CityDefense => {
+                city.defense = apply_i32_to_u16(city.defense, effect.amount, 0, 999);
+            }
+            DynamicEventEffectKind::CityTroops => {
+                apply_i32_to_troop_pool(&mut city.troops, effect.amount);
+            }
+            DynamicEventEffectKind::CityTroopsPercent => {
+                let delta = percent_delta(city.troops.total(), effect.amount);
+                apply_i32_to_troop_pool(&mut city.troops, delta);
+            }
+            DynamicEventEffectKind::CityWoundedTroops => {
+                apply_i32_to_troop_pool(&mut city.wounded_troops, effect.amount);
+            }
+            DynamicEventEffectKind::DiplomaticScore => {}
+        }
+    }
+}
+
+fn apply_i32_to_u16(value: u16, delta: i32, min: u16, max: u16) -> u16 {
+    (i32::from(value) + delta).clamp(i32::from(min), i32::from(max)) as u16
+}
+
+fn apply_i32_to_troop_pool(pool: &mut TroopPool, delta: i32) {
+    if delta >= 0 {
+        pool.add_total_preserving_ratio(delta as u32);
+    } else {
+        pool.saturating_sub_pool(pool.loss_pool(delta.unsigned_abs()));
+    }
+}
+
+fn percent_delta(value: u32, percent: i32) -> i32 {
+    let magnitude = (i64::from(value) * i64::from(percent.unsigned_abs()) / 100)
+        .min(i64::from(i32::MAX)) as i32;
+    if percent >= 0 { magnitude } else { -magnitude }
 }

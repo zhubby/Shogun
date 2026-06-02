@@ -838,6 +838,12 @@ fn event_kind_label(kind: &GameEventKind, t: &Translator) -> String {
         GameEventKind::OfficerLifecycle => t.text("event-kind-officer-lifecycle"),
         GameEventKind::Succession => t.text("event-kind-succession"),
         GameEventKind::Famine => t.text("event-kind-famine"),
+        GameEventKind::NaturalDisaster => t.text("event-kind-natural-disaster"),
+        GameEventKind::PublicOrder => t.text("event-kind-public-order"),
+        GameEventKind::Economy => t.text("event-kind-economy"),
+        GameEventKind::Military => t.text("event-kind-military"),
+        GameEventKind::Diplomacy => t.text("event-kind-diplomacy"),
+        GameEventKind::Opportunity => t.text("event-kind-opportunity"),
         GameEventKind::GameStatus => t.text("event-kind-game-status"),
     }
 }

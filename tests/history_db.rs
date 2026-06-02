@@ -67,7 +67,7 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
         let pool = open_pool(&path).await;
         assert_eq!(
             applied_sqlx_migration_versions(&pool).await,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         );
 
         let fk_rows = sqlx::query("PRAGMA foreign_key_check")
@@ -95,6 +95,74 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
         );
         assert_eq!(query_count(&pool, "scenarios").await, 5);
         assert!(query_count(&pool, "officer_life_events").await >= officer_count);
+        assert_eq!(query_count(&pool, "dynamic_event_templates").await, 42);
+        assert_eq!(query_count(&pool, "dynamic_event_choices").await, 84);
+        assert_eq!(
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count
+                 FROM dynamic_event_templates
+                 WHERE polarity = 'Positive'",
+            )
+            .await,
+            21
+        );
+        assert_eq!(
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count
+                 FROM dynamic_event_templates
+                 WHERE polarity = 'Negative'",
+            )
+            .await,
+            21
+        );
+        assert_eq!(
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count
+                 FROM dynamic_event_templates t
+                 WHERE t.enabled = 1
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM dynamic_event_choices c
+                       WHERE c.template_id = t.id
+                         AND c.is_default = 1
+                   )",
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count
+                 FROM dynamic_event_templates t
+                 WHERE t.enabled = 1
+                   AND (
+                       SELECT count(*)
+                       FROM dynamic_event_choices c
+                       WHERE c.template_id = t.id
+                   ) < 2",
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            query_count_sql(
+                &pool,
+                "SELECT count(*) AS count
+                 FROM dynamic_event_templates t
+                 WHERE t.enabled = 1
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM dynamic_event_choice_effects e
+                       WHERE e.template_id = t.id
+                   )",
+            )
+            .await,
+            0
+        );
         assert_eq!(
             query_count_sql(
                 &pool,
@@ -285,6 +353,12 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
             "idx_officer_tags_officer",
             "idx_officer_tag_definitions_category",
             "idx_cities_province",
+            "idx_dynamic_event_templates_enabled",
+            "idx_dynamic_event_conditions_template",
+            "idx_dynamic_event_weight_modifiers_template",
+            "idx_dynamic_event_choices_template",
+            "idx_dynamic_event_choice_requirements_choice",
+            "idx_dynamic_event_choice_effects_choice",
         ] {
             assert!(indexes.contains(index), "missing index {index}");
         }
@@ -305,10 +379,52 @@ fn open_or_create_creates_database_and_runs_initial_migration() {
         let pool = open_pool(&path).await;
         assert_eq!(
             applied_sqlx_migration_versions(&pool).await,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
         );
         pool.close().await;
     });
+}
+
+#[test]
+fn dynamic_event_catalog_loads_seed_templates() {
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
+    let templates = catalog.dynamic_event_templates().unwrap();
+
+    assert_eq!(templates.len(), 42);
+    assert!(templates.iter().any(|template| {
+        template.id == "famine"
+            && template.kind == GameEventKind::Famine
+            && template.conditions.iter().any(|condition| {
+                condition.kind == DynamicEventConditionKind::CityFoodBelowPopulationThreshold
+            })
+    }));
+    assert!(templates.iter().any(|template| {
+        template.id == "border_dispute"
+            && template.kind == GameEventKind::Diplomacy
+            && template.target_scope == DynamicEventTargetScope::BorderCity
+    }));
+    for template in templates {
+        assert!(template.enabled);
+        assert!(template.choices.len() >= 2, "{}", template.id);
+        assert_eq!(
+            template
+                .choices
+                .iter()
+                .filter(|choice| choice.is_default)
+                .count(),
+            1,
+            "{}",
+            template.id
+        );
+        assert!(
+            template
+                .choices
+                .iter()
+                .any(|choice| !choice.effects.dynamic.is_empty()),
+            "{}",
+            template.id
+        );
+    }
 }
 
 #[test]

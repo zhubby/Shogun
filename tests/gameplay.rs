@@ -2,6 +2,51 @@ use shogun::game::*;
 use std::collections::BTreeMap;
 use std::fs;
 
+const DYNAMIC_TEMPLATE_IDS: &[&str] = &[
+    "famine",
+    "flood",
+    "locusts",
+    "epidemic",
+    "bandits",
+    "refugees",
+    "bumper_harvest",
+    "merchant_caravan",
+    "artisan_guild",
+    "militia_volunteers",
+    "border_dispute",
+    "spring_fair",
+    "river_trade",
+    "scholar_visit",
+    "summer_grain",
+    "granary_surplus",
+    "smith_breakthrough",
+    "veterans_return",
+    "healer_arrives",
+    "elite_donation",
+    "irrigation_clear",
+    "horse_traders",
+    "craft_festival",
+    "temple_fair",
+    "enemy_defectors",
+    "tax_register",
+    "youth_drill",
+    "rebels",
+    "tax_resistance",
+    "deserters",
+    "mutiny",
+    "granary_fire",
+    "drought",
+    "cold_snap",
+    "corruption",
+    "smuggling",
+    "road_ambush",
+    "border_raid",
+    "mine_collapse",
+    "market_panic",
+    "plague_rumor",
+    "officer_feud",
+];
+
 fn sample_game() -> GameState {
     let mut game = SqliteHistoricalCatalog::in_memory_from_seed()
         .unwrap()
@@ -85,6 +130,71 @@ fn event_by_kind(game: &GameState, kind: GameEventKind) -> &GameEvent {
         .iter()
         .find(|event| event.kind == kind)
         .expect("expected event kind")
+}
+
+fn resolve_empty_turn_with_history(
+    game: &mut GameState,
+    catalog: &SqliteHistoricalCatalog,
+) -> TurnReport {
+    resolve_command_batch_with_history(game, Vec::new(), catalog)
+}
+
+fn resolve_pending_dynamic_defaults(game: &mut GameState) {
+    let pending = game
+        .events
+        .iter()
+        .filter_map(|event| match &event.resolution {
+            EventResolution::PendingDecision {
+                default_choice_id, ..
+            } if event.template_id.is_some() => Some((event.id.clone(), default_choice_id.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    for (event_id, choice_id) in pending {
+        resolve_event_decision(game, &event_id, &choice_id).unwrap();
+    }
+}
+
+fn suppress_dynamic_template(game: &mut GameState, template_id: &str) {
+    for city_id in game.cities.keys() {
+        game.dynamic_event_cooldowns.insert(
+            format!("dynamic:target:{template_id}:{city_id}"),
+            game.turn + 120,
+        );
+    }
+}
+
+fn suppress_all_dynamic_except(game: &mut GameState, allowed_template_id: &str) {
+    for template_id in DYNAMIC_TEMPLATE_IDS {
+        if *template_id != allowed_template_id {
+            suppress_dynamic_template(game, template_id);
+        }
+    }
+}
+
+fn force_player_famine_candidate(game: &mut GameState) {
+    suppress_all_dynamic_except(game, "famine");
+    game.roads.clear();
+    let non_pingyuan_city_ids = game
+        .cities
+        .keys()
+        .filter(|city_id| city_id.as_str() != "pingyuan")
+        .cloned()
+        .collect::<Vec<_>>();
+    for city_id in non_pingyuan_city_ids {
+        game.dynamic_event_cooldowns
+            .insert(format!("dynamic:target:famine:{city_id}"), game.turn + 120);
+    }
+    for city in game.cities.values_mut() {
+        if city.faction_id == game.player_faction_id {
+            city.food = 150;
+            city.population = city.population.max(100_000);
+            city.order = 70;
+            city.agriculture = 1;
+            city.commerce = 1;
+            city.defense = 1;
+        }
+    }
 }
 
 fn command(city_id: &str, officer_id: &str, kind: CommandKind) -> Command {
@@ -1897,11 +2007,13 @@ fn old_save_json_missing_events_still_deserializes() {
     let object = game_json.as_object_mut().unwrap();
     object.remove("events");
     object.remove("next_event_sequence");
+    object.remove("dynamic_event_cooldowns");
 
     let loaded: GameState = serde_json::from_value(game_json).unwrap();
 
     assert!(loaded.events.is_empty());
     assert_eq!(loaded.next_event_sequence, 0);
+    assert!(loaded.dynamic_event_cooldowns.is_empty());
 }
 
 #[test]
@@ -1939,12 +2051,14 @@ fn save_load_preserves_event_state() {
     let temp = tempfile::tempdir().unwrap();
     let manager = SaveManager::new(temp.path());
     let mut game = sample_game();
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
     {
         let city = game.cities.get_mut("pingyuan").unwrap();
         city.food = 0;
         city.gold = 200;
     }
-    resolve_command_batch(&mut game, Vec::new());
+    force_player_famine_candidate(&mut game);
+    resolve_empty_turn_with_history(&mut game, &catalog);
     assert_eq!(pending_event_count(&game), 1);
 
     manager.save_slot("events", "事件", &game).unwrap();
@@ -1952,23 +2066,215 @@ fn save_load_preserves_event_state() {
 
     assert_eq!(pending_event_count(&loaded), 1);
     assert_eq!(loaded.events[0].kind, GameEventKind::Famine);
+    assert_eq!(loaded.events[0].template_id.as_deref(), Some("famine"));
     assert_eq!(loaded.next_event_sequence, 1);
+    assert!(!loaded.dynamic_event_cooldowns.is_empty());
 }
 
 #[test]
-fn monthly_incident_can_trigger_without_starvation() {
+fn monthly_incident_no_longer_triggers_famine_without_starvation() {
     let mut game = sample_game();
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
 
-    for _ in 0..3 {
-        resolve_command_batch(&mut game, Vec::new());
+    for _ in 0..8 {
+        for city in game.cities.values_mut() {
+            if city.faction_id == game.player_faction_id {
+                city.food = city.food.max(5_000);
+            }
+        }
+        resolve_empty_turn_with_history(&mut game, &catalog);
+        resolve_pending_dynamic_defaults(&mut game);
     }
 
     assert!(
-        game.events
+        !game
+            .events
             .iter()
             .any(|event| event.kind == GameEventKind::Famine)
     );
+}
+
+#[test]
+fn player_dynamic_events_are_throttled_over_two_years() {
+    let mut game = sample_game();
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
+
+    for _ in 0..24 {
+        resolve_empty_turn_with_history(&mut game, &catalog);
+        resolve_pending_dynamic_defaults(&mut game);
+    }
+
+    let player_dynamic_events = game
+        .events
+        .iter()
+        .filter(|event| event.template_id.is_some() && event.scope == GameEventScope::Player)
+        .count();
+    assert!(
+        (2..=6).contains(&player_dynamic_events),
+        "unexpected dynamic event count {player_dynamic_events}"
+    );
+    assert_eq!(pending_event_count(&game), 0);
+}
+
+#[test]
+fn unresolved_dynamic_event_blocks_new_player_incidents() {
+    let mut game = sample_game();
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
+    force_player_famine_candidate(&mut game);
+
+    resolve_empty_turn_with_history(&mut game, &catalog);
     assert_eq!(pending_event_count(&game), 1);
+    let event_count = game.events.len();
+    game.dynamic_event_cooldowns.clear();
+
+    resolve_empty_turn_with_history(&mut game, &catalog);
+
+    assert_eq!(pending_event_count(&game), 1);
+    assert_eq!(game.events.len(), event_count);
+}
+
+#[test]
+fn dynamic_effects_apply_city_and_diplomacy_changes() {
+    let mut game = sample_game();
+    let deadline_turn = game.turn + 1;
+    let event_id = record_game_event_with_metadata(
+        &mut game,
+        GameEventDraft {
+            kind: GameEventKind::Opportunity,
+            severity: GameEventSeverity::Important,
+            scope: GameEventScope::Player,
+            title: "测试事件".to_string(),
+            summary: "测试动态效果".to_string(),
+            detail: "测试动态效果".to_string(),
+            city_id: Some("pingyuan".to_string()),
+            faction_id: Some("liu_bei".to_string()),
+            officer_id: None,
+            resolution: EventResolution::PendingDecision {
+                deadline_turn,
+                default_choice_id: "apply".to_string(),
+                choices: vec![EventChoice {
+                    id: "apply".to_string(),
+                    label: "应用".to_string(),
+                    description: "应用动态效果".to_string(),
+                    requirements: EventChoiceRequirements::default(),
+                    effects: EventChoiceEffects {
+                        dynamic: vec![
+                            DynamicEventEffect {
+                                kind: DynamicEventEffectKind::CityTraining,
+                                amount: 5,
+                            },
+                            DynamicEventEffect {
+                                kind: DynamicEventEffectKind::CityDefense,
+                                amount: 12,
+                            },
+                            DynamicEventEffect {
+                                kind: DynamicEventEffectKind::CityTroops,
+                                amount: 300,
+                            },
+                            DynamicEventEffect {
+                                kind: DynamicEventEffectKind::CityPopulationPercent,
+                                amount: -2,
+                            },
+                            DynamicEventEffect {
+                                kind: DynamicEventEffectKind::DiplomaticScore,
+                                amount: 7,
+                            },
+                        ],
+                        ..EventChoiceEffects::default()
+                    },
+                }],
+            },
+        },
+        Some("test_dynamic".to_string()),
+        Some("cao_cao".to_string()),
+    );
+    let before = game.cities["pingyuan"].clone();
+    let before_relation = game
+        .relation("liu_bei", "cao_cao")
+        .map(|relation| relation.score)
+        .unwrap_or_default();
+
+    resolve_event_decision(&mut game, &event_id, "apply").unwrap();
+
+    let city = &game.cities["pingyuan"];
+    assert_eq!(city.training, before.training + 5);
+    assert_eq!(city.defense, before.defense + 12);
+    assert_eq!(city.troops.total(), before.troops.total() + 300);
+    assert_eq!(
+        city.population,
+        before.population - before.population * 2 / 100
+    );
+    assert_eq!(
+        game.relation("liu_bei", "cao_cao").unwrap().score,
+        before_relation + 7
+    );
+}
+
+#[test]
+fn save_load_preserves_dynamic_event_metadata_and_cooldowns() {
+    let temp = tempfile::tempdir().unwrap();
+    let manager = SaveManager::new(temp.path());
+    let mut game = sample_game();
+    let deadline_turn = game.turn + 1;
+    record_game_event_with_metadata(
+        &mut game,
+        GameEventDraft {
+            kind: GameEventKind::Diplomacy,
+            severity: GameEventSeverity::Important,
+            scope: GameEventScope::Player,
+            title: "边境纠纷".to_string(),
+            summary: "测试边境纠纷".to_string(),
+            detail: "测试边境纠纷".to_string(),
+            city_id: Some("pingyuan".to_string()),
+            faction_id: Some("liu_bei".to_string()),
+            officer_id: None,
+            resolution: EventResolution::PendingDecision {
+                deadline_turn,
+                default_choice_id: "mobilize".to_string(),
+                choices: vec![EventChoice {
+                    id: "mobilize".to_string(),
+                    label: "整兵示威".to_string(),
+                    description: "关系 -8。".to_string(),
+                    requirements: EventChoiceRequirements::default(),
+                    effects: EventChoiceEffects {
+                        dynamic: vec![DynamicEventEffect {
+                            kind: DynamicEventEffectKind::DiplomaticScore,
+                            amount: -8,
+                        }],
+                        ..EventChoiceEffects::default()
+                    },
+                }],
+            },
+        },
+        Some("border_dispute".to_string()),
+        Some("cao_cao".to_string()),
+    );
+    game.dynamic_event_cooldowns
+        .insert("dynamic:player:global".to_string(), game.turn + 4);
+
+    manager
+        .save_slot("dynamic_events", "动态事件", &game)
+        .unwrap();
+    let loaded = manager.load_slot("dynamic_events").unwrap();
+    let event = &loaded.events[0];
+
+    assert_eq!(event.template_id.as_deref(), Some("border_dispute"));
+    assert_eq!(event.related_faction_id.as_deref(), Some("cao_cao"));
+    assert_eq!(
+        loaded
+            .dynamic_event_cooldowns
+            .get("dynamic:player:global")
+            .copied(),
+        Some(game.turn + 4)
+    );
+    let EventResolution::PendingDecision { choices, .. } = &event.resolution else {
+        panic!("expected pending decision");
+    };
+    assert_eq!(choices[0].effects.dynamic.len(), 1);
+    assert_eq!(
+        choices[0].effects.dynamic[0].kind,
+        DynamicEventEffectKind::DiplomaticScore
+    );
 }
 
 #[test]
@@ -2006,13 +2312,16 @@ fn technology_completion_records_player_event() {
 #[test]
 fn famine_relief_spends_gold_and_resolves_event() {
     let mut game = sample_game();
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
+    force_player_famine_candidate(&mut game);
     {
         let city = game.cities.get_mut("pingyuan").unwrap();
-        city.food = 0;
+        city.food = 2_000;
         city.gold = 200;
+        city.population = 1_000_000;
         city.order = 40;
     }
-    resolve_command_batch(&mut game, Vec::new());
+    resolve_empty_turn_with_history(&mut game, &catalog);
     let event_id = event_by_kind(&game, GameEventKind::Famine).id.clone();
     let before_gold = game.cities["pingyuan"].gold;
     let before_order = game.cities["pingyuan"].order;
@@ -2035,14 +2344,16 @@ fn famine_relief_spends_gold_and_resolves_event() {
 #[test]
 fn famine_expiry_applies_default_choice() {
     let mut game = sample_game();
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
+    force_player_famine_candidate(&mut game);
     {
         let city = game.cities.get_mut("pingyuan").unwrap();
-        city.food = 0;
+        city.food = 150;
         city.gold = 200;
         city.population = 50_000;
         city.order = 40;
     }
-    resolve_command_batch(&mut game, Vec::new());
+    resolve_empty_turn_with_history(&mut game, &catalog);
     let event_id = event_by_kind(&game, GameEventKind::Famine).id.clone();
     let before_population = game.cities["pingyuan"].population;
     let before_order = game.cities["pingyuan"].order;
@@ -2065,12 +2376,14 @@ fn famine_expiry_applies_default_choice() {
 #[test]
 fn famine_decision_cancels_if_city_is_no_longer_player_owned() {
     let mut game = sample_game();
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
+    force_player_famine_candidate(&mut game);
     {
         let city = game.cities.get_mut("pingyuan").unwrap();
-        city.food = 0;
+        city.food = 150;
         city.gold = 200;
     }
-    resolve_command_batch(&mut game, Vec::new());
+    resolve_empty_turn_with_history(&mut game, &catalog);
     let event_id = event_by_kind(&game, GameEventKind::Famine).id.clone();
     game.cities.get_mut("pingyuan").unwrap().faction_id = "cao_cao".to_string();
 

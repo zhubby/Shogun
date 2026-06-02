@@ -569,6 +569,12 @@ event-kind-historical-life = Life Event
 event-kind-officer-lifecycle = Personnel
 event-kind-succession = Succession
 event-kind-famine = Disaster
+event-kind-natural-disaster = Natural Disaster
+event-kind-public-order = Public Order
+event-kind-economy = Economy
+event-kind-military = Military
+event-kind-diplomacy = Diplomacy
+event-kind-opportunity = Opportunity
 event-kind-game-status = End State
 
 shrine-title = Shrine

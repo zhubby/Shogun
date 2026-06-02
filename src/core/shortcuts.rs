@@ -627,11 +627,10 @@ pub(super) fn close_top_panel(ui_state: &mut GameUiState) -> bool {
         .game
         .as_ref()
         .and_then(|game| popup_event_id(game).map(str::to_string))
+        && let Some(game) = &mut ui_state.game
     {
-        if let Some(game) = &mut ui_state.game {
-            let _ = dismiss_event_popup(game, &event_id);
-            return true;
-        }
+        let _ = dismiss_event_popup(game, &event_id);
+        return true;
     }
     if ui_state.events_open {
         ui_state.events_open = false;

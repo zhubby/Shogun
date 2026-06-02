@@ -2,6 +2,12 @@ use super::city::{
     City, CityCatalog, CityFacility, CityProfile, CityScale, FacilityKind, SourceConfidence,
     city_facility_slots,
 };
+use super::events::{
+    DynamicEventChoice, DynamicEventCondition, DynamicEventConditionKind, DynamicEventEffect,
+    DynamicEventEffectKind, DynamicEventRequirement, DynamicEventRequirementKind,
+    DynamicEventTargetScope, DynamicEventTemplate, DynamicEventWeightModifier, EventChoiceEffects,
+    EventChoiceRequirements, GameEventKind, GameEventScope, GameEventSeverity,
+};
 use super::ids::{CityId, FactionId, OfficerId, ScenarioId, WILD_FACTION_ID};
 use super::model::{
     Controller, DiplomaticRelation, Faction, GameState, GameStatus, MapPosition, Road,
@@ -40,6 +46,12 @@ const REQUIRED_HISTORY_TABLES: &[&str] = &[
     "scenario_city_states",
     "officer_life_events",
     "scenario_diplomacy",
+    "dynamic_event_templates",
+    "dynamic_event_conditions",
+    "dynamic_event_weight_modifiers",
+    "dynamic_event_choices",
+    "dynamic_event_choice_requirements",
+    "dynamic_event_choice_effects",
 ];
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct HistoricalScenario {
@@ -82,6 +94,7 @@ pub trait HistoricalCatalog:
         player_faction_id: &str,
     ) -> Result<GameState, HistoryDbError>;
     fn life_events_until(&self, year: i32, month: u8) -> Result<Vec<LifeEvent>, HistoryDbError>;
+    fn dynamic_event_templates(&self) -> Result<Vec<DynamicEventTemplate>, HistoryDbError>;
 }
 
 pub struct SqliteHistoricalCatalog {
@@ -730,6 +743,7 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
             technologies,
             events: Vec::new(),
             next_event_sequence: 0,
+            dynamic_event_cooldowns: BTreeMap::new(),
             marriages: Vec::new(),
             family_relationships: Vec::new(),
             next_generated_officer_sequence: 0,
@@ -759,6 +773,169 @@ impl HistoricalCatalog for SqliteHistoricalCatalog {
             .await
             .map_err(HistoryDbError::Sqlx)?;
             rows.into_iter().map(life_event_from_row).collect()
+        })
+    }
+
+    fn dynamic_event_templates(&self) -> Result<Vec<DynamicEventTemplate>, HistoryDbError> {
+        self.block_on(async {
+            let template_rows = sqlx::query(
+                "SELECT id, event_kind, severity, event_scope, target_scope, base_weight,
+                        target_cooldown_turns, deadline_turns, enabled, title, summary, detail
+                 FROM dynamic_event_templates
+                 ORDER BY id",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
+            let mut templates = BTreeMap::new();
+            for row in template_rows {
+                let id: String = row.get("id");
+                templates.insert(
+                    id.clone(),
+                    DynamicEventTemplate {
+                        id,
+                        kind: parse_game_event_kind(row.get::<String, _>("event_kind").as_str())?,
+                        severity: parse_game_event_severity(
+                            row.get::<String, _>("severity").as_str(),
+                        )?,
+                        scope: parse_game_event_scope(
+                            row.get::<String, _>("event_scope").as_str(),
+                        )?,
+                        target_scope: parse_dynamic_event_target_scope(
+                            row.get::<String, _>("target_scope").as_str(),
+                        )?,
+                        base_weight: row.get::<i64, _>("base_weight") as u32,
+                        target_cooldown_turns: row.get::<i64, _>("target_cooldown_turns") as u32,
+                        deadline_turns: row.get::<i64, _>("deadline_turns") as u32,
+                        enabled: row.get::<bool, _>("enabled"),
+                        title: row.get("title"),
+                        summary: row.get("summary"),
+                        detail: row.get("detail"),
+                        conditions: Vec::new(),
+                        weight_modifiers: Vec::new(),
+                        choices: Vec::new(),
+                    },
+                );
+            }
+
+            let condition_rows = sqlx::query(
+                "SELECT template_id, condition_kind, min_value, max_value
+                 FROM dynamic_event_conditions
+                 ORDER BY template_id, sort_order, condition_kind",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
+            for row in condition_rows {
+                let template_id: String = row.get("template_id");
+                if let Some(template) = templates.get_mut(&template_id) {
+                    template.conditions.push(DynamicEventCondition {
+                        kind: parse_dynamic_event_condition_kind(
+                            row.get::<String, _>("condition_kind").as_str(),
+                        )?,
+                        min_value: row.get("min_value"),
+                        max_value: row.get("max_value"),
+                    });
+                }
+            }
+
+            let modifier_rows = sqlx::query(
+                "SELECT template_id, condition_kind, min_value, max_value, multiplier_percent
+                 FROM dynamic_event_weight_modifiers
+                 ORDER BY template_id, sort_order, condition_kind",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
+            for row in modifier_rows {
+                let template_id: String = row.get("template_id");
+                if let Some(template) = templates.get_mut(&template_id) {
+                    template.weight_modifiers.push(DynamicEventWeightModifier {
+                        kind: parse_dynamic_event_condition_kind(
+                            row.get::<String, _>("condition_kind").as_str(),
+                        )?,
+                        min_value: row.get("min_value"),
+                        max_value: row.get("max_value"),
+                        multiplier_percent: row.get::<i64, _>("multiplier_percent") as u32,
+                    });
+                }
+            }
+
+            let mut choices_by_template: BTreeMap<String, Vec<DynamicEventChoice>> =
+                BTreeMap::new();
+            let choice_rows = sqlx::query(
+                "SELECT template_id, choice_id, label, description, is_default
+                 FROM dynamic_event_choices
+                 ORDER BY template_id, sort_order, choice_id",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
+            for row in choice_rows {
+                choices_by_template
+                    .entry(row.get("template_id"))
+                    .or_default()
+                    .push(DynamicEventChoice {
+                        id: row.get("choice_id"),
+                        label: row.get("label"),
+                        description: row.get("description"),
+                        is_default: row.get::<bool, _>("is_default"),
+                        requirements: EventChoiceRequirements::default(),
+                        effects: EventChoiceEffects::default(),
+                    });
+            }
+
+            let requirement_rows = sqlx::query(
+                "SELECT template_id, choice_id, requirement_kind, amount
+                 FROM dynamic_event_choice_requirements
+                 ORDER BY template_id, choice_id, sort_order, requirement_kind",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
+            for row in requirement_rows {
+                let template_id: String = row.get("template_id");
+                let choice_id: String = row.get("choice_id");
+                if let Some(choice) = choice_mut(&mut choices_by_template, &template_id, &choice_id)
+                {
+                    push_dynamic_requirement(
+                        &mut choice.requirements,
+                        parse_dynamic_requirement_kind(
+                            row.get::<String, _>("requirement_kind").as_str(),
+                        )?,
+                        row.get::<i64, _>("amount") as i32,
+                    );
+                }
+            }
+
+            let effect_rows = sqlx::query(
+                "SELECT template_id, choice_id, effect_kind, amount
+                 FROM dynamic_event_choice_effects
+                 ORDER BY template_id, choice_id, sort_order, effect_kind",
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(HistoryDbError::Sqlx)?;
+            for row in effect_rows {
+                let template_id: String = row.get("template_id");
+                let choice_id: String = row.get("choice_id");
+                if let Some(choice) = choice_mut(&mut choices_by_template, &template_id, &choice_id)
+                {
+                    push_dynamic_effect(
+                        &mut choice.effects,
+                        parse_dynamic_effect_kind(row.get::<String, _>("effect_kind").as_str())?,
+                        row.get::<i64, _>("amount") as i32,
+                    );
+                }
+            }
+
+            for (template_id, choices) in choices_by_template {
+                if let Some(template) = templates.get_mut(&template_id) {
+                    template.choices = choices;
+                }
+            }
+
+            Ok(templates.into_values().collect())
         })
     }
 }
@@ -1272,6 +1449,171 @@ fn parse_life_event_kind(value: &str) -> LifeEventKind {
         "Die" => LifeEventKind::Die,
         _ => LifeEventKind::Appear,
     }
+}
+
+fn choice_mut<'a>(
+    choices_by_template: &'a mut BTreeMap<String, Vec<DynamicEventChoice>>,
+    template_id: &str,
+    choice_id: &str,
+) -> Option<&'a mut DynamicEventChoice> {
+    choices_by_template
+        .get_mut(template_id)?
+        .iter_mut()
+        .find(|choice| choice.id == choice_id)
+}
+
+fn push_dynamic_requirement(
+    requirements: &mut EventChoiceRequirements,
+    kind: DynamicEventRequirementKind,
+    amount: i32,
+) {
+    requirements
+        .dynamic
+        .push(DynamicEventRequirement { kind, amount });
+}
+
+fn push_dynamic_effect(
+    effects: &mut EventChoiceEffects,
+    kind: DynamicEventEffectKind,
+    amount: i32,
+) {
+    effects.dynamic.push(DynamicEventEffect { kind, amount });
+}
+
+fn parse_game_event_kind(value: &str) -> Result<GameEventKind, HistoryDbError> {
+    Ok(match value {
+        "CityDevelopment" => GameEventKind::CityDevelopment,
+        "Battle" => GameEventKind::Battle,
+        "CityCaptured" => GameEventKind::CityCaptured,
+        "FactionDestroyed" => GameEventKind::FactionDestroyed,
+        "TechnologyCompleted" => GameEventKind::TechnologyCompleted,
+        "HistoricalLife" => GameEventKind::HistoricalLife,
+        "OfficerLifecycle" => GameEventKind::OfficerLifecycle,
+        "Succession" => GameEventKind::Succession,
+        "Famine" => GameEventKind::Famine,
+        "NaturalDisaster" => GameEventKind::NaturalDisaster,
+        "PublicOrder" => GameEventKind::PublicOrder,
+        "Economy" => GameEventKind::Economy,
+        "Military" => GameEventKind::Military,
+        "Diplomacy" => GameEventKind::Diplomacy,
+        "Opportunity" => GameEventKind::Opportunity,
+        "GameStatus" => GameEventKind::GameStatus,
+        _ => {
+            return Err(HistoryDbError::Invalid(format!(
+                "动态事件类型 {value} 不存在"
+            )));
+        }
+    })
+}
+
+fn parse_game_event_severity(value: &str) -> Result<GameEventSeverity, HistoryDbError> {
+    Ok(match value {
+        "Info" => GameEventSeverity::Info,
+        "Important" => GameEventSeverity::Important,
+        "Warning" => GameEventSeverity::Warning,
+        "Critical" => GameEventSeverity::Critical,
+        _ => {
+            return Err(HistoryDbError::Invalid(format!(
+                "动态事件严重度 {value} 不存在"
+            )));
+        }
+    })
+}
+
+fn parse_game_event_scope(value: &str) -> Result<GameEventScope, HistoryDbError> {
+    Ok(match value {
+        "Player" => GameEventScope::Player,
+        "World" => GameEventScope::World,
+        _ => {
+            return Err(HistoryDbError::Invalid(format!(
+                "动态事件范围 {value} 不存在"
+            )));
+        }
+    })
+}
+
+fn parse_dynamic_event_target_scope(
+    value: &str,
+) -> Result<DynamicEventTargetScope, HistoryDbError> {
+    Ok(match value {
+        "PlayerCity" => DynamicEventTargetScope::PlayerCity,
+        "AiCity" => DynamicEventTargetScope::AiCity,
+        "AnyCity" => DynamicEventTargetScope::AnyCity,
+        "BorderCity" => DynamicEventTargetScope::BorderCity,
+        _ => {
+            return Err(HistoryDbError::Invalid(format!(
+                "动态事件目标范围 {value} 不存在"
+            )));
+        }
+    })
+}
+
+fn parse_dynamic_event_condition_kind(
+    value: &str,
+) -> Result<DynamicEventConditionKind, HistoryDbError> {
+    Ok(match value {
+        "CityFoodBelowPopulationThreshold" => {
+            DynamicEventConditionKind::CityFoodBelowPopulationThreshold
+        }
+        "CityFoodAtLeast" => DynamicEventConditionKind::CityFoodAtLeast,
+        "CityOrderAtMost" => DynamicEventConditionKind::CityOrderAtMost,
+        "CityOrderAtLeast" => DynamicEventConditionKind::CityOrderAtLeast,
+        "CityPopulationAtLeast" => DynamicEventConditionKind::CityPopulationAtLeast,
+        "CityTroopsAtLeast" => DynamicEventConditionKind::CityTroopsAtLeast,
+        "CityDefenseAtLeast" => DynamicEventConditionKind::CityDefenseAtLeast,
+        "CityTrainingAtMost" => DynamicEventConditionKind::CityTrainingAtMost,
+        "CityAgricultureAtLeast" => DynamicEventConditionKind::CityAgricultureAtLeast,
+        "CityCommerceAtLeast" => DynamicEventConditionKind::CityCommerceAtLeast,
+        "MonthRange" => DynamicEventConditionKind::MonthRange,
+        "AdjacentEnemy" => DynamicEventConditionKind::AdjacentEnemy,
+        _ => {
+            return Err(HistoryDbError::Invalid(format!(
+                "动态事件条件 {value} 不存在"
+            )));
+        }
+    })
+}
+
+fn parse_dynamic_requirement_kind(
+    value: &str,
+) -> Result<DynamicEventRequirementKind, HistoryDbError> {
+    Ok(match value {
+        "CityGold" => DynamicEventRequirementKind::CityGold,
+        "CityFood" => DynamicEventRequirementKind::CityFood,
+        "CityMaterials" => DynamicEventRequirementKind::CityMaterials,
+        "CityTroops" => DynamicEventRequirementKind::CityTroops,
+        "CityOrder" => DynamicEventRequirementKind::CityOrder,
+        "CityPopulation" => DynamicEventRequirementKind::CityPopulation,
+        _ => {
+            return Err(HistoryDbError::Invalid(format!(
+                "动态事件需求 {value} 不存在"
+            )));
+        }
+    })
+}
+
+fn parse_dynamic_effect_kind(value: &str) -> Result<DynamicEventEffectKind, HistoryDbError> {
+    Ok(match value {
+        "CityGold" => DynamicEventEffectKind::CityGold,
+        "CityFood" => DynamicEventEffectKind::CityFood,
+        "CityMaterials" => DynamicEventEffectKind::CityMaterials,
+        "CityOrder" => DynamicEventEffectKind::CityOrder,
+        "CityPopulation" => DynamicEventEffectKind::CityPopulation,
+        "CityPopulationPercent" => DynamicEventEffectKind::CityPopulationPercent,
+        "CityTraining" => DynamicEventEffectKind::CityTraining,
+        "CityAgriculture" => DynamicEventEffectKind::CityAgriculture,
+        "CityCommerce" => DynamicEventEffectKind::CityCommerce,
+        "CityDefense" => DynamicEventEffectKind::CityDefense,
+        "CityTroops" => DynamicEventEffectKind::CityTroops,
+        "CityTroopsPercent" => DynamicEventEffectKind::CityTroopsPercent,
+        "CityWoundedTroops" => DynamicEventEffectKind::CityWoundedTroops,
+        "DiplomaticScore" => DynamicEventEffectKind::DiplomaticScore,
+        _ => {
+            return Err(HistoryDbError::Invalid(format!(
+                "动态事件效果 {value} 不存在"
+            )));
+        }
+    })
 }
 
 #[derive(Debug)]
