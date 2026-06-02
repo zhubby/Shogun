@@ -13,8 +13,7 @@ INSERT INTO officer_tag_aliases (alias, tag_id) VALUES
 INSERT INTO factions
 (id, name, default_ruler_id, color_r, color_g, color_b)
 VALUES
-('yellow_turban', '黄巾军', 'ctk_5f20_89d2', 0.92, 0.72, 0.18),
-('liu_yan', '刘焉军', 'ctk_5218_7109', 0.22, 0.55, 0.35);
+('yellow_turban', '黄巾军', 'ctk_5f20_89d2', 0.92, 0.72, 0.18);
 
 INSERT INTO scenarios (id, name, year, month)
 VALUES ('ad180', '光和三年 太平道将兴', 180, 1);
@@ -79,41 +78,11 @@ INSERT INTO scenario_faction_states
 SELECT
     'ad180',
     f.id,
-    CASE
-        WHEN f.id IN (
-            'han_court',
-            'yellow_turban',
-            'dong_zhuo',
-            'sun_quan',
-            'gongsun_zan',
-            'liu_yan',
-            'liu_biao',
-            'ma_teng',
-            'shi_xie',
-            'tao_qian'
-        ) THEN 1
-        ELSE 0
-    END,
-    CASE
-        WHEN f.id IN (
-            'han_court',
-            'yellow_turban',
-            'dong_zhuo',
-            'sun_quan',
-            'gongsun_zan',
-            'liu_yan',
-            'liu_biao',
-            'ma_teng',
-            'shi_xie',
-            'tao_qian'
-        ) THEN 1
-        ELSE 0
-    END,
+    CASE WHEN f.id IN ('han_court', 'yellow_turban') THEN 1 ELSE 0 END,
+    CASE WHEN f.id IN ('han_court', 'yellow_turban') THEN 1 ELSE 0 END,
     CASE
         WHEN f.id = 'han_court' THEN 'ctk_5218_5b8f'
         WHEN f.id = 'yellow_turban' THEN 'ctk_5f20_89d2'
-        WHEN f.id = 'sun_quan' THEN 'sun_jian'
-        WHEN f.id = 'liu_yan' THEN 'ctk_5218_7109'
         ELSE f.default_ruler_id
     END
 FROM factions f;
@@ -125,14 +94,6 @@ SELECT
     c.id,
     CASE
         WHEN c.id IN ('ganling', 'zhongshan', 'runan') THEN 'yellow_turban'
-        WHEN c.id IN ('anding', 'tianshui', 'longxi') THEN 'dong_zhuo'
-        WHEN c.id IN ('wuwei', 'jiuquan', 'dunhuang') THEN 'ma_teng'
-        WHEN c.id IN ('youbeiping', 'liaoxi', 'xiangping') THEN 'gongsun_zan'
-        WHEN c.province = '徐州' THEN 'tao_qian'
-        WHEN c.province = '荆州' THEN 'liu_biao'
-        WHEN c.province = '益州' THEN 'liu_yan'
-        WHEN c.province = '扬州' THEN 'sun_quan'
-        WHEN c.province = '交州' THEN 'shi_xie'
         ELSE 'han_court'
     END,
     CAST((c.population_min + c.population_max) / 2 AS INTEGER),
@@ -149,14 +110,6 @@ SELECT
         WHEN 'zhongshan' THEN 'ctk_5f20_5b9d'
         WHEN 'runan' THEN 'bo_cai'
         WHEN 'luoyang' THEN 'he_jin'
-        WHEN 'anding' THEN 'dong_zhuo'
-        WHEN 'wuwei' THEN 'ma_teng'
-        WHEN 'youbeiping' THEN 'gongsun_zan'
-        WHEN 'xiapi' THEN 'tao_qian'
-        WHEN 'xiangyang' THEN 'liu_biao'
-        WHEN 'chengdu' THEN 'ctk_5218_7109'
-        WHEN 'wu' THEN 'sun_jian'
-        WHEN 'jiaozhi' THEN 'shi_xie'
         ELSE NULL
     END
 FROM cities c;
@@ -164,16 +117,7 @@ FROM cities c;
 INSERT INTO scenario_diplomacy
 (scenario_id, faction_a, faction_b, score, truce_until_turn)
 VALUES
-('ad180', 'han_court', 'yellow_turban', -60, NULL),
-('ad180', 'yellow_turban', 'liu_biao', -45, NULL),
-('ad180', 'yellow_turban', 'tao_qian', -35, NULL),
-('ad180', 'yellow_turban', 'gongsun_zan', -35, NULL),
-('ad180', 'han_court', 'dong_zhuo', 20, NULL),
-('ad180', 'han_court', 'liu_yan', 25, NULL),
-('ad180', 'han_court', 'liu_biao', 25, NULL),
-('ad180', 'han_court', 'ma_teng', 10, NULL),
-('ad180', 'han_court', 'sun_quan', 15, NULL),
-('ad180', 'han_court', 'shi_xie', 20, NULL);
+('ad180', 'han_court', 'yellow_turban', -60, NULL);
 
 INSERT OR REPLACE INTO officer_life_events
 (id, officer_id, event_year, event_month, event_kind, faction_id, city_id, loyalty, notes)
@@ -194,8 +138,3 @@ VALUES
 ('yellow_180_huang_shao', 'huang_shao', 180, 1, 'ServeFaction', 'yellow_turban', 'runan', 72, '太平道将兴剧本初始归属'),
 ('yellow_180_he_man', 'he_man', 180, 1, 'ServeFaction', 'yellow_turban', 'runan', 70, '太平道将兴剧本初始归属'),
 ('yellow_180_pei_yuanshao', 'pei_yuanshao', 180, 1, 'ServeFaction', 'yellow_turban', 'zhongshan', 70, '太平道将兴剧本初始归属');
-
-INSERT OR REPLACE INTO officer_life_events
-(id, officer_id, event_year, event_month, event_kind, faction_id, city_id, loyalty, notes)
-VALUES
-('ad180_liu_yan_yizhou', 'ctk_5218_7109', 180, 1, 'ServeFaction', 'liu_yan', 'chengdu', 86, '太平道将兴剧本益州初始归属');
