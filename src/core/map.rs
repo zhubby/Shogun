@@ -24,7 +24,13 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Trans
     let Some(bounds) = ui_state.game.as_ref().and_then(map_bounds) else {
         return;
     };
-    let limits = map_pan_limits_for_state(ui_state, bounds, rect);
+    let year = ui_state
+        .game
+        .as_ref()
+        .map(|game| game.year)
+        .unwrap_or_default();
+    let boundary_map_bounds = cached_boundary_map_bounds(ui_state, year);
+    let mut limits = map_pan_limits_for_state(ui_state, bounds, rect, boundary_map_bounds);
     clamp_map_pan(ui_state, limits);
 
     let scroll_delta = ui.input(|input| input.raw_scroll_delta.y);
@@ -36,13 +42,12 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Trans
             response.hover_pos(),
             Some(rect.center()),
         );
-        let limits = map_pan_limits_for_state(ui_state, bounds, rect);
+        limits = map_pan_limits_for_state(ui_state, bounds, rect, boundary_map_bounds);
         clamp_map_pan(ui_state, limits);
     }
 
     if response.dragged_by(egui::PointerButton::Primary) {
         ui_state.map_pan += response.drag_delta();
-        let limits = map_pan_limits_for_state(ui_state, bounds, rect);
         clamp_map_pan(ui_state, limits);
         ui.output_mut(|output| output.cursor_icon = egui::CursorIcon::Grabbing);
     }
@@ -55,7 +60,7 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Trans
         && let Some(catalog) = &ui_state.map_boundaries
     {
         let view = MapBoundaryView::from_ui_state(ui_state);
-        let (cells, province_segments) = ui_state
+        let (cells, province_segments, _) = ui_state
             .map_boundary_view_cache
             .boundaries_for_year(catalog, game.year);
         draw_map_boundaries(&painter, game, cells, province_segments, bounds, rect, view);
@@ -127,6 +132,20 @@ pub(super) fn map_panel(ui: &mut egui::Ui, ui_state: &mut GameUiState, t: &Trans
             ui.close();
         }
     });
+}
+
+fn cached_boundary_map_bounds(ui_state: &mut GameUiState, year: i32) -> Option<MapBounds> {
+    if !ui_state.map_boundaries_enabled {
+        return None;
+    }
+
+    let (map_boundaries, map_boundary_view_cache) = (
+        &ui_state.map_boundaries,
+        &mut ui_state.map_boundary_view_cache,
+    );
+    let catalog = map_boundaries.as_ref()?;
+    let (_, _, boundary_map_bounds) = map_boundary_view_cache.boundaries_for_year(catalog, year);
+    boundary_map_bounds
 }
 
 fn draw_expedition_movements(
@@ -497,16 +516,29 @@ pub(super) fn draw_map_boundaries(
         return;
     }
 
-    for cell in cells {
-        let fill = territory_cell_fill_color_for_selection(cell, game, view.selected_city_id());
-        let points = territory_cell_screen_points(cell, bounds, rect, view.transform);
-        paint_boundary_polygon(painter, points, fill, egui::Stroke::NONE);
+    let cell_views: Vec<_> = cells
+        .iter()
+        .map(|cell| {
+            let selected = selected_city_in_cell_id(cell, game, view.selected_city_id());
+            TerritoryCellScreenView {
+                points: territory_cell_screen_points(cell, bounds, rect, view.transform),
+                fill: territory_cell_fill_color(cell, game, selected),
+                selected,
+            }
+        })
+        .collect();
+
+    for cell_view in &cell_views {
+        paint_boundary_polygon(
+            painter,
+            &cell_view.points,
+            cell_view.fill,
+            egui::Stroke::NONE,
+        );
     }
 
-    for cell in cells {
-        let selected = selected_city_in_cell_id(cell, game, view.selected_city_id());
-        let points = territory_cell_screen_points(cell, bounds, rect, view.transform);
-        let (stroke, dash, gap) = if selected {
+    for cell_view in &cell_views {
+        let (stroke, dash, gap) = if cell_view.selected {
             (
                 egui::Stroke::new(
                     2.0,
@@ -525,7 +557,7 @@ pub(super) fn draw_map_boundaries(
                 8.0,
             )
         };
-        draw_dashed_closed_polyline(painter, &points, stroke, dash, gap);
+        draw_dashed_closed_polyline(painter, &cell_view.points, stroke, dash, gap);
     }
 
     for &(start, end) in province_segments {
@@ -553,6 +585,12 @@ pub(super) fn draw_map_boundaries(
     }
 }
 
+struct TerritoryCellScreenView {
+    points: Vec<egui::Pos2>,
+    fill: egui::Color32,
+    selected: bool,
+}
+
 pub(super) fn territory_cell_screen_points(
     cell: &TerritoryCell,
     bounds: MapBounds,
@@ -567,18 +605,18 @@ pub(super) fn territory_cell_screen_points(
 
 pub(super) fn paint_boundary_polygon(
     painter: &egui::Painter,
-    points: Vec<egui::Pos2>,
+    points: &[egui::Pos2],
     fill: egui::Color32,
     stroke: egui::Stroke,
 ) {
     if points.len() < 3 {
         return;
     }
-    if points_screen_bounds(&points).is_some_and(|bounds| !bounds.intersects(painter.clip_rect())) {
+    if points_screen_bounds(points).is_some_and(|bounds| !bounds.intersects(painter.clip_rect())) {
         return;
     }
     painter.add(egui::Shape::Path(egui::epaint::PathShape {
-        points,
+        points: points.to_vec(),
         closed: true,
         fill,
         stroke: stroke.into(),
@@ -668,6 +706,7 @@ pub(super) struct MapBoundaryViewCache {
     year: Option<i32>,
     cells: Vec<TerritoryCell>,
     province_segments: Vec<(MapPosition, MapPosition)>,
+    boundary_map_bounds: Option<MapBounds>,
 }
 
 impl MapBoundaryViewCache {
@@ -675,14 +714,27 @@ impl MapBoundaryViewCache {
         &mut self,
         catalog: &MapBoundaryCatalog,
         year: i32,
-    ) -> (&[TerritoryCell], &[(MapPosition, MapPosition)]) {
+    ) -> (
+        &[TerritoryCell],
+        &[(MapPosition, MapPosition)],
+        Option<MapBounds>,
+    ) {
         if self.year != Some(year) {
             self.cells = catalog.territory_cells_for_year(year);
             self.province_segments = province_border_segments(&self.cells);
+            self.boundary_map_bounds = map_bounds_for_positions(
+                catalog
+                    .boundaries_for_year(year)
+                    .flat_map(|boundary| boundary.points.iter().copied()),
+            );
             self.year = Some(year);
         }
 
-        (&self.cells, &self.province_segments)
+        (
+            &self.cells,
+            &self.province_segments,
+            self.boundary_map_bounds,
+        )
     }
 }
 
@@ -752,12 +804,11 @@ pub(super) fn quantized_map_position(position: MapPosition) -> (i64, i64) {
     )
 }
 
-pub(super) fn territory_cell_fill_color_for_selection(
+pub(super) fn territory_cell_fill_color(
     cell: &TerritoryCell,
     game: &GameState,
-    selected_city_id: Option<&str>,
+    selected: bool,
 ) -> egui::Color32 {
-    let selected = selected_city_in_cell_id(cell, game, selected_city_id);
     let alpha = if selected { 44 } else { 18 };
 
     dominant_cell_faction(cell, game)
@@ -1023,7 +1074,7 @@ pub(super) fn compact_troops(troops: u32, t: &Translator) -> String {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct MapBounds {
     min_x: f32,
     max_x: f32,
@@ -1066,19 +1117,25 @@ impl MapBoundaryView {
 }
 
 pub(super) fn map_bounds(game: &GameState) -> Option<MapBounds> {
-    let mut cities = game.cities.values();
-    let first = cities.next()?;
+    map_bounds_for_positions(game.cities.values().map(|city| city.position))
+}
+
+pub(super) fn map_bounds_for_positions(
+    positions: impl IntoIterator<Item = MapPosition>,
+) -> Option<MapBounds> {
+    let mut positions = positions.into_iter();
+    let first = positions.next()?;
     let mut bounds = MapBounds {
-        min_x: first.position.x,
-        max_x: first.position.x,
-        min_y: first.position.y,
-        max_y: first.position.y,
+        min_x: first.x,
+        max_x: first.x,
+        min_y: first.y,
+        max_y: first.y,
     };
-    for city in cities {
-        bounds.min_x = bounds.min_x.min(city.position.x);
-        bounds.max_x = bounds.max_x.max(city.position.x);
-        bounds.min_y = bounds.min_y.min(city.position.y);
-        bounds.max_y = bounds.max_y.max(city.position.y);
+    for position in positions {
+        bounds.min_x = bounds.min_x.min(position.x);
+        bounds.max_x = bounds.max_x.max(position.x);
+        bounds.min_y = bounds.min_y.min(position.y);
+        bounds.max_y = bounds.max_y.max(position.y);
     }
     Some(bounds)
 }
@@ -1117,7 +1174,7 @@ pub(super) fn map_to_screen_with_transform(
 
 pub(super) fn map_content_screen_bounds(
     game: &GameState,
-    catalog: Option<&MapBoundaryCatalog>,
+    boundary_map_bounds: Option<MapBounds>,
     bounds: MapBounds,
     rect: egui::Rect,
     zoom: f32,
@@ -1128,15 +1185,14 @@ pub(super) fn map_content_screen_bounds(
     };
     let mut screen_bounds = None;
 
-    if let Some(catalog) = catalog {
-        for boundary in catalog.boundaries_for_year(game.year) {
-            for point in &boundary.points {
-                extend_screen_bounds(
-                    &mut screen_bounds,
-                    map_to_screen_with_transform(*point, bounds, rect, transform),
-                );
-            }
-        }
+    if let Some(boundary_map_bounds) = boundary_map_bounds {
+        extend_screen_bounds_map_bounds(
+            &mut screen_bounds,
+            boundary_map_bounds,
+            bounds,
+            rect,
+            transform,
+        );
     }
 
     for city in game.cities.values() {
@@ -1148,6 +1204,38 @@ pub(super) fn map_content_screen_bounds(
     }
 
     screen_bounds.unwrap_or(rect)
+}
+
+pub(super) fn extend_screen_bounds_map_bounds(
+    screen_bounds: &mut Option<egui::Rect>,
+    map_bounds: MapBounds,
+    reference_bounds: MapBounds,
+    rect: egui::Rect,
+    transform: MapTransform,
+) {
+    for point in [
+        MapPosition {
+            x: map_bounds.min_x,
+            y: map_bounds.min_y,
+        },
+        MapPosition {
+            x: map_bounds.min_x,
+            y: map_bounds.max_y,
+        },
+        MapPosition {
+            x: map_bounds.max_x,
+            y: map_bounds.min_y,
+        },
+        MapPosition {
+            x: map_bounds.max_x,
+            y: map_bounds.max_y,
+        },
+    ] {
+        extend_screen_bounds(
+            screen_bounds,
+            map_to_screen_with_transform(point, reference_bounds, rect, transform),
+        );
+    }
 }
 
 pub(super) fn extend_screen_bounds(bounds: &mut Option<egui::Rect>, point: egui::Pos2) {
@@ -1234,13 +1322,10 @@ pub(super) fn map_pan_limits_for_state(
     ui_state: &GameUiState,
     bounds: MapBounds,
     rect: egui::Rect,
+    boundary_map_bounds: Option<MapBounds>,
 ) -> MapPanLimits {
-    let catalog = ui_state
-        .map_boundaries_enabled
-        .then_some(ui_state.map_boundaries.as_ref())
-        .flatten();
     let content_bounds = ui_state.game.as_ref().map_or(rect, |game| {
-        map_content_screen_bounds(game, catalog, bounds, rect, ui_state.map_zoom)
+        map_content_screen_bounds(game, boundary_map_bounds, bounds, rect, ui_state.map_zoom)
     });
     map_pan_limits(content_bounds, rect)
 }
@@ -1252,10 +1337,19 @@ pub(super) struct MapPanLimits {
 }
 
 pub(super) fn map_pan_limits(content: egui::Rect, viewport: egui::Rect) -> MapPanLimits {
-    let (min_x, max_x) =
-        pan_axis_limits(content.min.x, content.max.x, viewport.min.x, viewport.max.x);
-    let (min_y, max_y) =
-        pan_axis_limits(content.min.y, content.max.y, viewport.min.y, viewport.max.y);
+    let safe_viewport = map_pan_safe_viewport(viewport);
+    let (min_x, max_x) = pan_axis_limits(
+        content.min.x,
+        content.max.x,
+        safe_viewport.min.x,
+        safe_viewport.max.x,
+    );
+    let (min_y, max_y) = pan_axis_limits(
+        content.min.y,
+        content.max.y,
+        safe_viewport.min.y,
+        safe_viewport.max.y,
+    );
     MapPanLimits {
         min: egui::vec2(min_x, min_y),
         max: egui::vec2(max_x, max_y),
@@ -1275,6 +1369,19 @@ pub(super) fn pan_axis_limits(
     } else {
         (align_start, align_end)
     }
+}
+
+pub(super) fn map_pan_safe_viewport(viewport: egui::Rect) -> egui::Rect {
+    let max_inset = (viewport.width().min(viewport.height()) * 0.5 - 1.0).max(0.0);
+    let inset = map_pan_safe_inset(viewport).min(max_inset);
+    egui::Rect::from_min_max(
+        viewport.min + egui::vec2(inset, inset),
+        viewport.max - egui::vec2(inset, inset),
+    )
+}
+
+pub(super) fn map_pan_safe_inset(viewport: egui::Rect) -> f32 {
+    (viewport.width().min(viewport.height()) * 0.07).clamp(48.0, 86.0)
 }
 
 pub(super) fn map_padding(rect: egui::Rect) -> f32 {
@@ -1321,31 +1428,46 @@ mod tests {
     #[test]
     fn pan_limits_reach_edges_of_wide_content() {
         let rect = map_rect();
+        let inset = map_pan_safe_inset(rect);
         let content = egui::Rect::from_min_max(
             egui::pos2(rect.left() - 420.0, rect.top() - 160.0),
             egui::pos2(rect.right() + 310.0, rect.bottom() + 280.0),
         );
         let limits = map_pan_limits(content, rect);
 
-        assert_eq!(limits.min.x, -310.0);
-        assert_eq!(limits.max.x, 420.0);
-        assert_eq!(limits.min.y, -280.0);
-        assert_eq!(limits.max.y, 160.0);
+        assert_close(limits.min.x, -310.0 - inset);
+        assert_close(limits.max.x, 420.0 + inset);
+        assert_close(limits.min.y, -280.0 - inset);
+        assert_close(limits.max.y, 160.0 + inset);
     }
 
     #[test]
-    fn pan_limits_allow_narrow_content_to_touch_each_edge() {
+    fn pan_limits_keep_narrow_content_inside_safe_edges() {
         let rect = map_rect();
+        let inset = map_pan_safe_inset(rect);
         let content = egui::Rect::from_min_max(
             egui::pos2(rect.left() + 120.0, rect.top() + 80.0),
             egui::pos2(rect.right() - 90.0, rect.bottom() - 110.0),
         );
         let limits = map_pan_limits(content, rect);
 
-        assert_eq!(limits.min.x, -120.0);
-        assert_eq!(limits.max.x, 90.0);
-        assert_eq!(limits.min.y, -80.0);
-        assert_eq!(limits.max.y, 110.0);
+        assert_close(limits.min.x, -120.0 + inset);
+        assert_close(limits.max.x, 90.0 - inset);
+        assert_close(limits.min.y, -80.0 + inset);
+        assert_close(limits.max.y, 110.0 - inset);
+    }
+
+    #[test]
+    fn pan_limits_allow_extra_drag_past_viewport_edges() {
+        let rect = map_rect();
+        let inset = map_pan_safe_inset(rect);
+        let content = egui::Rect::from_min_max(rect.min, rect.max);
+        let limits = map_pan_limits(content, rect);
+
+        assert_close(limits.min.x, -inset);
+        assert_close(limits.max.x, inset);
+        assert_close(limits.min.y, -inset);
+        assert_close(limits.max.y, inset);
     }
 
     #[test]
@@ -1588,5 +1710,12 @@ mod tests {
                 notes: String::new(),
             }),
         }
+    }
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 0.001,
+            "expected {actual} to be close to {expected}"
+        );
     }
 }
