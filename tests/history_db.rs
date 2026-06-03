@@ -1,7 +1,7 @@
 use shogun::game::*;
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 fn runtime() -> tokio::runtime::Runtime {
@@ -67,7 +67,7 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
         let pool = open_pool(&path).await;
         assert_eq!(
             applied_sqlx_migration_versions(&pool).await,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
         );
 
         let fk_rows = sqlx::query("PRAGMA foreign_key_check")
@@ -79,11 +79,11 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
         let city_count = query_count(&pool, "cities").await;
         let officer_count = query_count(&pool, "officers").await;
         assert!((60..=90).contains(&city_count));
-        assert_eq!(officer_count, 432);
+        assert_eq!(officer_count, 446);
         assert_eq!(
             query_count_sql(&pool, "SELECT count(*) AS count FROM officers WHERE gender = 'Male'")
                 .await,
-            362
+            376
         );
         assert_eq!(
             query_count_sql(
@@ -411,7 +411,7 @@ fn open_or_create_creates_database_and_runs_initial_migration() {
         let pool = open_pool(&path).await;
         assert_eq!(
             applied_sqlx_migration_versions(&pool).await,
-            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+            [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
         );
         pool.close().await;
     });
@@ -911,6 +911,117 @@ fn taipingdao_scenario_builds_yellow_turban_roster() {
                 && event.city_id.is_some()),
             "missing 180 life event for {officer_id}"
         );
+    }
+}
+
+#[test]
+fn taipingdao_scenario_includes_late_han_court_figures() {
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
+    let game = catalog.build_game("ad180", "han_court").unwrap();
+
+    let han_court_roster_count = game
+        .officers
+        .values()
+        .filter(|officer| officer.faction_id == "han_court" && officer.is_active())
+        .count();
+    assert!(han_court_roster_count >= 20);
+
+    for officer_id in [
+        "ctk_5f20_8ba9",
+        "zhao_zhong_eunuch",
+        "duan_gui_eunuch",
+        "cao_jie_eunuch",
+        "lv_qiang_eunuch",
+        "he_jin",
+        "huangfu_song",
+        "zhu_jun",
+        "lu_zhi",
+        "yuan_wei_han",
+        "yang_ci_han",
+        "yang_biao_han",
+        "qiao_xuan_han",
+        "fu_xie_han",
+        "zhang_jun_han",
+    ] {
+        let officer = game.officers.get(officer_id).unwrap();
+        assert!(officer.is_active(), "{officer_id} should be active");
+        assert_eq!(officer.faction_id, "han_court");
+        assert_eq!(officer.city_id.as_deref(), Some("luoyang"));
+        assert!(officer.profile.is_some());
+        assert!(officer.birth_year != 0);
+    }
+}
+
+#[test]
+fn taipingdao_scenario_gives_regional_factions_playable_rosters() {
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
+    let game = catalog.build_game("ad180", "yellow_turban").unwrap();
+
+    let mut active_roster_counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for officer in game.officers.values().filter(|officer| officer.is_active()) {
+        *active_roster_counts
+            .entry(officer.faction_id.as_str())
+            .or_default() += 1;
+    }
+
+    for faction_id in [
+        "dong_zhuo",
+        "sun_quan",
+        "gongsun_zan",
+        "tao_qian",
+        "liu_biao",
+        "ma_teng",
+        "liu_yan",
+        "shi_xie",
+    ] {
+        let count = active_roster_counts
+            .get(faction_id)
+            .copied()
+            .unwrap_or_default();
+        assert!(
+            count >= 5,
+            "{faction_id} should have at least 5 officers, got {count}"
+        );
+    }
+
+    for (officer_id, faction_id, city_id) in [
+        ("li_jue", "dong_zhuo", "anding"),
+        ("xu_rong", "dong_zhuo", "tianshui"),
+        ("zhu_zhi", "sun_quan", "jianye"),
+        ("jiang_qin", "sun_quan", "lujiang"),
+        ("yan_gang", "gongsun_zan", "youbeiping"),
+        ("gongsun_du", "gongsun_zan", "xiangping"),
+        ("chen_deng", "tao_qian", "pengcheng"),
+        ("mi_zhu", "tao_qian", "guangling"),
+        ("wen_pin", "liu_biao", "nanyang"),
+        ("zhao_fan", "liu_biao", "changsha"),
+        ("han_sui", "ma_teng", "jiuquan"),
+        ("zhao_ang", "ma_teng", "dunhuang"),
+        ("liu_zhang", "liu_yan", "zitong"),
+        ("yan_yan", "liu_yan", "jiangzhou"),
+        ("shi_yi_jiaozhou", "shi_xie", "nanhai"),
+        ("shi_wu_jiaozhou", "shi_xie", "yulin"),
+    ] {
+        let officer = game.officers.get(officer_id).unwrap();
+        assert!(officer.is_active(), "{officer_id} should be active");
+        assert_eq!(officer.faction_id, faction_id);
+        assert_eq!(officer.city_id.as_deref(), Some(city_id));
+        assert!(officer.profile.is_some());
+        assert!(officer.birth_year != 0);
+    }
+
+    for (city_id, governor_id) in [
+        ("tianshui", "li_ru"),
+        ("xiangping", "gongsun_du"),
+        ("pengcheng", "chen_deng"),
+        ("nanyang", "wen_pin"),
+        ("dunhuang", "zhao_ang"),
+        ("zitong", "liu_zhang"),
+        ("jianye", "zhu_zhi"),
+        ("nanhai", "shi_yi_jiaozhou"),
+    ] {
+        let city = game.cities.get(city_id).unwrap();
+        assert_eq!(city.governor_id.as_deref(), Some(governor_id));
     }
 }
 
