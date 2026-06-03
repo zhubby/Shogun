@@ -111,6 +111,7 @@ fn target_row(
     let selected = ui_state.selected_diplomacy_target.as_deref() == Some(faction.id.as_str());
     let relation = game.relation(&game.player_faction_id, &faction.id);
     let relation_score = relation.map(|relation| relation.score).unwrap_or_default();
+    let hostile = relation.is_some_and(|relation| relation.is_hostile());
     let truce = relation.is_some_and(|relation| relation.has_active_truce(game.turn));
     let passage = relation
         .is_some_and(|relation| relation.has_passage_right(&game.player_faction_id, game.turn));
@@ -121,11 +122,15 @@ fn target_row(
         .filter(|city| city.faction_id == faction.id)
         .map(|city| city.troops.total())
         .sum();
-    let status = match (truce, passage) {
-        (true, true) => t.text("diplomacy-status-truce-passage"),
-        (true, false) => t.text("diplomacy-status-truce"),
-        (false, true) => t.text("diplomacy-status-passage"),
-        (false, false) => t.text("diplomacy-status-open"),
+    let status = if hostile {
+        t.text("diplomacy-status-hostile")
+    } else {
+        match (truce, passage) {
+            (true, true) => t.text("diplomacy-status-truce-passage"),
+            (true, false) => t.text("diplomacy-status-truce"),
+            (false, true) => t.text("diplomacy-status-passage"),
+            (false, false) => t.text("diplomacy-status-open"),
+        }
     };
 
     let (rect, response) = ui.allocate_exact_size(

@@ -481,6 +481,7 @@ diplomacy-no-passage = 无过路权
 diplomacy-status-truce-passage = 停战 / 可借道
 diplomacy-status-truce = 停战
 diplomacy-status-passage = 可借道
+diplomacy-status-hostile = 敌对
 diplomacy-status-open = 可交涉
 diplomacy-net-value = 条款净值 {$value}
 diplomacy-acceptance-score = 接受分 {$score}

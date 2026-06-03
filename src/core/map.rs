@@ -270,27 +270,9 @@ fn draw_siege_badge(
     let scale = map_zoom.sqrt().clamp(0.85, 1.35);
     let marker_scale = scale * city_marker_rank_scale(city);
     let center = pos + egui::vec2(0.0, -5.0 * scale);
-    let radius = 30.0 * marker_scale;
-    let bounds = egui::Rect::from_center_size(center, egui::vec2(156.0 * scale, 98.0 * scale));
-    if !bounds.intersects(painter.clip_rect()) {
-        return;
-    }
+    let ring_radius = siege_ring_radius(marker_scale);
 
     let warning = egui::Color32::from_rgb(219, 87, 58);
-    painter.circle_stroke(
-        center,
-        radius + 9.0 * scale,
-        egui::Stroke::new(
-            6.0 * scale,
-            egui::Color32::from_rgba_unmultiplied(74, 9, 6, 132),
-        ),
-    );
-    painter.circle_stroke(
-        center,
-        radius + 7.0 * scale,
-        egui::Stroke::new(2.0 * scale, warning),
-    );
-
     let badge_text = t.text_args(
         "map-siege-badge",
         &args([
@@ -299,10 +281,35 @@ fn draw_siege_badge(
         ]),
     );
     let badge_width = (badge_text.chars().count() as f32 * 8.5 + 22.0).clamp(64.0, 124.0) * scale;
+    let badge_height = 23.0 * scale;
     let badge_rect = egui::Rect::from_center_size(
-        center + egui::vec2(0.0, -42.0 * scale),
-        egui::vec2(badge_width, 23.0 * scale),
+        center + egui::vec2(0.0, -(ring_radius + badge_height * 0.5)),
+        egui::vec2(badge_width, badge_height),
     );
+    let ring_bounds = egui::Rect::from_center_size(
+        center,
+        egui::vec2(
+            (ring_radius + 4.0 * scale) * 2.0,
+            (ring_radius + 4.0 * scale) * 2.0,
+        ),
+    );
+    if !ring_bounds
+        .union(badge_rect)
+        .intersects(painter.clip_rect())
+    {
+        return;
+    }
+
+    painter.circle_stroke(
+        center,
+        ring_radius,
+        egui::Stroke::new(
+            4.5 * scale,
+            egui::Color32::from_rgba_unmultiplied(74, 9, 6, 132),
+        ),
+    );
+    painter.circle_stroke(center, ring_radius, egui::Stroke::new(2.0 * scale, warning));
+
     painter.rect(
         badge_rect.translate(egui::vec2(1.6 * scale, 2.0 * scale)),
         4.0 * scale,
@@ -324,6 +331,14 @@ fn draw_siege_badge(
         egui::FontId::proportional(12.0 * scale),
         egui::Color32::from_rgb(255, 223, 183),
     );
+}
+
+fn city_marker_icon_outer_radius(marker_scale: f32) -> f32 {
+    24.0 * marker_scale
+}
+
+fn siege_ring_radius(marker_scale: f32) -> f32 {
+    city_marker_icon_outer_radius(marker_scale) + 2.5 * marker_scale
 }
 
 fn active_expedition_movements(game: &GameState) -> impl Iterator<Item = &ArmyMovement> {
@@ -367,13 +382,14 @@ fn expedition_movement_line_progress(movement: &ArmyMovement, current_turn: u32)
         .arrival_turn
         .saturating_sub(movement.departure_turn);
     if total == 0 {
-        return Some(0.92);
+        return Some(0.5);
     }
 
     let elapsed = current_turn
         .saturating_sub(movement.departure_turn)
         .min(total);
-    Some((elapsed as f32 / total as f32).clamp(0.08, 0.92))
+    let waypoint = elapsed.max(1);
+    Some((waypoint as f32 / (total + 1) as f32).clamp(0.08, 0.92))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -895,7 +911,7 @@ pub(super) fn draw_city_marker_icon(
     );
     painter.circle_filled(
         marker_center,
-        radius + 4.0 * marker_scale,
+        city_marker_icon_outer_radius(marker_scale),
         egui::Color32::from_rgba_unmultiplied(20, 17, 13, 238),
     );
     painter.circle_stroke(
@@ -1339,16 +1355,38 @@ mod tests {
         let progress = expedition_movement_line_progress(&movement, 12).unwrap();
 
         assert!((0.0..=1.0).contains(&progress));
-        assert_eq!(progress, 0.5);
+        assert!((progress - 0.4).abs() < 0.001);
     }
 
     #[test]
-    fn arrived_expedition_without_siege_still_stays_near_target() {
+    fn two_month_expedition_first_visible_point_uses_first_third() {
+        let movement = test_movement(ArmyMovementKind::Expedition, 10, 12, None);
+
+        let progress = expedition_movement_line_progress(&movement, 11).unwrap();
+
+        assert!((progress - (1.0 / 3.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn arrived_expedition_without_siege_still_stays_between_cities() {
         let movement = test_movement(ArmyMovementKind::Expedition, 10, 12, None);
 
         let progress = expedition_movement_line_progress(&movement, 13).unwrap();
 
-        assert_eq!(progress, 0.92);
+        assert!((progress - (2.0 / 3.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn siege_ring_radius_hugs_city_marker_icon_outer_radius() {
+        let marker_scale = 1.0;
+
+        let city_outer = city_marker_icon_outer_radius(marker_scale);
+        let siege_radius = siege_ring_radius(marker_scale);
+
+        assert_eq!(city_outer, 24.0);
+        assert_eq!(siege_radius, 26.5);
+        assert!(siege_radius > city_outer);
+        assert!(siege_radius < 30.0);
     }
 
     #[test]

@@ -571,6 +571,17 @@ impl DiplomaticRelation {
             .get(faction_id)
             .is_some_and(|until| *until >= turn)
     }
+
+    pub fn is_hostile(&self) -> bool {
+        self.score <= -80 && self.truce_until_turn.is_none() && self.passage_rights.is_empty()
+    }
+
+    pub fn mark_hostile(&mut self, faction_a: &str, faction_b: &str) {
+        self.score = -80;
+        self.truce_until_turn = None;
+        self.passage_rights.remove(faction_a);
+        self.passage_rights.remove(faction_b);
+    }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]

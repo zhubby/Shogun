@@ -705,6 +705,12 @@ fn validate_command(
             assignments,
             food_supply,
         } => {
+            if besieging_faction_id(state, &command.city_id).is_some() {
+                return Err(CommandError::Invalid(format!(
+                    "{} 正被围攻，不能出征",
+                    city.name
+                )));
+            }
             validate_expedition_assignments(state, command, city, assignments, &mut used_officers)?;
             if *food_supply == 0 {
                 return Err(CommandError::Invalid("出征必须携带粮草".to_string()));
@@ -717,6 +723,14 @@ fn validate_command(
             })?;
             if target.faction_id == command.issuer_faction_id {
                 return Err(CommandError::Invalid("不能攻击己方城池".to_string()));
+            }
+            if let Some(siege_faction_id) = besieging_faction_id(state, target_city_id)
+                && siege_faction_id != command.issuer_faction_id
+            {
+                return Err(CommandError::Invalid(format!(
+                    "{} 已被其他势力围攻",
+                    target.name
+                )));
             }
             if route_distance_li_for_faction(
                 state,
@@ -1252,6 +1266,7 @@ fn apply_expedition(
     )
     .unwrap_or_default();
     let travel_months = travel_months_for_faction(state, &command.issuer_faction_id, distance_li);
+    mark_factions_hostile(state, &command.issuer_faction_id, &target_city.faction_id);
     {
         let source = state.cities.get_mut(&command.city_id).unwrap();
         source.troops.saturating_sub_pool(troops);
@@ -1307,8 +1322,45 @@ fn movement_officer_ids(commander_id: &str, officer_ids: &[OfficerId]) -> Vec<Of
     moving
 }
 
+fn besieging_faction_id<'a>(state: &'a GameState, city_id: &str) -> Option<&'a str> {
+    besieging_faction_id_in_movements(state.army_movements.iter(), city_id)
+}
+
+fn besieging_faction_id_in_movements<'a>(
+    movements: impl IntoIterator<Item = &'a ArmyMovement>,
+    city_id: &str,
+) -> Option<&'a str> {
+    movements.into_iter().find_map(|movement| {
+        (movement.kind == ArmyMovementKind::Expedition
+            && movement.siege_started_turn.is_some()
+            && movement.target_city_id == city_id)
+            .then_some(movement.issuer_faction_id.as_str())
+    })
+}
+
+fn active_siege_claims<'a>(
+    movements: impl IntoIterator<Item = &'a ArmyMovement>,
+) -> BTreeMap<CityId, FactionId> {
+    let mut claims = BTreeMap::new();
+    for movement in movements {
+        if movement.kind == ArmyMovementKind::Expedition && movement.siege_started_turn.is_some() {
+            claims
+                .entry(movement.target_city_id.clone())
+                .or_insert_with(|| movement.issuer_faction_id.clone());
+        }
+    }
+    claims
+}
+
+fn mark_factions_hostile(state: &mut GameState, faction_a: &str, faction_b: &str) {
+    state
+        .relation_mut(faction_a, faction_b)
+        .mark_hostile(faction_a, faction_b);
+}
+
 fn resolve_due_army_movements(state: &mut GameState, report: &mut TurnReport) {
     let movements = std::mem::take(&mut state.army_movements);
+    let mut siege_claims = active_siege_claims(movements.iter());
     let mut pending = Vec::new();
     for movement in movements {
         match movement.kind {
@@ -1320,7 +1372,16 @@ fn resolve_due_army_movements(state: &mut GameState, report: &mut TurnReport) {
                 }
             }
             ArmyMovementKind::Expedition => {
-                if let Some(movement) = resolve_expedition_month(state, movement, report) {
+                if let Some(movement) =
+                    resolve_expedition_month(state, movement, &siege_claims, report)
+                {
+                    if movement.kind == ArmyMovementKind::Expedition
+                        && movement.siege_started_turn.is_some()
+                    {
+                        siege_claims
+                            .entry(movement.target_city_id.clone())
+                            .or_insert_with(|| movement.issuer_faction_id.clone());
+                    }
                     pending.push(movement);
                 }
             }
@@ -1332,6 +1393,7 @@ fn resolve_due_army_movements(state: &mut GameState, report: &mut TurnReport) {
 fn resolve_expedition_month(
     state: &mut GameState,
     mut movement: ArmyMovement,
+    siege_claims: &BTreeMap<CityId, FactionId>,
     report: &mut TurnReport,
 ) -> Option<ArmyMovement> {
     if movement.departure_turn >= state.turn {
@@ -1362,7 +1424,7 @@ fn resolve_expedition_month(
         return Some(movement);
     }
 
-    resolve_expedition_arrival(state, movement, report)
+    resolve_expedition_arrival(state, movement, siege_claims, report)
 }
 
 fn resolve_transfer_arrival(
@@ -1398,6 +1460,7 @@ fn resolve_transfer_arrival(
 fn resolve_expedition_arrival(
     state: &mut GameState,
     mut movement: ArmyMovement,
+    siege_claims: &BTreeMap<CityId, FactionId>,
     report: &mut TurnReport,
 ) -> Option<ArmyMovement> {
     let Some(target_city) = state.cities.get(&movement.target_city_id).cloned() else {
@@ -1435,6 +1498,18 @@ fn resolve_expedition_arrival(
         return None;
     }
 
+    if let Some(siege_faction_id) = siege_claims.get(&movement.target_city_id)
+        && siege_faction_id != &movement.issuer_faction_id
+    {
+        return_expedition_to_friendly_city(
+            state,
+            &movement,
+            format!("{} 已被其他势力围攻，出征队撤回", target_city.name),
+            report,
+        );
+        return None;
+    }
+
     let Some(attacker) = state.officers.get(&movement.commander_id) else {
         return_expedition_to_friendly_city(
             state,
@@ -1453,12 +1528,15 @@ fn resolve_expedition_arrival(
         );
         return None;
     }
+    let attacker_name = attacker.name.clone();
+
+    mark_factions_hostile(state, &movement.issuer_faction_id, &target_city.faction_id);
 
     if movement.siege_started_turn.is_none() {
         movement.siege_started_turn = Some(state.turn);
         report.info(format!(
             "{} 抵达 {}，开始围攻，剩余粮草 {}",
-            attacker.name, target_city.name, movement.food_supply
+            attacker_name, target_city.name, movement.food_supply
         ));
     }
 
@@ -2042,10 +2120,7 @@ fn apply_diplomacy_order(
     match order.kind {
         DiplomacyActionKind::DeclareWar => {
             let relation = state.relation_mut(&order.issuer_faction_id, &order.target_faction_id);
-            relation.truce_until_turn = None;
-            relation.passage_rights.remove(&order.issuer_faction_id);
-            relation.passage_rights.remove(&order.target_faction_id);
-            relation.score = -80;
+            relation.mark_hostile(&order.issuer_faction_id, &order.target_faction_id);
             report.info(format!("{issuer_name} 向 {target_name} 宣战"));
         }
         DiplomacyActionKind::ImproveRelations => {
@@ -2254,10 +2329,7 @@ fn apply_diplomacy(
             }
         }
         DiplomacyProposal::DeclareWar => {
-            relation.truce_until_turn = None;
-            relation.passage_rights.remove(&command.issuer_faction_id);
-            relation.passage_rights.remove(target_faction_id);
-            relation.score = -80;
+            relation.mark_hostile(&command.issuer_faction_id, target_faction_id);
             report.info(format!("{officer_name} 宣战"));
         }
     }

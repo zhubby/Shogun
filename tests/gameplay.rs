@@ -108,8 +108,18 @@ fn sample_game() -> GameState {
 }
 
 fn place_test_officer(game: &mut GameState, officer_id: &str, city_id: &str, loyalty: u8) {
+    place_test_officer_for_faction(game, officer_id, city_id, "liu_bei", loyalty);
+}
+
+fn place_test_officer_for_faction(
+    game: &mut GameState,
+    officer_id: &str,
+    city_id: &str,
+    faction_id: &str,
+    loyalty: u8,
+) {
     let officer = game.officers.get_mut(officer_id).unwrap();
-    officer.faction_id = "liu_bei".to_string();
+    officer.faction_id = faction_id.to_string();
     officer.city_id = Some(city_id.to_string());
     officer.status = OfficerStatus::Active;
     officer.loyalty = loyalty;
@@ -123,6 +133,12 @@ fn add_test_road(game: &mut GameState, from: &str, to: &str) {
             to: to.to_string(),
         });
     }
+}
+
+fn remove_test_road(game: &mut GameState, from: &str, to: &str) {
+    game.roads.retain(|road| {
+        !((road.from == from && road.to == to) || (road.from == to && road.to == from))
+    });
 }
 
 fn event_by_kind(game: &GameState, kind: GameEventKind) -> &GameEvent {
@@ -207,8 +223,17 @@ fn force_player_famine_candidate(game: &mut GameState) {
 }
 
 fn command(city_id: &str, officer_id: &str, kind: CommandKind) -> Command {
+    faction_command("liu_bei", city_id, officer_id, kind)
+}
+
+fn faction_command(
+    issuer_faction_id: &str,
+    city_id: &str,
+    officer_id: &str,
+    kind: CommandKind,
+) -> Command {
     Command {
-        issuer_faction_id: "liu_bei".to_string(),
+        issuer_faction_id: issuer_faction_id.to_string(),
         city_id: city_id.to_string(),
         officer_id: Some(officer_id.to_string()),
         kind,
@@ -217,6 +242,44 @@ fn command(city_id: &str, officer_id: &str, kind: CommandKind) -> Command {
 
 fn infantry(amount: u32) -> TroopPool {
     TroopPool::new(amount, 0, 0)
+}
+
+fn expedition_movement(
+    game: &GameState,
+    issuer_faction_id: &str,
+    source_city_id: &str,
+    target_city_id: &str,
+    commander_id: &str,
+    troops: TroopPool,
+    siege_started_turn: Option<u32>,
+) -> ArmyMovement {
+    ArmyMovement {
+        kind: ArmyMovementKind::Expedition,
+        issuer_faction_id: issuer_faction_id.to_string(),
+        source_city_id: source_city_id.to_string(),
+        target_city_id: target_city_id.to_string(),
+        commander_id: commander_id.to_string(),
+        officer_ids: vec![commander_id.to_string()],
+        troops,
+        food_supply: 1_000,
+        wounded_troops: TroopPool::default(),
+        assignments: vec![ExpeditionAssignment::commander(
+            commander_id.to_string(),
+            TroopKind::Infantry,
+            troops.total(),
+        )],
+        siege_started_turn,
+        training: game
+            .cities
+            .get(source_city_id)
+            .map(|city| city.training)
+            .unwrap_or_default(),
+        distance_li: game
+            .road_distance_li(source_city_id, target_city_id)
+            .unwrap_or_default(),
+        departure_turn: game.turn.saturating_sub(1),
+        arrival_turn: game.turn,
+    }
 }
 
 fn bundle(gold: i32, food: i32, materials: i32) -> ResourceBundle {
@@ -612,6 +675,192 @@ fn passage_right_allows_routes_through_third_party_cities() {
         .insert("liu_bei".to_string(), turn + 12);
     assert!(validate_command_for_state(&allowed, &command_to_jianye).is_ok());
     assert!(route_distance_li_for_faction(&allowed, "liu_bei", "xiapi", "jianye", true).is_some());
+}
+
+#[test]
+fn besieged_city_cannot_submit_expedition() {
+    let mut game = sample_game();
+    let siege = expedition_movement(
+        &game,
+        "cao_cao",
+        "xuchang",
+        "xiapi",
+        "cao_cao",
+        infantry(800),
+        Some(game.turn),
+    );
+    game.army_movements.push(siege);
+
+    let result = validate_command_for_state(
+        &game,
+        &command(
+            "xiapi",
+            "zhang_fei",
+            expedition("xuchang", "zhang_fei", TroopKind::Infantry, 500),
+        ),
+    );
+
+    let error = result.unwrap_err().to_string();
+    assert!(error.contains("正被围攻"));
+}
+
+#[test]
+fn transfer_can_reinforce_besieged_owned_city_through_passage_route() {
+    let mut game = sample_game();
+    remove_test_road(&mut game, "pingyuan", "xiapi");
+    add_test_road(&mut game, "pingyuan", "xuchang");
+    let turn = game.turn;
+    game.relation_mut("liu_bei", "cao_cao")
+        .passage_rights
+        .insert("liu_bei".to_string(), turn + 12);
+    let siege = expedition_movement(
+        &game,
+        "sun_quan",
+        "jianye",
+        "xiapi",
+        "sun_quan",
+        infantry(800),
+        Some(game.turn),
+    );
+    game.army_movements.push(siege);
+
+    let relief = command(
+        "pingyuan",
+        "liu_bei",
+        CommandKind::Transfer {
+            target_city_id: "xiapi".to_string(),
+            troops: infantry(300),
+            officer_ids: vec!["jian_yong".to_string()],
+        },
+    );
+
+    assert!(validate_command_for_state(&game, &relief).is_ok());
+    assert!(route_distance_li_for_faction(&game, "liu_bei", "pingyuan", "xiapi", false).is_some());
+}
+
+#[test]
+fn besieged_city_rejects_other_siege_faction_but_allows_same_faction_reinforcement() {
+    let mut game = sample_game();
+    let siege = expedition_movement(
+        &game,
+        "liu_bei",
+        "xiapi",
+        "xuchang",
+        "zhang_fei",
+        infantry(1_000),
+        Some(game.turn),
+    );
+    game.army_movements.push(siege);
+    place_test_officer_for_faction(&mut game, "sun_quan", "jianye", "sun_quan", 90);
+    {
+        let city = game.cities.get_mut("jianye").unwrap();
+        city.troops = TroopPool::new(4_000, 0, 0);
+        city.food = city.food.max(2_000);
+    }
+    add_test_road(&mut game, "jianye", "xuchang");
+
+    let other_faction = faction_command(
+        "sun_quan",
+        "jianye",
+        "sun_quan",
+        expedition("xuchang", "sun_quan", TroopKind::Infantry, 500),
+    );
+    let error = validate_command_for_state(&game, &other_faction)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("已被其他势力围攻"));
+
+    let same_faction = command(
+        "pingyuan",
+        "guan_yu",
+        expedition("xuchang", "guan_yu", TroopKind::Infantry, 500),
+    );
+    assert!(validate_command_for_state(&game, &same_faction).is_ok());
+}
+
+#[test]
+fn competing_expeditions_to_same_target_leave_only_first_siege_faction() {
+    let mut game = sample_game();
+    place_test_officer_for_faction(&mut game, "sun_quan", "jianye", "sun_quan", 90);
+    {
+        let target = game.cities.get_mut("xuchang").unwrap();
+        target.troops = TroopPool::new(20_000, 0, 0);
+        target.training = 100;
+        target.defense = 100;
+        target.governor_id = None;
+        target.facilities.clear();
+    }
+    game.officers.get_mut("zhang_fei").unwrap().city_id = None;
+    game.officers.get_mut("sun_quan").unwrap().city_id = None;
+    let first = expedition_movement(
+        &game,
+        "liu_bei",
+        "xiapi",
+        "xuchang",
+        "zhang_fei",
+        infantry(1_200),
+        None,
+    );
+    let second = expedition_movement(
+        &game,
+        "sun_quan",
+        "jianye",
+        "xuchang",
+        "sun_quan",
+        infantry(1_200),
+        None,
+    );
+    game.army_movements.push(first);
+    game.army_movements.push(second);
+
+    let report = resolve_command_batch(&mut game, Vec::new());
+    let messages = report_messages(&report);
+    let target_movements = game
+        .army_movements
+        .iter()
+        .filter(|movement| movement.target_city_id == "xuchang")
+        .collect::<Vec<_>>();
+
+    assert!(messages.contains("已被其他势力围攻，出征队撤回"));
+    assert_eq!(target_movements.len(), 1);
+    assert_eq!(target_movements[0].issuer_faction_id, "liu_bei");
+    assert!(target_movements[0].siege_started_turn.is_some());
+    assert_eq!(game.officers["sun_quan"].city_id.as_deref(), Some("jianye"));
+}
+
+#[test]
+fn expedition_marks_relation_hostile_and_clears_treaties() {
+    let mut game = sample_game();
+    {
+        let turn = game.turn;
+        let relation = game.relation_mut("liu_bei", "cao_cao");
+        relation.score = 30;
+        relation.truce_until_turn = turn.checked_sub(1);
+        relation
+            .passage_rights
+            .insert("liu_bei".to_string(), turn + 12);
+        relation
+            .passage_rights
+            .insert("cao_cao".to_string(), turn + 12);
+    }
+
+    queue_player_command(
+        &mut game,
+        command(
+            "xiapi",
+            "zhang_fei",
+            expedition("xuchang", "zhang_fei", TroopKind::Infantry, 500),
+        ),
+    )
+    .unwrap();
+    let commands = game.pending_commands.clone();
+    resolve_command_batch(&mut game, commands);
+    let relation = game.relation("liu_bei", "cao_cao").unwrap();
+
+    assert!(relation.is_hostile());
+    assert_eq!(relation.score, -80);
+    assert_eq!(relation.truce_until_turn, None);
+    assert!(relation.passage_rights.is_empty());
 }
 
 #[test]

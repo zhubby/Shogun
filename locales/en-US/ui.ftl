@@ -481,6 +481,7 @@ diplomacy-no-passage = No passage right
 diplomacy-status-truce-passage = Truce / Passage
 diplomacy-status-truce = Truce
 diplomacy-status-passage = Passage
+diplomacy-status-hostile = Hostile
 diplomacy-status-open = Open
 diplomacy-net-value = Net value {$value}
 diplomacy-acceptance-score = Acceptance {$score}
