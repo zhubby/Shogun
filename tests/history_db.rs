@@ -79,7 +79,7 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
         let city_count = query_count(&pool, "cities").await;
         let officer_count = query_count(&pool, "officers").await;
         assert!((60..=90).contains(&city_count));
-        assert_eq!(officer_count, 446);
+        assert_eq!(officer_count, 447);
         assert_eq!(
             query_count_sql(&pool, "SELECT count(*) AS count FROM officers WHERE gender = 'Male'")
                 .await,
@@ -91,7 +91,7 @@ fn history_database_builds_with_integrity_counts_and_indexes() {
                 "SELECT count(*) AS count FROM officers WHERE gender = 'Female'",
             )
             .await,
-            70
+            71
         );
         assert_eq!(query_count(&pool, "scenarios").await, 5);
         assert!(query_count(&pool, "officer_life_events").await >= officer_count);
@@ -942,6 +942,7 @@ fn taipingdao_scenario_includes_late_han_court_figures() {
         "qiao_xuan_han",
         "fu_xie_han",
         "zhang_jun_han",
+        "lady_wang_lingdi",
     ] {
         let officer = game.officers.get(officer_id).unwrap();
         assert!(officer.is_active(), "{officer_id} should be active");
@@ -949,6 +950,27 @@ fn taipingdao_scenario_includes_late_han_court_figures() {
         assert_eq!(officer.city_id.as_deref(), Some("luoyang"));
         assert!(officer.profile.is_some());
         assert!(officer.birth_year != 0);
+    }
+}
+
+#[test]
+fn han_xian_di_profile_includes_imperial_family_relationships() {
+    let catalog = SqliteHistoricalCatalog::in_memory_from_seed().unwrap();
+    let profile = catalog.officer_profile("han_xian_di").unwrap().unwrap();
+
+    for (target_id, kind) in [
+        ("ctk_5218_5b8f", OfficerRelationshipKind::ParentChild),
+        ("lady_wang_lingdi", OfficerRelationshipKind::ParentChild),
+        ("liu_bian", OfficerRelationshipKind::Sibling),
+        ("empress_fu_shou", OfficerRelationshipKind::Spouse),
+        ("empress_cao_jie", OfficerRelationshipKind::Spouse),
+    ] {
+        assert!(
+            profile.relationships.iter().any(
+                |relationship| relationship.target_id == target_id && relationship.kind == kind
+            ),
+            "missing han_xian_di -> {target_id} {kind:?}"
+        );
     }
 }
 

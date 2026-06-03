@@ -16,7 +16,8 @@ VALUES
 ('yang_biao_han', '杨彪', '文先', '司隶弘农郡华阴县', 142, 225, 'Male', 32, 20, 80, 88, 74, 'High', '杨彪为弘农杨氏名臣，汉末长期在朝，后来见证董卓、曹操与汉魏嬗代。', 'ad180 剧本补充人物。'),
 ('qiao_xuan_han', '桥玄', '公祖', '梁国睢阳县', 110, 184, 'Male', 42, 28, 82, 88, 78, 'High', '桥玄为东汉名臣，以清正知人闻名，汉末士人政治网络中声望很高。', 'ad180 剧本补充人物。'),
 ('fu_xie_han', '傅燮', '南容', '凉州北地郡灵州县', 143, 187, 'Male', 74, 70, 72, 68, 70, 'High', '傅燮为东汉凉州名臣，曾参与平定黄巾和西北叛乱，以守节死难著称。', 'ad180 剧本补充人物；生年按游戏平衡估算。'),
-('zhang_jun_han', '张钧', NULL, '司隶河南尹', 150, 184, 'Male', 30, 22, 72, 76, 62, 'Medium', '张钧为灵帝时郎中，黄巾事起后曾上书弹劾十常侍与张角交通，旋遭构陷。', 'ad180 剧本补充人物；生年按游戏平衡估算。');
+('zhang_jun_han', '张钧', NULL, '司隶河南尹', 150, 184, 'Male', 30, 22, 72, 76, 62, 'Medium', '张钧为灵帝时郎中，黄巾事起后曾上书弹劾十常侍与张角交通，旋遭构陷。', 'ad180 剧本补充人物；生年按游戏平衡估算。'),
+('lady_wang_lingdi', '王美人', NULL, '赵国邯郸', 160, 181, 'Female', 18, 14, 58, 54, 68, 'Medium', '王美人为汉灵帝妃嫔，汉献帝刘协生母，刘协出生后不久遭何皇后忌害。', 'ad180 剧本补充人物；生年按游戏平衡估算。');
 
 INSERT INTO officer_tags (officer_id, tag_id)
 VALUES
@@ -82,7 +83,11 @@ VALUES
 ('zhang_jun_han', 'affiliation:han_court'),
 ('zhang_jun_han', 'basis:history'),
 ('zhang_jun_han', 'context:taipingdao'),
-('zhang_jun_han', 'source:manual_curated');
+('zhang_jun_han', 'source:manual_curated'),
+('lady_wang_lingdi', 'role:spouse'),
+('lady_wang_lingdi', 'affiliation:han_court'),
+('lady_wang_lingdi', 'basis:history'),
+('lady_wang_lingdi', 'source:manual_curated');
 
 INSERT INTO officer_external_ids
 (officer_id, source, external_id, source_url, confidence, notes)
@@ -100,7 +105,8 @@ VALUES
 ('yang_biao_han', 'manual_curated', '杨彪', '', 'High', 'ad180 东汉朝臣补充'),
 ('qiao_xuan_han', 'manual_curated', '桥玄', '', 'High', 'ad180 东汉朝臣补充'),
 ('fu_xie_han', 'manual_curated', '傅燮', '', 'High', 'ad180 东汉朝臣补充'),
-('zhang_jun_han', 'manual_curated', '张钧', '', 'Medium', 'ad180 黄巾前夜朝臣补充');
+('zhang_jun_han', 'manual_curated', '张钧', '', 'Medium', 'ad180 黄巾前夜朝臣补充'),
+('lady_wang_lingdi', 'manual_curated', '王美人', '', 'Medium', 'ad180 汉献帝亲属补充');
 
 INSERT INTO officer_relationships
 (source_officer_id, target_officer_id, relationship_kind, confidence, notes, source)
@@ -119,7 +125,14 @@ VALUES
 ('qiao_xuan_han', 'ctk_5218_5b8f', 'RulerSubject', 'High', '桥玄为东汉朝臣。', 'manual_curated'),
 ('fu_xie_han', 'ctk_5218_5b8f', 'RulerSubject', 'High', '傅燮为东汉朝臣。', 'manual_curated'),
 ('zhang_jun_han', 'ctk_5218_5b8f', 'RulerSubject', 'Medium', '张钧为汉灵帝时郎中。', 'manual_curated'),
-('yang_biao_han', 'yang_ci_han', 'ParentChild', 'High', '杨彪为杨赐之子。', 'manual_curated');
+('yang_biao_han', 'yang_ci_han', 'ParentChild', 'High', '杨彪为杨赐之子。', 'manual_curated'),
+('lady_wang_lingdi', 'ctk_5218_5b8f', 'Spouse', 'Medium', '王美人为汉灵帝妃嫔。', 'manual_curated'),
+('ctk_5218_5b8f', 'lady_wang_lingdi', 'Spouse', 'Medium', '王美人为汉灵帝妃嫔。', 'manual_curated'),
+('lady_wang_lingdi', 'han_xian_di', 'ParentChild', 'Medium', '王美人为汉献帝刘协生母。', 'manual_curated'),
+('han_xian_di', 'lady_wang_lingdi', 'ParentChild', 'Medium', '王美人为汉献帝刘协生母。', 'manual_curated'),
+('han_xian_di', 'ctk_5218_5b8f', 'ParentChild', 'Medium', '汉献帝刘协为汉灵帝刘宏之子。', 'manual_curated'),
+('han_xian_di', 'liu_bian', 'Sibling', 'High', '汉献帝刘协与弘农王刘辩为异母兄弟。', 'manual_curated'),
+('liu_bian', 'han_xian_di', 'Sibling', 'High', '汉献帝刘协与弘农王刘辩为异母兄弟。', 'manual_curated');
 
 INSERT OR REPLACE INTO officer_life_events
 (id, officer_id, event_year, event_month, event_kind, faction_id, city_id, loyalty, notes)
@@ -145,6 +158,7 @@ VALUES
 ('ad180_qiao_xuan_luoyang', 'qiao_xuan_han', 180, 1, 'ServeFaction', 'han_court', 'luoyang', 82, '太平道将兴剧本灵帝朝初始归属'),
 ('ad180_fu_xie_luoyang', 'fu_xie_han', 180, 1, 'ServeFaction', 'han_court', 'luoyang', 84, '太平道将兴剧本讨黄巾将领初始归属'),
 ('ad180_zhang_jun_luoyang', 'zhang_jun_han', 180, 1, 'ServeFaction', 'han_court', 'luoyang', 76, '太平道将兴剧本灵帝朝初始归属'),
+('ad180_lady_wang_lingdi_luoyang', 'lady_wang_lingdi', 180, 1, 'ServeFaction', 'han_court', 'luoyang', 78, '太平道将兴剧本汉献帝亲属初始归属'),
 
 ('ad180_dong_zhuo_anding', 'dong_zhuo', 180, 1, 'ServeFaction', 'dong_zhuo', 'anding', 90, '太平道将兴剧本初始归属'),
 ('ad180_li_ru_tianshui', 'li_ru', 180, 1, 'ServeFaction', 'dong_zhuo', 'tianshui', 84, '太平道将兴剧本初始归属'),
@@ -210,6 +224,7 @@ VALUES
 ('ad180_shi_hui_jiaozhi', 'shi_hui_jiaozhou', 180, 1, 'ServeFaction', 'shi_xie', 'jiaozhi', 72, '太平道将兴剧本初始归属'),
 
 ('ad181_die_cao_jie_eunuch', 'cao_jie_eunuch', 181, 12, 'Die', NULL, NULL, NULL, 'ad180 补充人物离场'),
+('ad181_die_lady_wang_lingdi', 'lady_wang_lingdi', 181, 12, 'Die', NULL, NULL, NULL, 'ad180 补充人物离场'),
 ('ad184_die_lv_qiang', 'lv_qiang_eunuch', 184, 12, 'Die', NULL, NULL, NULL, 'ad180 补充人物离场'),
 ('ad184_die_qiao_xuan', 'qiao_xuan_han', 184, 12, 'Die', NULL, NULL, NULL, 'ad180 补充人物离场'),
 ('ad184_die_zhang_jun', 'zhang_jun_han', 184, 12, 'Die', NULL, NULL, NULL, 'ad180 补充人物离场'),
